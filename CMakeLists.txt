@@ -32,7 +32,7 @@ set(WOLFRAM_BUILD_CPP OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WOLFRAM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/wolfram")
 get_target_property(METALBEAR_CJSON_SOURCE_DIR cjson SOURCE_DIR)
 
-add_library(metalbear_core src/account.c src/account_registry.c src/account_context.c src/account_cache.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/key_rotation.c src/sequencer.c src/server.c)
+add_library(metalbear_core src/account.c src/account_registry.c src/account_context.c src/account_cache.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/key_rotation.c src/repo_store.c src/sequencer.c src/server.c)
 target_include_directories(metalbear_core PUBLIC include
     PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
 target_link_libraries(metalbear_core PUBLIC wolfram cjson PRIVATE SQLite3::SQLite3 Threads::Threads)
@@ -80,4 +80,19 @@ if(METALBEAR_BUILD_TESTS)
     target_include_directories(test_metalbear_multi_account PRIVATE
         "${METALBEAR_CJSON_SOURCE_DIR}")
     add_test(NAME metalbear_multi_account COMMAND test_metalbear_multi_account)
+
+    add_executable(test_metalbear_repo_store test/test_repo_store.c)
+    target_link_libraries(test_metalbear_repo_store PRIVATE metalbear_core)
+    target_include_directories(test_metalbear_repo_store PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}" "${WOLFRAM_SOURCE_DIR}/test")
+    add_test(NAME metalbear_repo_store COMMAND test_metalbear_repo_store)
+
+    add_executable(test_metalbear_repo_store_resolver
+        test/test_repo_store_resolver.c)
+    target_link_libraries(test_metalbear_repo_store_resolver PRIVATE
+        metalbear_core)
+    target_include_directories(test_metalbear_repo_store_resolver PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}" "${WOLFRAM_SOURCE_DIR}/test")
+    add_test(NAME metalbear_repo_store_resolver
+        COMMAND test_metalbear_repo_store_resolver)
 endif()

@@ -15,7 +15,7 @@
 
 #include "wolfram/blob_store.h"
 #include "wolfram/crypto.h"
-#include "wolfram/repo_store.h"
+#include "metalbear/repo_store.h"
 #include "wolfram/repo/cid.h"
 #include "wolfram/syntax.h"
 #include "wolfram/xrpc_server.h"
@@ -271,7 +271,7 @@ static metalbear_account_context *resolve_request_context(
  * the cache (and the bootstrap context) outlive the request. */
 static wf_status metalbear_repo_resolver(void *ctx,
                                          const wf_xrpc_request *req,
-                                         wf_repo_store **out_repo,
+                                         metalbear_repo_store **out_repo,
                                          wf_blob_store **out_blobs) {
     metalbear_server *server = ctx;
     metalbear_account_context *acct = resolve_request_context(server, req);
@@ -595,7 +595,7 @@ static wf_status update_handle(void *ctx, const wf_xrpc_request *request,
     char *old_handle = strdup(acct->handle);
     char *new_handle = strdup(handle->valuestring);
     if (!old_handle || !new_handle ||
-        wf_repo_store_set_handle(acct->repo, handle->valuestring) != WF_OK) {
+        metalbear_repo_store_set_handle(acct->repo, handle->valuestring) != WF_OK) {
         free(old_handle);
         free(new_handle);
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -604,7 +604,7 @@ static wf_status update_handle(void *ctx, const wf_xrpc_request *request,
     }
     if (metalbear_account_registry_update_handle(
             server->registry, acct->did, handle->valuestring) != WF_OK) {
-        wf_repo_store_set_handle(acct->repo, old_handle);
+        metalbear_repo_store_set_handle(acct->repo, old_handle);
         free(old_handle);
         free(new_handle);
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -1041,7 +1041,7 @@ static wf_status get_service_auth(void *ctx,
         expiration = (int64_t)parsed;
     }
     char *token = NULL;
-    if (wf_repo_store_create_service_auth(acct->repo, aud->valuestring,
+    if (metalbear_repo_store_create_service_auth(acct->repo, aud->valuestring,
                                            expiration, lxm, &token) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not create service token");
@@ -1085,7 +1085,7 @@ static wf_status get_repo(void *ctx, const wf_xrpc_request *request,
     }
     unsigned char *data = NULL;
     size_t length = 0;
-    wf_status status = wf_repo_store_export(
+    wf_status status = metalbear_repo_store_export(
         acct->repo, cJSON_IsString(since) ? since->valuestring : NULL,
         &data, &length);
     if (status != WF_OK) {
@@ -1134,7 +1134,7 @@ static wf_status get_blocks(void *ctx, const wf_xrpc_request *request,
     }
     unsigned char *data = NULL;
     size_t length = 0;
-    wf_status status = wf_repo_store_get_blocks(acct->repo, cids, cid_count,
+    wf_status status = metalbear_repo_store_get_blocks(acct->repo, cids, cid_count,
                                                 &data, &length);
     free(cids);
     if (status != WF_OK) {
@@ -1164,7 +1164,7 @@ static wf_status get_repo_status(void *ctx, const wf_xrpc_request *request,
     cJSON_AddBoolToObject(root, "active", active);
     if (!active) cJSON_AddStringToObject(root, "status", "deactivated");
     char *rev = NULL, *cid = NULL;
-    if (active && wf_repo_store_get_head(acct->repo, &rev, &cid) == WF_OK)
+    if (active && metalbear_repo_store_get_head(acct->repo, &rev, &cid) == WF_OK)
         cJSON_AddStringToObject(root, "rev", rev);
     free(rev);
     free(cid);
@@ -1644,7 +1644,7 @@ static wf_status check_account_status(void *ctx,
     bool active = metalbear_account_is_active(acct->account);
     char *rev = NULL;
     char *cid = NULL;
-    wf_repo_store_get_head(acct->repo, &rev, &cid);
+    metalbear_repo_store_get_head(acct->repo, &rev, &cid);
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         free(rev);
@@ -1660,10 +1660,10 @@ static wf_status check_account_status(void *ctx,
     cJSON_AddBoolToObject(root, "validDid", valid_did);
     cJSON_AddStringToObject(root, "repoCommit", cid ? cid : "");
     cJSON_AddStringToObject(root, "repoRev", rev ? rev : "");
-    wf_repo_store_stats stats = {0};
+    metalbear_repo_store_stats stats = {0};
     char **blob_cids = NULL;
     size_t blob_count = 0;
-    if (wf_repo_store_get_stats(acct->repo, &stats) != WF_OK ||
+    if (metalbear_repo_store_get_stats(acct->repo, &stats) != WF_OK ||
         wf_blob_store_list(acct->blobs, &blob_cids, &blob_count) != WF_OK) {
         wf_blob_store_list_free(blob_cids, blob_count);
         cJSON_Delete(root);
@@ -2098,7 +2098,7 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
                                                           entries[i].did);
         if (!acct) continue;
         char *rev = NULL, *cid = NULL;
-        if (wf_repo_store_get_head(acct->repo, &rev, &cid) != WF_OK) {
+        if (metalbear_repo_store_get_head(acct->repo, &rev, &cid) != WF_OK) {
             free(rev);
             free(cid);
             continue;
@@ -2442,7 +2442,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
 
     /* Create rate limiter: 100 requests per 60 seconds */
     server->rate_limiter = wf_rate_limiter_new(100, 60, 0);
-    wf_repo_store_set_event_callback(server->bootstrap->repo,
+    metalbear_repo_store_set_event_callback(server->bootstrap->repo,
                                      metalbear_sequencer_repo_event,
                                      server->bootstrap->sequencer);
     if (metalbear_sequencer_reconcile_account(
@@ -2517,7 +2517,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.server.getServiceAuth", get_service_auth,
             server) != WF_OK ||
-        wf_xrpc_server_register_pds_repo_resolver(server->xrpc,
+        metalbear_xrpc_server_register_pds_repo_resolver(server->xrpc,
             metalbear_repo_resolver, server) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.repo.uploadBlob", upload_blob, server) != WF_OK ||
@@ -2660,7 +2660,7 @@ void metalbear_server_free(metalbear_server *server) {
     wf_xrpc_server_free(server->xrpc);
     metalbear_account_cache_free(server->account_cache);
     if (server->bootstrap) {
-        wf_repo_store_set_event_callback(server->bootstrap->repo, NULL, NULL);
+        metalbear_repo_store_set_event_callback(server->bootstrap->repo, NULL, NULL);
         metalbear_account_context_close(server->bootstrap);
     }
     metalbear_account_registry_free(server->registry);
