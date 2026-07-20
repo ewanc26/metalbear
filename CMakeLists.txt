@@ -74,4 +74,10 @@ if(METALBEAR_BUILD_TESTS)
     target_include_directories(test_metalbear_backup PRIVATE
         "${METALBEAR_CJSON_SOURCE_DIR}")
     add_test(NAME metalbear_backup COMMAND test_metalbear_backup)
+
+    add_executable(test_metalbear_multi_account test/test_multi_account.c)
+    target_link_libraries(test_metalbear_multi_account PRIVATE metalbear_core)
+    target_include_directories(test_metalbear_multi_account PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_multi_account COMMAND test_metalbear_multi_account)
 endif()
