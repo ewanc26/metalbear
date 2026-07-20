@@ -34,6 +34,21 @@ typedef struct metalbear_config {
     /* Firehose retention (optional, defaults: max_age=30d, min_events=1000) */
     int64_t retention_max_age_seconds;
     int64_t retention_min_events;
+    /* Admin password (refpds PDS_ADMIN_PASSWORD). When set, admin
+     * endpoints require HTTP Basic `admin:<password>` auth. When unset,
+     * admin endpoints return 401 honestly. */
+    const char *admin_password;
+    /* Comma-separated crawler/relay hostnames (refpds PDS_CRAWLERS).
+     * Each is POSTed a com.atproto.sync.requestCrawl when a new PDS
+     * instance declares itself. Empty => requestCrawl returns an honest
+     * NoCrawlersConfigured error. */
+    const char *crawlers;
+    /* When true, createAccount requires a valid invite code (refpds
+     * PDS_INVITE_REQUIRED). Honest minimum: reject when absent. */
+    bool invite_required;
+    /* Maximum blob upload size in bytes (refpds PDS_BLOB_UPLOAD_LIMIT).
+     * 0 => no limit. Enforced in the blob upload path. */
+    int64_t blob_upload_limit;
 } metalbear_config;
 
 /* Start a single-account AT Protocol PDS. All strings are copied. */
