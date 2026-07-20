@@ -3,6 +3,7 @@
 #include "metalbear/server.h"
 #include "metalbear/account.h"
 #include "metalbear/account_registry.h"
+#include "metalbear/account_context.h"
 #include "metalbear/auth.h"
 #include "metalbear/backup.h"
 #include "metalbear/email.h"
@@ -59,20 +60,13 @@ static char *join_path(const char *directory, const char *name);
 
 struct metalbear_server {
     wf_xrpc_server *xrpc;
-    wf_repo_store *repo;
-    wf_blob_store *blobs;
-    metalbear_auth_store *auth;
-    metalbear_account_store *account;
-    metalbear_sequencer *sequencer;
-    metalbear_oauth_store *oauth;
-    metalbear_key_rotation *key_rotation;
+    /* Primary/bootstrap account context (owned for the process lifetime). */
+    metalbear_account_context *bootstrap;
     metalbear_account_registry *registry;
     wf_rate_limiter *rate_limiter;
     metalbear_email *email;
     char *service_did;
     char *public_url;
-    char *account_did;
-    char *account_handle;
     char *user_domain;
     char *account_email;
     int64_t retention_max_age;
@@ -135,7 +129,7 @@ static bool full_access_route(const char *nsid) {
 static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
     metalbear_server *server = ctx;
     if (is_public_route(req->nsid)) {
-        if (!metalbear_account_is_active(server->account) &&
+        if (!metalbear_account_is_active(server->bootstrap->account) &&
             (strncmp(req->nsid, "com.atproto.repo.", 17) == 0 ||
              strcmp(req->nsid, "com.atproto.sync.getLatestCommit") == 0 ||
              strcmp(req->nsid, "com.atproto.sync.getBlob") == 0 ||
@@ -168,16 +162,16 @@ static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
     metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
     wf_status status = refresh_route
         ? (provided ? WF_OK : WF_ERR_PERMISSION)
-        : metalbear_auth_verify_access_scope(server->auth, provided, &scope);
+        : metalbear_auth_verify_access_scope(server->bootstrap->auth, provided, &scope);
     if (status != WF_OK) return status;
     if (!refresh_route && full_access_route(req->nsid) &&
         scope != METALBEAR_ACCESS_FULL)
         return WF_ERR_PERMISSION;
-    if (!metalbear_account_is_active(server->account) &&
+    if (!metalbear_account_is_active(server->bootstrap->account) &&
         !inactive_route_allowed(req->nsid))
         return WF_ERR_CONFLICT;
 
-    req->authed_subject = strdup(server->account_did);
+    req->authed_subject = strdup(server->bootstrap->did);
     if (!req->authed_subject) return WF_ERR_ALLOC;
     req->authed_principal_kind = WF_XRPC_PRINCIPAL_USER;
     return WF_OK;
@@ -199,7 +193,7 @@ static wf_status request_account_delete(void *ctx,
     (void)request;
     metalbear_server *server = ctx;
     char token[33];
-    if (metalbear_account_create_email_token(server->account, "delete",
+    if (metalbear_account_create_email_token(server->bootstrap->account, "delete",
                                              token, sizeof(token)) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not create deletion token");
@@ -240,30 +234,30 @@ static wf_status delete_account(void *ctx, const wf_xrpc_request *request,
                                    "token is required");
         return WF_OK;
     }
-    if (!metalbear_account_verify_password(server->account,
+    if (!metalbear_account_verify_password(server->bootstrap->account,
                                            password->valuestring)) {
         wf_xrpc_response_set_error(response, 401, "AuthenticationRequired",
                                    "Invalid password");
         return WF_OK;
     }
     wf_status token_status = metalbear_account_verify_email_token(
-        server->account, "delete", token->valuestring);
+        server->bootstrap->account, "delete", token->valuestring);
     if (token_status != WF_OK) {
         wf_xrpc_response_set_error(response, 400, "InvalidToken",
                                    "Invalid or expired deletion token");
         return WF_OK;
     }
     /* Revoke all sessions */
-    metalbear_auth_delete_all(server->auth);
+    metalbear_auth_delete_all(server->bootstrap->auth);
     /* Delete all app passwords and credentials */
-    metalbear_account_delete(server->account);
+    metalbear_account_delete(server->bootstrap->account);
     /* Deactivate the account */
-    metalbear_account_deactivate(server->account, NULL);
+    metalbear_account_deactivate(server->bootstrap->account, NULL);
     /* Remove from the account registry */
-    metalbear_account_registry_remove(server->registry, server->account_did);
+    metalbear_account_registry_remove(server->registry, server->bootstrap->did);
     /* Emit deactivation event to firehose */
     metalbear_sequencer_account_status(
-        server->sequencer, server->account_did, 0, "deleted");
+        server->bootstrap->sequencer, server->bootstrap->did, 0, "deleted");
     return WF_OK;
 }
 
@@ -308,15 +302,15 @@ static wf_status resolve_handle(void *ctx, const wf_xrpc_request *request,
         ? cJSON_GetObjectItemCaseSensitive(request->params, "handle") : NULL;
     if (!cJSON_IsString(handle) ||
         !wf_syntax_handle_is_valid(handle->valuestring) ||
-        strcmp(handle->valuestring, server->account_handle) != 0 ||
-        !metalbear_account_is_active(server->account)) {
+        strcmp(handle->valuestring, server->bootstrap->handle) != 0 ||
+        !metalbear_account_is_active(server->bootstrap->account)) {
         wf_xrpc_response_set_error(response, 400, "HandleNotFound",
                                    "Unable to resolve handle");
         return WF_OK;
     }
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
-    cJSON_AddStringToObject(root, "did", server->account_did);
+    cJSON_AddStringToObject(root, "did", server->bootstrap->did);
     return set_json(response, root);
 }
 
@@ -328,7 +322,7 @@ static wf_status get_recommended_did_credentials(void *ctx,
     char *didkey = NULL;
     wf_signing_key key;
     memset(&key, 0, sizeof(key));
-    if (metalbear_key_rotation_current_key(server->key_rotation, &key) != WF_OK ||
+    if (metalbear_key_rotation_current_key(server->bootstrap->key_rotation, &key) != WF_OK ||
         wf_signing_key_public_didkey(&key, &didkey) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not derive signing key");
@@ -338,9 +332,9 @@ static wf_status get_recommended_did_credentials(void *ctx,
     if (!root) { free(didkey); return WF_ERR_ALLOC; }
     cJSON *also_known_as = cJSON_CreateArray();
     if (!also_known_as) { cJSON_Delete(root); free(didkey); return WF_ERR_ALLOC; }
-    if (server->account_handle && server->account_handle[0]) {
+    if (server->bootstrap->handle && server->bootstrap->handle[0]) {
         char aka[256];
-        snprintf(aka, sizeof(aka), "at://%s", server->account_handle);
+        snprintf(aka, sizeof(aka), "at://%s", server->bootstrap->handle);
         cJSON_AddItemToArray(also_known_as, cJSON_CreateString(aka));
     }
     cJSON_AddItemToObject(root, "alsoKnownAs", also_known_as);
@@ -387,15 +381,15 @@ static wf_status update_handle(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     if (metalbear_account_registry_update_handle(
-            server->registry, server->account_did,
+            server->registry, server->bootstrap->did,
             handle->valuestring) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not persist handle");
         return WF_OK;
     }
-    free(server->account_handle);
-    server->account_handle = strdup(handle->valuestring);
-    if (!server->account_handle) {
+    free(server->bootstrap->handle);
+    server->bootstrap->handle = strdup(handle->valuestring);
+    if (!server->bootstrap->handle) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not update handle");
         return WF_OK;
@@ -412,11 +406,11 @@ static metalbear_credential_kind valid_login(metalbear_server *server,
     if (!cJSON_IsString(identifier) || !cJSON_IsString(password))
         return METALBEAR_CREDENTIAL_INVALID;
     bool correct_id = constant_time_equal(identifier->valuestring,
-                                          server->account_handle) ||
+                                          server->bootstrap->handle) ||
                       constant_time_equal(identifier->valuestring,
-                                          server->account_did);
+                                          server->bootstrap->did);
     return correct_id ? metalbear_account_verify_credential(
-                            server->account, password->valuestring,
+                            server->bootstrap->account, password->valuestring,
                             out_app_password_name)
                       : METALBEAR_CREDENTIAL_INVALID;
 }
@@ -436,7 +430,7 @@ static cJSON *build_did_doc(metalbear_server *server) {
     cJSON_AddItemToArray(context,
                          cJSON_CreateString("https://www.w3.org/ns/did/v1"));
     cJSON_AddItemToObject(document, "@context", context);
-    cJSON_AddStringToObject(document, "id", server->account_did);
+    cJSON_AddStringToObject(document, "id", server->bootstrap->did);
     cJSON_AddStringToObject(service, "id", "#atproto_pds");
     cJSON_AddStringToObject(service, "type", "AtprotoPersonalDataServer");
     cJSON_AddStringToObject(service, "serviceEndpoint", server->public_url);
@@ -453,15 +447,15 @@ static cJSON *session_json(metalbear_server *server,
         cJSON_AddStringToObject(root, "accessJwt", tokens->access_jwt);
         cJSON_AddStringToObject(root, "refreshJwt", tokens->refresh_jwt);
     }
-    cJSON_AddStringToObject(root, "handle", server->account_handle);
-    cJSON_AddStringToObject(root, "did", server->account_did);
-    bool active = metalbear_account_is_active(server->account);
+    cJSON_AddStringToObject(root, "handle", server->bootstrap->handle);
+    cJSON_AddStringToObject(root, "did", server->bootstrap->did);
+    bool active = metalbear_account_is_active(server->bootstrap->account);
     cJSON_AddBoolToObject(root, "active", active);
     if (!active) cJSON_AddStringToObject(root, "status", "deactivated");
     char *email = NULL;
     int confirmed = 0;
     bool email_auth_factor = false;
-    if (metalbear_account_get_email(server->account, &email,
+    if (metalbear_account_get_email(server->bootstrap->account, &email,
                                     &confirmed) == WF_OK && email) {
         cJSON_AddStringToObject(root, "email", email);
         cJSON_AddBoolToObject(root, "emailConfirmed", confirmed != 0);
@@ -496,7 +490,7 @@ static wf_status create_session(void *ctx, const wf_xrpc_request *request,
             ? METALBEAR_ACCESS_APP_PASSWORD_PRIVILEGED
             : METALBEAR_ACCESS_APP_PASSWORD;
     metalbear_session_tokens tokens = {0};
-    if (metalbear_auth_create_scoped_session(server->auth, scope,
+    if (metalbear_auth_create_scoped_session(server->bootstrap->auth, scope,
             app_password_name, &tokens) != WF_OK) {
         free(app_password_name);
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -520,7 +514,7 @@ static wf_status refresh_session(void *ctx, const wf_xrpc_request *request,
     metalbear_server *server = ctx;
     const char *token = bearer_token(request->auth_header);
     metalbear_session_tokens tokens = {0};
-    if (metalbear_auth_rotate_refresh(server->auth, token, &tokens) != WF_OK) {
+    if (metalbear_auth_rotate_refresh(server->bootstrap->auth, token, &tokens) != WF_OK) {
         wf_xrpc_response_set_error(response, 401, "ExpiredToken",
                                    "Refresh token is expired or revoked");
         return WF_OK;
@@ -534,7 +528,7 @@ static wf_status delete_session(void *ctx, const wf_xrpc_request *request,
                                 wf_xrpc_response *response) {
     metalbear_server *server = ctx;
     const char *token = bearer_token(request->auth_header);
-    if (metalbear_auth_revoke_refresh(server->auth, token) != WF_OK) {
+    if (metalbear_auth_revoke_refresh(server->bootstrap->auth, token) != WF_OK) {
         wf_xrpc_response_set_error(response, 401, "InvalidToken",
                                    "Refresh token is invalid or revoked");
         return WF_OK;
@@ -559,7 +553,7 @@ static wf_status create_app_password(void *ctx,
     }
     char *password = NULL, *created_at = NULL;
     wf_status status = metalbear_account_create_app_password(
-        server->account, name->valuestring, cJSON_IsTrue(privileged),
+        server->bootstrap->account, name->valuestring, cJSON_IsTrue(privileged),
         &password, &created_at);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(response,
@@ -588,7 +582,7 @@ static wf_status list_app_passwords(void *ctx,
     metalbear_server *server = ctx;
     metalbear_app_password *passwords = NULL;
     size_t count = 0;
-    if (metalbear_account_list_app_passwords(server->account, &passwords,
+    if (metalbear_account_list_app_passwords(server->bootstrap->account, &passwords,
                                              &count) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not list app passwords");
@@ -629,9 +623,9 @@ static wf_status revoke_app_password(void *ctx,
                                    "A non-empty name is required");
         return WF_OK;
     }
-    if (metalbear_account_revoke_app_password(server->account,
+    if (metalbear_account_revoke_app_password(server->bootstrap->account,
                                                name->valuestring) != WF_OK ||
-        metalbear_auth_revoke_app_password_sessions(server->auth,
+        metalbear_auth_revoke_app_password_sessions(server->bootstrap->auth,
                                                      name->valuestring) != WF_OK)
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not revoke app password");
@@ -651,11 +645,11 @@ static wf_status deactivate_account(void *ctx,
         return WF_OK;
     }
     wf_status status = metalbear_account_deactivate(
-        server->account,
+        server->bootstrap->account,
         cJSON_IsString(delete_after) ? delete_after->valuestring : NULL);
     if (status == WF_OK)
         status = metalbear_sequencer_account_status(
-            server->sequencer, server->account_did, 0, "deactivated");
+            server->bootstrap->sequencer, server->bootstrap->did, 0, "deactivated");
     if (status != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not deactivate account");
@@ -667,11 +661,11 @@ static wf_status activate_account(void *ctx, const wf_xrpc_request *request,
                                   wf_xrpc_response *response) {
     (void)request;
     metalbear_server *server = ctx;
-    wf_status status = metalbear_account_activate(server->account);
+    wf_status status = metalbear_account_activate(server->bootstrap->account);
     if (status == WF_OK)
         status = metalbear_sequencer_account_activation(
-            server->sequencer, server->account_did, server->account_handle,
-            server->repo);
+            server->bootstrap->sequencer, server->bootstrap->did, server->bootstrap->handle,
+            server->bootstrap->repo);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not activate account");
@@ -745,7 +739,7 @@ static wf_status get_service_auth(void *ctx,
         return WF_OK;
     }
     metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
-    if (metalbear_auth_verify_access_scope(server->auth,
+    if (metalbear_auth_verify_access_scope(server->bootstrap->auth,
             bearer_token(request->auth_header), &scope) != WF_OK) {
         wf_xrpc_response_set_error(response, 401, "InvalidToken",
                                    "Invalid access token");
@@ -782,7 +776,7 @@ static wf_status get_service_auth(void *ctx,
         expiration = (int64_t)parsed;
     }
     char *token = NULL;
-    if (wf_repo_store_create_service_auth(server->repo, aud->valuestring,
+    if (wf_repo_store_create_service_auth(server->bootstrap->repo, aud->valuestring,
                                            expiration, lxm, &token) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not create service token");
@@ -821,7 +815,7 @@ static wf_status get_repo(void *ctx, const wf_xrpc_request *request,
     unsigned char *data = NULL;
     size_t length = 0;
     wf_status status = wf_repo_store_export(
-        server->repo, cJSON_IsString(since) ? since->valuestring : NULL,
+        server->bootstrap->repo, cJSON_IsString(since) ? since->valuestring : NULL,
         &data, &length);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(response, 400, "RepoNotFound",
@@ -863,7 +857,7 @@ static wf_status get_blocks(void *ctx, const wf_xrpc_request *request,
     }
     unsigned char *data = NULL;
     size_t length = 0;
-    wf_status status = wf_repo_store_get_blocks(server->repo, cids, cid_count,
+    wf_status status = wf_repo_store_get_blocks(server->bootstrap->repo, cids, cid_count,
                                                 &data, &length);
     free(cids);
     if (status != WF_OK) {
@@ -880,19 +874,19 @@ static wf_status get_repo_status(void *ctx, const wf_xrpc_request *request,
     cJSON *did = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
     if (!cJSON_IsString(did) ||
-        strcmp(did->valuestring, server->account_did) != 0) {
+        strcmp(did->valuestring, server->bootstrap->did) != 0) {
         wf_xrpc_response_set_error(response, 400, "RepoNotFound",
                                    "Repository is not hosted here");
         return WF_OK;
     }
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
-    cJSON_AddStringToObject(root, "did", server->account_did);
-    bool active = metalbear_account_is_active(server->account);
+    cJSON_AddStringToObject(root, "did", server->bootstrap->did);
+    bool active = metalbear_account_is_active(server->bootstrap->account);
     cJSON_AddBoolToObject(root, "active", active);
     if (!active) cJSON_AddStringToObject(root, "status", "deactivated");
     char *rev = NULL, *cid = NULL;
-    if (active && wf_repo_store_get_head(server->repo, &rev, &cid) == WF_OK)
+    if (active && wf_repo_store_get_head(server->bootstrap->repo, &rev, &cid) == WF_OK)
         cJSON_AddStringToObject(root, "rev", rev);
     free(rev);
     free(cid);
@@ -906,7 +900,7 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
     cJSON *did = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
     if (!cJSON_IsString(did) ||
-        strcmp(did->valuestring, server->account_did) != 0) {
+        strcmp(did->valuestring, server->bootstrap->did) != 0) {
         wf_xrpc_response_set_error(response, 400, "RepoNotFound",
                                    "Repository is not hosted here");
         return WF_OK;
@@ -933,7 +927,7 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
 
     char **all = NULL;
     size_t count = 0;
-    if (wf_blob_store_list(server->blobs, &all, &count) != WF_OK) {
+    if (wf_blob_store_list(server->bootstrap->blobs, &all, &count) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not enumerate blobs");
         return WF_OK;
@@ -993,7 +987,7 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
     }
     /* Use the configured DID if none provided */
     const char *account_did = (cJSON_IsString(did) && did->valuestring[0])
-        ? did->valuestring : server->account_did;
+        ? did->valuestring : server->bootstrap->did;
     /* Build data directory for the new account */
     char *data_dir = join_path(server->user_domain, handle->valuestring);
     if (!data_dir) {
@@ -1018,7 +1012,7 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
     /* Create a session for the new account */
     metalbear_session_tokens tokens = {0};
     wf_status session_status = metalbear_auth_create_scoped_session(
-        server->auth, METALBEAR_ACCESS_FULL, NULL, &tokens);
+        server->bootstrap->auth, METALBEAR_ACCESS_FULL, NULL, &tokens);
     if (session_status != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not create session");
@@ -1044,7 +1038,7 @@ static wf_status request_email_confirmation(void *ctx,
     metalbear_server *server = ctx;
     char *email = NULL;
     int confirmed = 0;
-    if (metalbear_account_get_email(server->account, &email, &confirmed) !=
+    if (metalbear_account_get_email(server->bootstrap->account, &email, &confirmed) !=
             WF_OK || !email) {
         wf_xrpc_response_set_error(response, 400, "AccountNotFound",
                                    "No email address on file");
@@ -1058,7 +1052,7 @@ static wf_status request_email_confirmation(void *ctx,
         return WF_OK;
     }
     char token[33];
-    if (metalbear_account_create_email_token(server->account, "confirm",
+    if (metalbear_account_create_email_token(server->bootstrap->account, "confirm",
                                              token, sizeof(token)) != WF_OK) {
         free(email);
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -1092,7 +1086,7 @@ static wf_status confirm_email(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     wf_status status = metalbear_account_verify_email_token(
-        server->account, "confirm", token->valuestring);
+        server->bootstrap->account, "confirm", token->valuestring);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(response, 400, "InvalidToken",
                                    "Invalid or expired confirmation token");
@@ -1111,7 +1105,7 @@ static wf_status request_email_update(void *ctx,
     metalbear_server *server = ctx;
     char *email = NULL;
     int confirmed = 0;
-    if (metalbear_account_get_email(server->account, &email, &confirmed) !=
+    if (metalbear_account_get_email(server->bootstrap->account, &email, &confirmed) !=
             WF_OK || !email) {
         free(email);
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
@@ -1119,7 +1113,7 @@ static wf_status request_email_update(void *ctx,
         return WF_OK;
     }
     char token[33];
-    if (metalbear_account_create_email_token(server->account, "update",
+    if (metalbear_account_create_email_token(server->bootstrap->account, "update",
                                              token, sizeof(token)) != WF_OK) {
         free(email);
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -1150,7 +1144,7 @@ static wf_status update_email(void *ctx, const wf_xrpc_request *request,
     /* Check if current email is confirmed — token required only then */
     char *current_email = NULL;
     int confirmed = 0;
-    metalbear_account_get_email(server->account, &current_email, &confirmed);
+    metalbear_account_get_email(server->bootstrap->account, &current_email, &confirmed);
     if (confirmed) {
         if (!cJSON_IsString(token) || !token->valuestring[0]) {
             free(current_email);
@@ -1160,7 +1154,7 @@ static wf_status update_email(void *ctx, const wf_xrpc_request *request,
             return WF_OK;
         }
         wf_status status = metalbear_account_verify_email_token(
-            server->account, "update", token->valuestring);
+            server->bootstrap->account, "update", token->valuestring);
         if (status != WF_OK) {
             free(current_email);
             wf_xrpc_response_set_error(response, 400, "InvalidToken",
@@ -1170,7 +1164,7 @@ static wf_status update_email(void *ctx, const wf_xrpc_request *request,
     }
     free(current_email);
     /* Store the new email address and mark it unconfirmed */
-    if (metalbear_account_store_email(server->account,
+    if (metalbear_account_store_email(server->bootstrap->account,
                                       email_param->valuestring) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not store email address");
@@ -1193,7 +1187,7 @@ static wf_status request_password_reset(void *ctx,
     }
     /* Look up the email on file to verify it matches */
     char *email = NULL;
-    metalbear_account_get_email(server->account, &email, NULL);
+    metalbear_account_get_email(server->bootstrap->account, &email, NULL);
     if (!email || !email[0] ||
         strcmp(email, email_param->valuestring) != 0) {
         free(email);
@@ -1204,7 +1198,7 @@ static wf_status request_password_reset(void *ctx,
         return set_json(response, root);
     }
     char token[33];
-    if (metalbear_account_create_email_token(server->account, "reset",
+    if (metalbear_account_create_email_token(server->bootstrap->account, "reset",
                                              token, sizeof(token)) != WF_OK) {
         free(email);
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -1238,13 +1232,13 @@ static wf_status reset_password(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     wf_status status = metalbear_account_verify_email_token(
-        server->account, "reset", token->valuestring);
+        server->bootstrap->account, "reset", token->valuestring);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(response, 400, "InvalidToken",
                                    "Invalid or expired reset token");
         return WF_OK;
     }
-    status = metalbear_account_reset_password(server->account,
+    status = metalbear_account_reset_password(server->bootstrap->account,
                                               password->valuestring);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -1277,10 +1271,10 @@ static wf_status check_account_status(void *ctx,
                                       wf_xrpc_response *response) {
     (void)request;
     metalbear_server *server = ctx;
-    bool active = metalbear_account_is_active(server->account);
+    bool active = metalbear_account_is_active(server->bootstrap->account);
     char *rev = NULL;
     char *cid = NULL;
-    wf_repo_store_get_head(server->repo, &rev, &cid);
+    wf_repo_store_get_head(server->bootstrap->repo, &rev, &cid);
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         free(rev);
@@ -1290,7 +1284,7 @@ static wf_status check_account_status(void *ctx,
     /* The account DID and service DID are configured at startup and the
      * server publishes a service document for them, so the DID is valid
      * for this PDS. */
-    bool valid_did = server->account_did && server->account_did[0] &&
+    bool valid_did = server->bootstrap->did && server->bootstrap->did[0] &&
                      server->service_did && server->service_did[0];
     cJSON_AddBoolToObject(root, "activated", active);
     cJSON_AddBoolToObject(root, "validDid", valid_did);
@@ -1315,7 +1309,7 @@ static wf_status reserve_signing_key(void *ctx,
     (void)request;
     metalbear_server *server = ctx;
     char *didkey = NULL;
-    if (metalbear_key_rotation_reserve(server->key_rotation, &didkey) != WF_OK) {
+    if (metalbear_key_rotation_reserve(server->bootstrap->key_rotation, &didkey) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not reserve signing key");
         return WF_OK;
@@ -1440,7 +1434,7 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
         return WF_ERR_ALLOC;
     }
     char *rev = NULL, *cid = NULL;
-    if (wf_repo_store_get_head(server->repo, &rev, &cid) == WF_OK) {
+    if (wf_repo_store_get_head(server->bootstrap->repo, &rev, &cid) == WF_OK) {
         cJSON *repo = cJSON_CreateObject();
         if (!repo) {
             free(rev);
@@ -1449,10 +1443,10 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
             cJSON_Delete(repos);
             return WF_ERR_ALLOC;
         }
-        cJSON_AddStringToObject(repo, "did", server->account_did);
+        cJSON_AddStringToObject(repo, "did", server->bootstrap->did);
         cJSON_AddStringToObject(repo, "head", cid);
         cJSON_AddStringToObject(repo, "rev", rev);
-        bool active = metalbear_account_is_active(server->account);
+        bool active = metalbear_account_is_active(server->bootstrap->account);
         cJSON_AddBoolToObject(repo, "active", active);
         if (!active)
             cJSON_AddStringToObject(repo, "status", "deactivated");
@@ -1484,12 +1478,9 @@ static bool copy_config(metalbear_server *server,
                         const metalbear_config *config) {
     server->service_did = strdup(config->service_did);
     if (config->public_url) server->public_url = strdup(config->public_url);
-    server->account_did = strdup(config->account_did);
-    server->account_handle = strdup(config->account_handle);
     server->user_domain = strdup(config->user_domain);
     return server->service_did && (!config->public_url || server->public_url) &&
-           server->account_did &&
-           server->account_handle && server->user_domain;
+           server->user_domain;
 }
 
 static char *public_url_from_service_did(const char *did) {
@@ -1550,11 +1541,14 @@ static wf_status register_identity_documents(metalbear_server *server) {
     if (status != WF_OK) return status;
     status = wf_xrpc_server_register_static_get(server->xrpc,
         "/.well-known/atproto-did", "text/plain; charset=utf-8",
-        server->account_did, strlen(server->account_did));
+        server->bootstrap->did, strlen(server->bootstrap->did));
     if (status != WF_OK) return status;
     static const char landing[] =
-        "MetalBear AT Protocol Personal Data Server\n"
-        "API routes are available under /xrpc/.\n";
+        "MetalBear — an AT Protocol Personal Data Server\n"
+        "\n"
+        "This is a multi-account PDS built on Wolfram. XRPC API routes live\n"
+        "under /xrpc/. Account documents are published at\n"
+        "/.well-known/did.json and /.well-known/atproto-did.\n";
     status = wf_xrpc_server_register_static_get(
         server->xrpc, "/", "text/plain; charset=utf-8", landing,
         sizeof(landing) - 1);
@@ -1584,69 +1578,31 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     }
 
     metalbear_server *server = calloc(1, sizeof(*server));
-    char *repo_path = join_path(config->data_directory, "repo.sqlite3");
-    char *blob_path = join_path(config->data_directory, "blobs");
-    char *auth_path = join_path(config->data_directory, "auth.sqlite3");
-    char *account_path = join_path(config->data_directory, "account.sqlite3");
-    char *sequence_path = join_path(config->data_directory, "sequencer.sqlite3");
-    if (!server || !repo_path || !blob_path || !auth_path || !account_path ||
-        !sequence_path ||
-        !copy_config(server, config) ||
-        !make_directory(blob_path)) {
-        LOG_ERROR("cannot initialise server paths");
+    if (!server || !copy_config(server, config)) {
+        LOG_ERROR("cannot initialise server");
         goto fail;
     }
 
-    if (wf_repo_store_open(repo_path, config->account_did,
-                           config->account_handle, &server->repo) != WF_OK) {
-        LOG_ERROR("cannot open repository store");
+    /* Resolve the primary account's dedicated data directory and open its
+     * full store bundle as the bootstrap context. */
+    char *primary_dir = NULL;
+    if (metalbear_account_dir_for_did(config->data_directory,
+                                      config->account_did, &primary_dir) != WF_OK
+        || !primary_dir) {
+        LOG_ERROR("cannot compute primary account directory");
         goto fail;
     }
-    server->blobs = wf_blob_store_new(blob_path);
-    if (!server->blobs) {
-        LOG_ERROR("cannot open blob store");
+    if (metalbear_account_context_open(config->service_did,
+                                       server->public_url,
+                                       config->account_did,
+                                       config->account_handle,
+                                       primary_dir, config->password,
+                                       &server->bootstrap) != WF_OK) {
+        LOG_ERROR("cannot open primary account context");
+        free(primary_dir);
         goto fail;
     }
-    if (metalbear_auth_store_open(auth_path, config->service_did,
-                                  config->account_did, &server->auth) != WF_OK) {
-        LOG_ERROR("cannot open authentication store");
-        goto fail;
-    }
-    if (metalbear_account_store_open(account_path, config->password,
-                                     &server->account) != WF_OK) {
-        LOG_ERROR("cannot open account state store");
-        goto fail;
-    }
-    if (metalbear_sequencer_open(sequence_path, config->account_did,
-                                 config->account_handle,
-                                 &server->sequencer) != WF_OK) {
-        LOG_ERROR("cannot open event sequencer");
-        goto fail;
-    }
-
-    /* Open OAuth store */
-    char *oauth_path = join_path(config->data_directory, "oauth.sqlite3");
-    if (!oauth_path ||
-        metalbear_oauth_store_open(oauth_path, config->public_url
-                                    ? config->public_url : "",
-                                   config->account_did,
-                                   &server->oauth) != WF_OK) {
-        LOG_ERROR("cannot open OAuth store");
-        free(oauth_path);
-        goto fail;
-    }
-    free(oauth_path);
-
-    /* Open key rotation store */
-    char *key_path = join_path(config->data_directory, "keys.sqlite3");
-    if (!key_path ||
-        metalbear_key_rotation_open(key_path,
-                                    &server->key_rotation) != WF_OK) {
-        LOG_ERROR("cannot open key rotation store");
-        free(key_path);
-        goto fail;
-    }
-    free(key_path);
+    free(primary_dir);
 
     /* Open account registry */
     char *registry_path = join_path(config->data_directory, "accounts.sqlite3");
@@ -1658,12 +1614,16 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
     free(registry_path);
-    /* Seed the registry with the primary account if not already present */
+    /* Seed the registry with the primary account if not already present.
+     * The data_directory stored is the account's dedicated subdirectory. */
     metalbear_account_entry *existing = NULL;
     if (metalbear_account_registry_find_by_did(
             server->registry, config->account_did, &existing) != WF_OK) {
-        char *primary_dir = join_path(config->data_directory, "primary");
-        if (primary_dir) {
+        char *primary_dir = NULL;
+        if (metalbear_account_dir_for_did(config->data_directory,
+                                           config->account_did,
+                                           &primary_dir) == WF_OK &&
+            primary_dir) {
             metalbear_account_registry_add(server->registry,
                                            config->account_did,
                                            config->account_handle,
@@ -1676,17 +1636,17 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
 
     /* Create rate limiter: 100 requests per 60 seconds */
     server->rate_limiter = wf_rate_limiter_new(100, 60, 0);
-    wf_repo_store_set_event_callback(server->repo,
+    wf_repo_store_set_event_callback(server->bootstrap->repo,
                                      metalbear_sequencer_repo_event,
-                                     server->sequencer);
+                                     server->bootstrap->sequencer);
     if (metalbear_sequencer_reconcile_account(
-            server->sequencer, server->account_did,
-            metalbear_account_is_active(server->account)) != WF_OK) {
+            server->bootstrap->sequencer, server->bootstrap->did,
+            metalbear_account_is_active(server->bootstrap->account)) != WF_OK) {
         LOG_ERROR("cannot reconcile account sequence");
         goto fail;
     }
-    if (metalbear_sequencer_reconcile_repo(server->sequencer,
-                                           server->repo) != WF_OK) {
+    if (metalbear_sequencer_reconcile_repo(server->bootstrap->sequencer,
+                                           server->bootstrap->repo) != WF_OK) {
         LOG_ERROR("cannot reconcile repository sequence");
         goto fail;
     }
@@ -1740,8 +1700,8 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.server.getServiceAuth", get_service_auth,
             server) != WF_OK ||
-        wf_xrpc_server_register_pds_repo(server->xrpc, server->repo) != WF_OK ||
-        wf_xrpc_server_register_blob_store(server->xrpc, server->blobs) != WF_OK) {
+        wf_xrpc_server_register_pds_repo(server->xrpc, server->bootstrap->repo) != WF_OK ||
+        wf_xrpc_server_register_blob_store(server->xrpc, server->bootstrap->blobs) != WF_OK) {
         LOG_ERROR("cannot register XRPC routes");
         goto fail;
     }
@@ -1755,7 +1715,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "com.atproto.sync.listBlobs", list_blobs, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.sync.listRepos", list_repos, server) != WF_OK ||
-        metalbear_sequencer_register(server->sequencer,
+        metalbear_sequencer_register(server->bootstrap->sequencer,
                                      server->xrpc) != WF_OK) {
         LOG_ERROR("cannot register sync export routes");
         goto fail;
@@ -1764,10 +1724,10 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     wf_xrpc_server_set_auth_callback(server->xrpc, authenticate, server);
 
     /* Register OAuth HTTP routes (bypass XRPC auth) */
-    if (metalbear_oauth_routes_register(server->xrpc, server->oauth,
+    if (metalbear_oauth_routes_register(server->xrpc, server->bootstrap->oauth,
                                          server->public_url,
                                          server->service_did,
-                                         server->account_did) != WF_OK) {
+                                         server->bootstrap->did) != WF_OK) {
         LOG_ERROR("cannot register OAuth routes");
         goto fail;
     }
@@ -1851,23 +1811,13 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                                       : 1000;
 
     /* Apply initial retention */
-    metalbear_sequencer_retain(server->sequencer,
+    metalbear_sequencer_retain(server->bootstrap->sequencer,
                                server->retention_max_age,
                                server->retention_min_events);
 
-    free(repo_path);
-    free(blob_path);
-    free(auth_path);
-    free(account_path);
-    free(sequence_path);
     return server;
 
 fail:
-    free(repo_path);
-    free(blob_path);
-    free(auth_path);
-    free(account_path);
-    free(sequence_path);
     metalbear_server_free(server);
     return NULL;
 }
@@ -1879,21 +1829,15 @@ uint16_t metalbear_server_port(const metalbear_server *server) {
 void metalbear_server_free(metalbear_server *server) {
     if (!server) return;
     wf_xrpc_server_free(server->xrpc);
-    wf_repo_store_set_event_callback(server->repo, NULL, NULL);
-    metalbear_sequencer_free(server->sequencer);
-    metalbear_account_store_free(server->account);
-    metalbear_auth_store_free(server->auth);
-    metalbear_oauth_store_free(server->oauth);
-    metalbear_key_rotation_free(server->key_rotation);
+    if (server->bootstrap) {
+        wf_repo_store_set_event_callback(server->bootstrap->repo, NULL, NULL);
+        metalbear_account_context_close(server->bootstrap);
+    }
     metalbear_account_registry_free(server->registry);
     metalbear_email_free(server->email);
     wf_rate_limiter_free(server->rate_limiter);
-    wf_blob_store_free(server->blobs);
-    wf_repo_store_free(server->repo);
     free(server->service_did);
     free(server->public_url);
-    free(server->account_did);
-    free(server->account_handle);
     free(server->user_domain);
     free(server->account_email);
     free(server);
