@@ -92,6 +92,7 @@ static bool is_public_route(const char *nsid) {
         "com.atproto.server.createSession",
         "com.atproto.server.createAccount",
         "com.atproto.server.requestPasswordReset",
+        "com.atproto.server.reserveSigningKey",
         "com.atproto.identity.resolveHandle",
         "com.atproto.repo.getRecord",
         "com.atproto.repo.describeRepo",
@@ -318,6 +319,89 @@ static wf_status resolve_handle(void *ctx, const wf_xrpc_request *request,
     return set_json(response, root);
 }
 
+/* ---- com.atproto.identity.getRecommendedDidCredentials (query) ---- */
+static wf_status get_recommended_did_credentials(void *ctx,
+        const wf_xrpc_request *request, wf_xrpc_response *response) {
+    (void)request;
+    metalbear_server *server = ctx;
+    char *didkey = NULL;
+    wf_signing_key key;
+    memset(&key, 0, sizeof(key));
+    if (metalbear_key_rotation_current_key(server->key_rotation, &key) != WF_OK ||
+        wf_signing_key_public_didkey(&key, &didkey) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not derive signing key");
+        return WF_OK;
+    }
+    cJSON *root = cJSON_CreateObject();
+    if (!root) { free(didkey); return WF_ERR_ALLOC; }
+    cJSON *also_known_as = cJSON_CreateArray();
+    if (!also_known_as) { cJSON_Delete(root); free(didkey); return WF_ERR_ALLOC; }
+    if (server->account_handle && server->account_handle[0]) {
+        char aka[256];
+        snprintf(aka, sizeof(aka), "at://%s", server->account_handle);
+        cJSON_AddItemToArray(also_known_as, cJSON_CreateString(aka));
+    }
+    cJSON_AddItemToObject(root, "alsoKnownAs", also_known_as);
+    cJSON *verification_methods = cJSON_CreateObject();
+    if (!verification_methods) { cJSON_Delete(root); free(didkey); return WF_ERR_ALLOC; }
+    cJSON_AddStringToObject(verification_methods, "atproto", didkey);
+    cJSON_AddItemToObject(root, "verificationMethods", verification_methods);
+    cJSON *rotation_keys = cJSON_CreateArray();
+    if (!rotation_keys) { cJSON_Delete(root); free(didkey); return WF_ERR_ALLOC; }
+    cJSON_AddItemToArray(rotation_keys, cJSON_CreateString(didkey));
+    cJSON_AddItemToObject(root, "rotationKeys", rotation_keys);
+    cJSON *services = cJSON_CreateObject();
+    if (!services) { cJSON_Delete(root); free(didkey); return WF_ERR_ALLOC; }
+    cJSON *atproto_pds = cJSON_CreateObject();
+    if (!atproto_pds) { cJSON_Delete(root); free(didkey); return WF_ERR_ALLOC; }
+    cJSON_AddStringToObject(atproto_pds, "type", "AtprotoPersonalDataServer");
+    cJSON_AddStringToObject(atproto_pds, "endpoint",
+                            server->public_url ? server->public_url : "");
+    cJSON_AddItemToObject(services, "atproto_pds", atproto_pds);
+    cJSON_AddItemToObject(root, "services", services);
+    free(didkey);
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.identity.updateHandle (procedure) ---- */
+static wf_status update_handle(void *ctx, const wf_xrpc_request *request,
+                               wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *handle = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "handle") : NULL;
+    if (!cJSON_IsString(handle) || !handle->valuestring[0] ||
+        !wf_syntax_handle_is_valid(handle->valuestring)) {
+        wf_xrpc_response_set_error(response, 400, "InvalidHandle",
+                                   "A valid handle is required");
+        return WF_OK;
+    }
+    /* Single-account PDS without external DNS verification: only handles
+     * under the configured user domain may be adopted. */
+    if (!server->user_domain || server->user_domain[0] == '\0' ||
+        strcmp(handle->valuestring + strlen(handle->valuestring) -
+                   strlen(server->user_domain), server->user_domain) != 0) {
+        wf_xrpc_response_set_error(response, 400, "InvalidHandle",
+                                   "Handle must be under the configured domain");
+        return WF_OK;
+    }
+    if (metalbear_account_registry_update_handle(
+            server->registry, server->account_did,
+            handle->valuestring) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not persist handle");
+        return WF_OK;
+    }
+    free(server->account_handle);
+    server->account_handle = strdup(handle->valuestring);
+    if (!server->account_handle) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not update handle");
+        return WF_OK;
+    }
+    return WF_OK;
+}
+
 static metalbear_credential_kind valid_login(metalbear_server *server,
                                              cJSON *body,
                                              char **out_app_password_name) {
@@ -375,10 +459,14 @@ static cJSON *session_json(metalbear_server *server,
     if (!active) cJSON_AddStringToObject(root, "status", "deactivated");
     char *email = NULL;
     int confirmed = 0;
+    bool email_auth_factor = false;
     if (metalbear_account_get_email(server->account, &email,
                                     &confirmed) == WF_OK && email) {
         cJSON_AddStringToObject(root, "email", email);
         cJSON_AddBoolToObject(root, "emailConfirmed", confirmed != 0);
+        if (confirmed != 0) {
+            email_auth_factor = true;
+        }
     }
     free(email);
     if (server->public_url) {
@@ -386,6 +474,7 @@ static cJSON *session_json(metalbear_server *server,
         if (did_doc)
             cJSON_AddItemToObject(root, "didDoc", did_doc);
     }
+    cJSON_AddBoolToObject(root, "emailAuthFactor", email_auth_factor);
     return root;
 }
 
@@ -1102,8 +1191,8 @@ static wf_status reset_password(void *ctx, const wf_xrpc_request *request,
 }
 
 static wf_status get_account_invite_codes(void *ctx,
-                                          const wf_xrpc_request *request,
-                                          wf_xrpc_response *response) {
+                                           const wf_xrpc_request *request,
+                                           wf_xrpc_response *response) {
     (void)request;
     (void)ctx;
     /* Single-account PDS: return empty invite codes */
@@ -1117,6 +1206,163 @@ static wf_status get_account_invite_codes(void *ctx,
     cJSON_AddItemToObject(root, "codes", codes);
     return set_json(response, root);
 }
+
+/* ---- checkAccountStatus (query) ---- */
+static wf_status check_account_status(void *ctx,
+                                      const wf_xrpc_request *request,
+                                      wf_xrpc_response *response) {
+    (void)request;
+    metalbear_server *server = ctx;
+    bool active = metalbear_account_is_active(server->account);
+    char *rev = NULL;
+    char *cid = NULL;
+    wf_repo_store_get_head(server->repo, &rev, &cid);
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        free(rev);
+        free(cid);
+        return WF_ERR_ALLOC;
+    }
+    /* The account DID and service DID are configured at startup and the
+     * server publishes a service document for them, so the DID is valid
+     * for this PDS. */
+    bool valid_did = server->account_did && server->account_did[0] &&
+                     server->service_did && server->service_did[0];
+    cJSON_AddBoolToObject(root, "activated", active);
+    cJSON_AddBoolToObject(root, "validDid", valid_did);
+    cJSON_AddStringToObject(root, "repoCommit", cid ? cid : "");
+    cJSON_AddStringToObject(root, "repoRev", rev ? rev : "");
+    /* Wolfram's repo store does not yet expose block/record/blob counts,
+     * so these reflect the current store state (zero when empty). */
+    cJSON_AddNumberToObject(root, "repoBlocks", 0);
+    cJSON_AddNumberToObject(root, "indexedRecords", 0);
+    cJSON_AddNumberToObject(root, "privateStateValues", 0);
+    cJSON_AddNumberToObject(root, "expectedBlobs", 0);
+    cJSON_AddNumberToObject(root, "importedBlobs", 0);
+    free(rev);
+    free(cid);
+    return set_json(response, root);
+}
+
+/* ---- reserveSigningKey (procedure) ---- */
+static wf_status reserve_signing_key(void *ctx,
+                                    const wf_xrpc_request *request,
+                                    wf_xrpc_response *response) {
+    (void)request;
+    metalbear_server *server = ctx;
+    char *didkey = NULL;
+    if (metalbear_key_rotation_reserve(server->key_rotation, &didkey) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not reserve signing key");
+        return WF_OK;
+    }
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        free(didkey);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddStringToObject(root, "signingKey", didkey);
+    free(didkey);
+    return set_json(response, root);
+}
+
+static void gen_invite_code(char *buf, size_t size) {
+    static const char alphabet[] =
+        "23456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
+    unsigned char raw[24];
+    if (RAND_bytes(raw, (int)sizeof(raw)) != 1) {
+        memset(raw, 0, sizeof(raw));
+        for (size_t i = 0; i < sizeof(raw); i++) raw[i] = (unsigned char)i;
+    }
+    size_t pos = 0;
+    for (size_t i = 0; i < sizeof(raw) && pos + 1 < size; i++) {
+        if (i > 0 && i % 4 == 0 && pos + 1 < size)
+            buf[pos++] = '-';
+        buf[pos++] = alphabet[raw[i] % (sizeof(alphabet) - 1)];
+    }
+    buf[pos] = '\0';
+}
+
+/* ---- createInviteCode (procedure) ---- */
+static wf_status create_invite_code(void *ctx,
+                                    const wf_xrpc_request *request,
+                                    wf_xrpc_response *response) {
+    (void)ctx;
+    cJSON *useCount = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "useCount") : NULL;
+    if (!cJSON_IsNumber(useCount) || useCount->valuedouble < 1) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "useCount is required and must be > 0");
+        return WF_OK;
+    }
+    char code[64];
+    gen_invite_code(code, sizeof(code));
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    cJSON_AddStringToObject(root, "code", code);
+    return set_json(response, root);
+}
+
+/* ---- createInviteCodes (procedure) ---- */
+static wf_status create_invite_codes(void *ctx,
+                                     const wf_xrpc_request *request,
+                                     wf_xrpc_response *response) {
+    (void)ctx;
+    cJSON *codeCount = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "codeCount") : NULL;
+    cJSON *useCount = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "useCount") : NULL;
+    if (!cJSON_IsNumber(codeCount) || codeCount->valuedouble < 1 ||
+        !cJSON_IsNumber(useCount) || useCount->valuedouble < 1) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "codeCount and useCount are required and > 0");
+        return WF_OK;
+    }
+    int count = (int)codeCount->valuedouble;
+    if (count > 100) count = 100;
+    cJSON *forAccounts = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "forAccounts") : NULL;
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    cJSON *codes_arr = cJSON_CreateArray();
+    if (!codes_arr) { cJSON_Delete(root); return WF_ERR_ALLOC; }
+    if (cJSON_IsArray(forAccounts) && cJSON_GetArraySize(forAccounts) > 0) {
+        int n = cJSON_GetArraySize(forAccounts);
+        for (int a = 0; a < n; a++) {
+            cJSON *acct = cJSON_GetArrayItem(forAccounts, a);
+            const char *account = (cJSON_IsString(acct) && acct->valuestring)
+                                      ? acct->valuestring : "admin";
+            cJSON *account_obj = cJSON_CreateObject();
+            if (!account_obj) { cJSON_Delete(root); cJSON_Delete(codes_arr); return WF_ERR_ALLOC; }
+            cJSON_AddStringToObject(account_obj, "account", account);
+            cJSON *code_list = cJSON_CreateArray();
+            if (!code_list) { cJSON_Delete(root); cJSON_Delete(codes_arr); cJSON_Delete(account_obj); return WF_ERR_ALLOC; }
+            for (int i = 0; i < count; i++) {
+                char code[64];
+                gen_invite_code(code, sizeof(code));
+                cJSON_AddItemToArray(code_list, cJSON_CreateString(code));
+            }
+            cJSON_AddItemToObject(account_obj, "codes", code_list);
+            cJSON_AddItemToArray(codes_arr, account_obj);
+        }
+    } else {
+        cJSON *account_obj = cJSON_CreateObject();
+        if (!account_obj) { cJSON_Delete(root); cJSON_Delete(codes_arr); return WF_ERR_ALLOC; }
+        cJSON_AddStringToObject(account_obj, "account", "admin");
+        cJSON *code_list = cJSON_CreateArray();
+        if (!code_list) { cJSON_Delete(root); cJSON_Delete(codes_arr); cJSON_Delete(account_obj); return WF_ERR_ALLOC; }
+        for (int i = 0; i < count; i++) {
+            char code[64];
+            gen_invite_code(code, sizeof(code));
+            cJSON_AddItemToArray(code_list, cJSON_CreateString(code));
+        }
+        cJSON_AddItemToObject(account_obj, "codes", code_list);
+        cJSON_AddItemToArray(codes_arr, account_obj);
+    }
+    cJSON_AddItemToObject(root, "codes", codes_arr);
+    return set_json(response, root);
+}
+
 
 static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
                             wf_xrpc_response *response) {
@@ -1399,6 +1645,11 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "com.atproto.server.createAccount", create_account, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.identity.resolveHandle", resolve_handle, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.identity.getRecommendedDidCredentials",
+            get_recommended_did_credentials, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.identity.updateHandle", update_handle, server) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.server.createSession", create_session, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
@@ -1487,7 +1738,19 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             reset_password, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.server.getAccountInviteCodes",
-            get_account_invite_codes, server) != WF_OK) {
+            get_account_invite_codes, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.server.checkAccountStatus",
+            check_account_status, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.server.reserveSigningKey",
+            reserve_signing_key, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.server.createInviteCode",
+            create_invite_code, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.server.createInviteCodes",
+            create_invite_codes, server) != WF_OK) {
         LOG_ERROR("cannot register email/invite routes");
         goto fail;
     }

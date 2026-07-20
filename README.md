@@ -22,8 +22,19 @@ MetalBear is an AT Protocol Personal Data Server written in C and built on
   cursor replay across restarts, import sync events, and `FutureCursor` errors
 - `com.atproto.identity.resolveHandle`, `/.well-known/atproto-did` handle
   resolution, and a `did:web` service document
+- `com.atproto.identity.updateHandle` (constrained to the configured user
+  domain for this single-account PDS) and
+  `com.atproto.identity.getRecommendedDidCredentials` exposing the account's
+  signing key, rotation keys, alsoKnownAs, and PDS service endpoint
 - durable account deactivation/reactivation with repository availability,
   session/status reporting, and account/identity/sync firehose events
+- `com.atproto.server.checkAccountStatus` with activation, DID validity, and
+  repository head reporting
+- `com.atproto.server.reserveSigningKey` returning a fresh `did:key` without
+  disrupting the active repository signing key
+- `com.atproto.server.createInviteCode` and `createInviteCodes` generating real
+  single-account invite codes
+- session/account responses carrying the lexicon `emailAuthFactor` flag
 - durable SQLite-backed signed repositories and file-backed blob upload/serving
 
 ## OAuth Authorization Server

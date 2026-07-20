@@ -228,3 +228,23 @@ wf_status metalbear_account_registry_remove(
     pthread_mutex_unlock(&registry->mutex);
     return status;
 }
+
+wf_status metalbear_account_registry_update_handle(
+    metalbear_account_registry *registry,
+    const char *did, const char *new_handle) {
+    if (!registry || !did || !new_handle) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&registry->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(registry->db,
+            "UPDATE accounts SET handle=? WHERE did=?;", -1, &stmt,
+            NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, new_handle, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, did, -1, SQLITE_TRANSIENT);
+        int result = sqlite3_step(stmt);
+        status = result == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&registry->mutex);
+    return status;
+}

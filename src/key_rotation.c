@@ -118,3 +118,16 @@ wf_status metalbear_key_rotation_rotate(metalbear_key_rotation *store,
         return wf_signing_key_public_didkey(out_new_key, out_didkey);
     return WF_OK;
 }
+
+wf_status metalbear_key_rotation_reserve(metalbear_key_rotation *store,
+                                          char **out_didkey) {
+    if (!store || !out_didkey) return WF_ERR_INVALID_ARG;
+    *out_didkey = NULL;
+
+    wf_signing_key key;
+    memset(&key, 0, sizeof(key));
+    if (wf_signing_key_generate(WF_KEY_TYPE_P256, &key) != WF_OK)
+        return WF_ERR_CRYPTO;
+
+    return wf_signing_key_public_didkey(&key, out_didkey);
+}

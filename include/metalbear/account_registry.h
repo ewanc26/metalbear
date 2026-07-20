@@ -55,6 +55,12 @@ wf_status metalbear_account_registry_remove(
     metalbear_account_registry *registry,
     const char *did);
 
+/* Update the handle for an existing account (keyed by DID). Returns
+ * WF_ERR_CONFLICT if the new handle is already taken by another account. */
+wf_status metalbear_account_registry_update_handle(
+    metalbear_account_registry *registry,
+    const char *did, const char *new_handle);
+
 #ifdef __cplusplus
 }
 #endif

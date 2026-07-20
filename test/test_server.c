@@ -348,6 +348,147 @@ int main(void) {
     cJSON_Delete(json);
     wf_response_free(&response);
 
+    /* checkAccountStatus: auth-required, lexicon-conformant output */
+    CHECK(wf_xrpc_query(client, "com.atproto.server.checkAccountStatus",
+                        NULL, &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    CHECK(cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(json, "activated")));
+    CHECK(cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(json, "validDid")));
+    CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(json, "repoCommit")));
+    CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(json, "repoRev")));
+    CHECK(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(json, "repoBlocks")));
+    CHECK(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(json,
+                                                        "indexedRecords")));
+    CHECK(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(json,
+                                                        "privateStateValues")));
+    CHECK(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(json,
+                                                        "expectedBlobs")));
+    CHECK(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(json,
+                                                        "importedBlobs")));
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* checkAccountStatus without auth is rejected */
+    wf_xrpc_client_set_auth(client, NULL);
+    CHECK(wf_xrpc_query(client, "com.atproto.server.checkAccountStatus",
+                        NULL, &response) == WF_ERR_HTTP);
+    CHECK(response.status == 401);
+    wf_response_free(&response);
+    wf_xrpc_client_set_auth(client, access_token);
+
+    /* reserveSigningKey: public, returns a did:key */
+    wf_xrpc_client_set_auth(client, NULL);
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.reserveSigningKey",
+                            "{\"did\":\"did:plc:metalbeartest\"}",
+                            &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    cJSON *signing_key = cJSON_GetObjectItemCaseSensitive(json, "signingKey");
+    CHECK(cJSON_IsString(signing_key) &&
+          strncmp(signing_key->valuestring, "did:key:", 8) == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+    wf_xrpc_client_set_auth(client, access_token);
+
+    /* createInviteCode: requires useCount, returns a real code */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createInviteCode",
+                            "{\"useCount\":5}", &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    cJSON *code = cJSON_GetObjectItemCaseSensitive(json, "code");
+    CHECK(cJSON_IsString(code) && strlen(code->valuestring) > 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* createInviteCode without useCount fails */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createInviteCode",
+                            "{}", &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    wf_response_free(&response);
+
+    /* createInviteCodes: returns per-account code lists */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createInviteCodes",
+                            "{\"codeCount\":3,\"useCount\":2,"
+                            "\"forAccounts\":[\"did:plc:metalbeartest\"]}",
+                            &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    cJSON *codes = cJSON_GetObjectItemCaseSensitive(json, "codes");
+    CHECK(cJSON_IsArray(codes) && cJSON_GetArraySize(codes) == 1);
+    cJSON *acct = cJSON_GetArrayItem(codes, 0);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(acct, "account")->valuestring,
+                 "did:plc:metalbeartest") == 0);
+    cJSON *acct_codes = cJSON_GetObjectItemCaseSensitive(acct, "codes");
+    CHECK(cJSON_IsArray(acct_codes) && cJSON_GetArraySize(acct_codes) == 3);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* createInviteCodes without codeCount fails */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createInviteCodes",
+                            "{\"useCount\":2}", &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    wf_response_free(&response);
+
+    /* getRecommendedDidCredentials: auth-required, lexicon-shaped output */
+    CHECK(wf_xrpc_query(client,
+                        "com.atproto.identity.getRecommendedDidCredentials",
+                        NULL, &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    CHECK(cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(json, "alsoKnownAs")));
+    cJSON *vms = cJSON_GetObjectItemCaseSensitive(json, "verificationMethods");
+    CHECK(cJSON_IsObject(vms) &&
+          cJSON_IsString(cJSON_GetObjectItemCaseSensitive(vms, "atproto")));
+    CHECK(cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(json, "rotationKeys")));
+    cJSON *svcs = cJSON_GetObjectItemCaseSensitive(json, "services");
+    CHECK(cJSON_IsObject(svcs));
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* updateHandle: adopt a handle under the configured domain */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.identity.updateHandle",
+                            "{\"handle\":\"carol.example.com\"}",
+                            &response) == WF_OK);
+    CHECK(response.status == 200);
+    wf_response_free(&response);
+
+    /* The new handle now resolves */
+    wf_xrpc_param new_handle_params[] = {{"handle", "carol.example.com"}};
+    CHECK(wf_xrpc_query_params(client, "com.atproto.identity.resolveHandle",
+                               new_handle_params, 1, &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "did")->valuestring,
+                 "did:plc:metalbeartest") == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* updateHandle: handle outside the domain is rejected */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.identity.updateHandle",
+                            "{\"handle\":\"evil.com\"}",
+                            &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                 "InvalidHandle") == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* updateHandle: malformed handle is rejected */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.identity.updateHandle",
+                            "{\"handle\":\"not a handle\"}",
+                            &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    wf_response_free(&response);
+
+    /* restore the original handle for later tests */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.identity.updateHandle",
+                            "{\"handle\":\"alice.example.com\"}",
+                            &response) == WF_OK);
+    CHECK(response.status == 200);
+    wf_response_free(&response);
+
     /* confirmEmail: requires email field per lexicon */
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.confirmEmail",
         "{\"token\":\"faketoken\"}",
