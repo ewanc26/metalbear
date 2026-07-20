@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         cmake \
         gcc \
+        g++ \
         make \
         pkg-config \
         git \
