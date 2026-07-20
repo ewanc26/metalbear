@@ -58,8 +58,10 @@ wf_status metalbear_account_create_email_token(metalbear_account_store *store,
                                                char *out_token,
                                                size_t token_len);
 wf_status metalbear_account_verify_email_token(metalbear_account_store *store,
-                                               const char *kind,
-                                               const char *token);
+                                                const char *kind,
+                                                const char *token);
+wf_status metalbear_account_reset_password(metalbear_account_store *store,
+                                           const char *new_password);
 /* Hash a password with scrypt for storage. Caller must free the result. */
 char *metalbear_account_hash_password(const char *password);
 

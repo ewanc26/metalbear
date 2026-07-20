@@ -666,15 +666,19 @@ static wf_status get_service_auth(void *ctx,
     }
     int64_t expiration = 0;
     if (exp_item) {
-        if (!cJSON_IsString(exp_item)) {
+        long long parsed = 0;
+        if (cJSON_IsString(exp_item)) {
+            char *end = NULL;
+            errno = 0;
+            parsed = strtoll(exp_item->valuestring, &end, 10);
+            if (errno || !end || *end) parsed = 0;
+        } else if (cJSON_IsNumber(exp_item)) {
+            parsed = (long long)exp_item->valuedouble;
+        } else {
             wf_xrpc_response_set_error(response, 400, "BadExpiration",
-                                       "Expiration must be an integer");
+                                       "Expiration must be a valid timestamp");
             return WF_OK;
         }
-        char *end = NULL;
-        errno = 0;
-        long long parsed = strtoll(exp_item->valuestring, &end, 10);
-        if (errno || !end || *end) parsed = 0;
         int64_t now = (int64_t)time(NULL);
         if (parsed < now || parsed - now > 3600 ||
             (!lxm && parsed - now > 60)) {
@@ -857,8 +861,13 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
     }
     /* Create a session for the new account */
     metalbear_session_tokens tokens = {0};
-    metalbear_auth_create_scoped_session(server->auth,
-        METALBEAR_ACCESS_FULL, NULL, &tokens);
+    wf_status session_status = metalbear_auth_create_scoped_session(
+        server->auth, METALBEAR_ACCESS_FULL, NULL, &tokens);
+    if (session_status != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not create session");
+        return WF_OK;
+    }
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         metalbear_session_tokens_free(&tokens);
@@ -1053,6 +1062,40 @@ static wf_status request_password_reset(void *ctx,
     if (!root) return WF_ERR_ALLOC;
     cJSON_AddBoolToObject(root, "success", true);
     return set_json(response, root);
+}
+
+static wf_status reset_password(void *ctx, const wf_xrpc_request *request,
+                                wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *token = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "token") : NULL;
+    cJSON *password = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "password") : NULL;
+    if (!cJSON_IsString(token) || !token->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "token is required");
+        return WF_OK;
+    }
+    if (!cJSON_IsString(password) || !password->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "password is required");
+        return WF_OK;
+    }
+    wf_status status = metalbear_account_verify_email_token(
+        server->account, "reset", token->valuestring);
+    if (status != WF_OK) {
+        wf_xrpc_response_set_error(response, 400, "InvalidToken",
+                                   "Invalid or expired reset token");
+        return WF_OK;
+    }
+    status = metalbear_account_reset_password(server->account,
+                                              password->valuestring);
+    if (status != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not reset password");
+        return WF_OK;
+    }
+    return WF_OK;
 }
 
 static wf_status get_account_invite_codes(void *ctx,
@@ -1436,6 +1479,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.server.requestPasswordReset",
             request_password_reset, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.server.resetPassword",
+            reset_password, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.server.getAccountInviteCodes",
             get_account_invite_codes, server) != WF_OK) {

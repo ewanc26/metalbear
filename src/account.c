@@ -496,6 +496,30 @@ void metalbear_account_store_free(metalbear_account_store *store) {
     free(store);
 }
 
+wf_status metalbear_account_reset_password(metalbear_account_store *store,
+                                           const char *new_password) {
+    if (!store || !new_password || !new_password[0]) return WF_ERR_INVALID_ARG;
+    unsigned char salt[16], hash[32];
+    if (RAND_bytes(salt, sizeof(salt)) != 1 ||
+        derive_password(new_password, salt, hash) != WF_OK)
+        return WF_ERR_INTERNAL;
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db,
+            "UPDATE credentials SET salt=?,password_hash=? WHERE id=0;",
+            -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_blob(stmt, 1, salt, sizeof(salt), SQLITE_TRANSIENT);
+        sqlite3_bind_blob(stmt, 2, hash, sizeof(hash), SQLITE_TRANSIENT);
+        sqlite3_step(stmt);
+        status = sqlite3_changes(store->db) > 0 ? WF_OK : WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(stmt);
+    OPENSSL_cleanse(hash, sizeof(hash));
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
 char *metalbear_account_hash_password(const char *password) {
     if (!password || !password[0]) return NULL;
     unsigned char salt[16], hash[32];
