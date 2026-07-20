@@ -152,27 +152,59 @@ int main(void) {
 
     /* Test createAccount: register a second account in the registry */
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
-        "{\"identifier\":\"bob.example.com\",\"password\":\"bobsecret\","
+        "{\"handle\":\"bob.example.com\",\"password\":\"bobsecret\","
         "\"did\":\"did:plc:bob\"}",
         &response) == WF_OK);
     CHECK(response.status == 200);
     cJSON *create_json = json_response(&response);
+    CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(create_json, "did")));
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(create_json, "did")->valuestring,
                  "did:plc:bob") == 0);
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(create_json, "handle")->valuestring,
                  "bob.example.com") == 0);
+    CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(create_json, "accessJwt")));
+    CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(create_json, "refreshJwt")));
     cJSON_Delete(create_json);
     wf_response_free(&response);
 
-    /* Duplicate handle should fail */
+    /* Missing handle should return InvalidHandle */
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
-        "{\"identifier\":\"bob.example.com\",\"password\":\"other\","
+        "{\"password\":\"test\",\"did\":\"did:plc:x\"}",
+        &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    create_json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(create_json, "error")->valuestring,
+                 "InvalidHandle") == 0);
+    cJSON_Delete(create_json);
+    wf_response_free(&response);
+
+    /* Duplicate handle should return HandleNotAvailable */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
+        "{\"handle\":\"bob.example.com\",\"password\":\"other\","
         "\"did\":\"did:plc:bob2\"}",
         &response) == WF_ERR_HTTP);
     CHECK(response.status == 400);
     create_json = json_response(&response);
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(create_json, "error")->valuestring,
-                 "AccountAlreadyExists") == 0);
+                 "HandleNotAvailable") == 0);
+    cJSON_Delete(create_json);
+    wf_response_free(&response);
+
+    /* Test requestPasswordReset: accepts email, not identifier */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestPasswordReset",
+        "{\"email\":\"alice@example.com\"}",
+        &response) == WF_OK);
+    CHECK(response.status == 200);
+    wf_response_free(&response);
+
+    /* Missing email should fail */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestPasswordReset",
+        "{}",
+        &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    create_json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(create_json, "error")->valuestring,
+                 "InvalidRequest") == 0);
     cJSON_Delete(create_json);
     wf_response_free(&response);
 
@@ -245,6 +277,63 @@ int main(void) {
     char *access_token = cJSON_IsString(access) ? strdup(access->valuestring) : NULL;
     char *refresh_token = cJSON_IsString(refresh) ? strdup(refresh->valuestring) : NULL;
     char *privileged_password = NULL;
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* Test lexicon conformance for auth-required email/invite endpoints */
+    wf_xrpc_client_set_auth(client, access_token);
+
+    /* getAccountInviteCodes: uses 'codes' field name per lexicon */
+    CHECK(wf_xrpc_query(client, "com.atproto.server.getAccountInviteCodes",
+                        NULL, &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    CHECK(cJSON_GetObjectItemCaseSensitive(json, "codes") != NULL);
+    CHECK(cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(json, "codes")));
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* requestEmailUpdate: returns tokenRequired per lexicon */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestEmailUpdate",
+        "{\"email\":\"new@example.com\"}",
+        &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "tokenRequired")));
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* getSession now includes email and emailConfirmed per lexicon */
+    CHECK(wf_xrpc_query(client, "com.atproto.server.getSession", NULL,
+                        &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "email")->valuestring,
+                 "new@example.com") == 0);
+    CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(json,
+                                                         "emailConfirmed")));
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* confirmEmail: requires email field per lexicon */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.confirmEmail",
+        "{\"token\":\"faketoken\"}",
+        &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                 "InvalidEmail") == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* confirmEmail with both email and bad token returns InvalidToken */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.confirmEmail",
+        "{\"email\":\"alice@example.com\",\"token\":\"bogus\"}",
+        &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                 "InvalidToken") == 0);
     cJSON_Delete(json);
     wf_response_free(&response);
 

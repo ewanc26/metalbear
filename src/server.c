@@ -91,6 +91,7 @@ static bool is_public_route(const char *nsid) {
         "_health",
         "com.atproto.server.createSession",
         "com.atproto.server.createAccount",
+        "com.atproto.server.requestPasswordReset",
         "com.atproto.identity.resolveHandle",
         "com.atproto.repo.getRecord",
         "com.atproto.repo.describeRepo",
@@ -220,13 +221,25 @@ static wf_status request_account_delete(void *ctx,
 static wf_status delete_account(void *ctx, const wf_xrpc_request *request,
                                 wf_xrpc_response *response) {
     metalbear_server *server = ctx;
+    cJSON *did = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
     cJSON *password = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "password") : NULL;
     cJSON *token = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "token") : NULL;
-    if (!cJSON_IsString(password) || !cJSON_IsString(token)) {
+    if (!cJSON_IsString(did) || !did->valuestring[0]) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "password and token are required");
+                                   "did is required");
+        return WF_OK;
+    }
+    if (!cJSON_IsString(password) || !password->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "password is required");
+        return WF_OK;
+    }
+    if (!cJSON_IsString(token) || !token->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidToken",
+                                   "token is required");
         return WF_OK;
     }
     if (!metalbear_account_verify_password(server->account,
@@ -330,6 +343,14 @@ static cJSON *session_json(metalbear_server *server,
     bool active = metalbear_account_is_active(server->account);
     cJSON_AddBoolToObject(root, "active", active);
     if (!active) cJSON_AddStringToObject(root, "status", "deactivated");
+    char *email = NULL;
+    int confirmed = 0;
+    if (metalbear_account_get_email(server->account, &email,
+                                    &confirmed) == WF_OK && email) {
+        cJSON_AddStringToObject(root, "email", email);
+        cJSON_AddBoolToObject(root, "emailConfirmed", confirmed != 0);
+    }
+    free(email);
     return root;
 }
 
@@ -752,53 +773,48 @@ static wf_status get_repo_status(void *ctx, const wf_xrpc_request *request,
 static wf_status create_account(void *ctx, const wf_xrpc_request *request,
                                 wf_xrpc_response *response) {
     metalbear_server *server = ctx;
-    cJSON *identifier = request->params
-        ? cJSON_GetObjectItemCaseSensitive(request->params, "identifier") : NULL;
+    cJSON *handle = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "handle") : NULL;
     cJSON *password = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "password") : NULL;
     cJSON *did = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
-    cJSON *invite_code = request->params
-        ? cJSON_GetObjectItemCaseSensitive(request->params, "inviteCode") : NULL;
-    if (!cJSON_IsString(identifier) || !cJSON_IsString(password) ||
-        !cJSON_IsString(did)) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "identifier, password, and did are required");
+    if (!cJSON_IsString(handle) || !handle->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidHandle",
+                                   "handle is required");
         return WF_OK;
     }
-    (void)invite_code;
+    if (!cJSON_IsString(password) || !password->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidPassword",
+                                   "password is required");
+        return WF_OK;
+    }
     /* Check if the handle is already registered */
     metalbear_account_entry *existing = NULL;
     if (metalbear_account_registry_find_by_handle(
-            server->registry, identifier->valuestring,
+            server->registry, handle->valuestring,
             &existing) == WF_OK) {
         metalbear_account_entry_free(existing);
-        wf_xrpc_response_set_error(response, 400, "AccountAlreadyExists",
+        wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
                                    "Handle is already taken");
         return WF_OK;
     }
-    /* Hash the password */
-    char *hash = metalbear_account_hash_password(password->valuestring);
-    if (!hash) {
-        wf_xrpc_response_set_error(response, 500, "InternalError",
-                                   "Could not hash password");
-        return WF_OK;
-    }
+    /* Use the configured DID if none provided */
+    const char *account_did = (cJSON_IsString(did) && did->valuestring[0])
+        ? did->valuestring : server->account_did;
     /* Build data directory for the new account */
-    char *data_dir = join_path(server->user_domain,
-                               identifier->valuestring);
-    free(hash);
+    char *data_dir = join_path(server->user_domain, handle->valuestring);
     if (!data_dir) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not build data directory");
         return WF_OK;
     }
     wf_status status = metalbear_account_registry_add(
-        server->registry, did->valuestring, identifier->valuestring,
+        server->registry, account_did, handle->valuestring,
         "", data_dir);
     free(data_dir);
     if (status == WF_ERR_CONFLICT) {
-        wf_xrpc_response_set_error(response, 400, "AccountAlreadyExists",
+        wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
                                    "Handle is already taken");
         return WF_OK;
     }
@@ -807,10 +823,20 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
                                    "Could not create account");
         return WF_OK;
     }
+    /* Create a session for the new account */
+    metalbear_session_tokens tokens = {0};
+    metalbear_auth_create_scoped_session(server->auth,
+        METALBEAR_ACCESS_FULL, NULL, &tokens);
     cJSON *root = cJSON_CreateObject();
-    if (!root) return WF_ERR_ALLOC;
-    cJSON_AddStringToObject(root, "did", did->valuestring);
-    cJSON_AddStringToObject(root, "handle", identifier->valuestring);
+    if (!root) {
+        metalbear_session_tokens_free(&tokens);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddStringToObject(root, "accessJwt", tokens.access_jwt);
+    cJSON_AddStringToObject(root, "refreshJwt", tokens.refresh_jwt);
+    cJSON_AddStringToObject(root, "handle", handle->valuestring);
+    cJSON_AddStringToObject(root, "did", account_did);
+    metalbear_session_tokens_free(&tokens);
     return set_json(response, root);
 }
 
@@ -823,7 +849,7 @@ static wf_status request_email_confirmation(void *ctx,
     int confirmed = 0;
     if (metalbear_account_get_email(server->account, &email, &confirmed) !=
             WF_OK || !email) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+        wf_xrpc_response_set_error(response, 400, "AccountNotFound",
                                    "No email address on file");
         free(email);
         return WF_OK;
@@ -854,10 +880,17 @@ static wf_status request_email_confirmation(void *ctx,
 static wf_status confirm_email(void *ctx, const wf_xrpc_request *request,
                                wf_xrpc_response *response) {
     metalbear_server *server = ctx;
+    cJSON *email = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "email") : NULL;
     cJSON *token = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "token") : NULL;
+    if (!cJSON_IsString(email) || !email->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidEmail",
+                                   "email is required");
+        return WF_OK;
+    }
     if (!cJSON_IsString(token) || !token->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+        wf_xrpc_response_set_error(response, 400, "InvalidToken",
                                    "token is required");
         return WF_OK;
     }
@@ -904,7 +937,7 @@ static wf_status request_email_update(void *ctx,
                                           token);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
-    cJSON_AddBoolToObject(root, "success", true);
+    cJSON_AddBoolToObject(root, "tokenRequired", true);
     return set_json(response, root);
 }
 
@@ -940,17 +973,19 @@ static wf_status request_password_reset(void *ctx,
                                         const wf_xrpc_request *request,
                                         wf_xrpc_response *response) {
     metalbear_server *server = ctx;
-    cJSON *identifier = request->params
-        ? cJSON_GetObjectItemCaseSensitive(request->params, "identifier")
+    cJSON *email_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "email")
         : NULL;
-    if (!cJSON_IsString(identifier) || !identifier->valuestring[0]) {
+    if (!cJSON_IsString(email_param) || !email_param->valuestring[0]) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "identifier is required");
+                                   "email is required");
         return WF_OK;
     }
+    /* Look up the email on file to verify it matches */
     char *email = NULL;
     metalbear_account_get_email(server->account, &email, NULL);
-    if (!email || !email[0]) {
+    if (!email || !email[0] ||
+        strcmp(email, email_param->valuestring) != 0) {
         free(email);
         /* Always return success to avoid email enumeration */
         cJSON *root = cJSON_CreateObject();
@@ -988,7 +1023,7 @@ static wf_status get_account_invite_codes(void *ctx,
         cJSON_Delete(codes);
         return WF_ERR_ALLOC;
     }
-    cJSON_AddItemToObject(root, "inviteCodes", codes);
+    cJSON_AddItemToObject(root, "codes", codes);
     return set_json(response, root);
 }
 
