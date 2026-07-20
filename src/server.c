@@ -15,11 +15,13 @@
 #include "wolfram/blob_store.h"
 #include "wolfram/crypto.h"
 #include "wolfram/repo_store.h"
+#include "wolfram/repo/cid.h"
 #include "wolfram/syntax.h"
 #include "wolfram/xrpc_server.h"
 
 #include <cJSON.h>
 #include <openssl/crypto.h>
+#include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <stdbool.h>
 #include <errno.h>
@@ -59,6 +61,13 @@ static void metalbear_log(metalbear_log_level level, const char *fmt, ...) {
 
 static char *join_path(const char *directory, const char *name);
 
+/* ---- admin / refpds config (mirrors refpds PDS_* env) ---- */
+/* Parse HTTP Basic `admin:<password>` from the Authorization header and compare
+ * it (constant-time) against the configured admin password. Returns true only
+ * when a password is configured AND the header matches exactly. */
+static bool admin_authenticated(metalbear_server *server,
+                              const wf_xrpc_request *req);
+
 struct metalbear_server {
     wf_xrpc_server *xrpc;
     /* Primary/bootstrap account context (owned for the process lifetime). */
@@ -73,6 +82,11 @@ struct metalbear_server {
     char *account_email;
     int64_t retention_max_age;
     int64_t retention_min_events;
+    /* refpds-mirrored config (METALBEAR_*) */
+    char *admin_password;     /* may be NULL => admin endpoints 401 */
+    char *crawlers;           /* comma-separated relay hosts, may be NULL */
+    bool invite_required;
+    int64_t blob_upload_limit; /* 0 => unlimited */
 };
 
 static bool constant_time_equal(const char *a, const char *b) {
@@ -101,10 +115,51 @@ static bool is_public_route(const char *nsid) {
         "com.atproto.sync.listRepos",
         "com.atproto.sync.listBlobs",
         "com.atproto.sync.subscribeRepos",
+        "com.atproto.sync.requestCrawl",
     };
     for (size_t i = 0; i < sizeof(public_routes) / sizeof(public_routes[0]); i++)
         if (strcmp(nsid, public_routes[i]) == 0) return true;
     return false;
+}
+
+/* Admin endpoints (refpds model): gated behind HTTP Basic
+ * `admin:<METALBEAR_ADMIN_PASSWORD>`. */
+static bool is_admin_route(const char *nsid) {
+    return strcmp(nsid, "com.atproto.admin.getAccountInfo") == 0;
+}
+
+/* Parse and verify the HTTP Basic credential against the configured admin
+ * password. Builds the expected `admin:<password>` string, base64-encodes
+ * it with OpenSSL, and compares constant-time. Returns false when no admin
+ * password is configured or the supplied credential does not match. */
+static bool admin_authenticated(metalbear_server *server,
+                              const wf_xrpc_request *req) {
+    if (!server->admin_password || !server->admin_password[0])
+        return false;
+    const char *header = req->auth_header;
+    static const char prefix[] = "Basic ";
+    if (!header || strncmp(header, prefix, sizeof(prefix) - 1) != 0)
+        return false;
+    const char *provided = header + sizeof(prefix) - 1;
+    /* Skip trailing whitespace (newline) some clients append. */
+    size_t provided_len = strlen(provided);
+    while (provided_len > 0 &&
+           (provided[provided_len - 1] == '\r' ||
+            provided[provided_len - 1] == '\n' ||
+            provided[provided_len - 1] == ' '))
+        provided_len--;
+
+    char expected[512];
+    int n = snprintf(expected, sizeof(expected), "admin:%s",
+                    server->admin_password);
+    if (n < 0 || (size_t)n >= sizeof(expected)) return false;
+    char encoded[1024];
+    int elen = EVP_EncodeBlock((unsigned char *)encoded,
+                                (const unsigned char *)expected, n);
+    if (elen <= 0) return false;
+
+    if ((size_t)elen != provided_len) return false;
+    return CRYPTO_memcmp(encoded, provided, (size_t)elen) == 0;
 }
 
 static const char *bearer_token(const char *header) {
@@ -130,6 +185,11 @@ static bool full_access_route(const char *nsid) {
 
 static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
     metalbear_server *server = ctx;
+    /* Admin endpoints (refpds PDS_ADMIN_PASSWORD) are gated by HTTP Basic
+     * `admin:<password>`, not bearer tokens. Reject honestly when no
+     * password is configured or the credential is missing/wrong. */
+    if (is_admin_route(req->nsid))
+        return admin_authenticated(server, req) ? WF_OK : WF_ERR_PERMISSION;
     if (is_public_route(req->nsid)) {
         if (!metalbear_account_is_active(server->bootstrap->account) &&
             (strncmp(req->nsid, "com.atproto.repo.", 17) == 0 ||
@@ -974,8 +1034,21 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
     }
     if (!cJSON_IsString(password) || !password->valuestring[0]) {
         wf_xrpc_response_set_error(response, 400, "InvalidPassword",
-                                   "password is required");
+                                    "password is required");
         return WF_OK;
+    }
+    /* Invite-gated signups (refpds PDS_INVITE_REQUIRED): when enabled,
+     * reject account creation unless a non-empty invite code is supplied.
+     * Honest minimum: parse and reject when required and absent. */
+    if (server->invite_required) {
+        cJSON *invite = request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params,
+                                              "inviteCode") : NULL;
+        if (!cJSON_IsString(invite) || !invite->valuestring[0]) {
+            wf_xrpc_response_set_error(response, 400, "InvalidInviteCode",
+                                        "an invite code is required to sign up");
+            return WF_OK;
+        }
     }
     /* Check if the handle is already registered */
     metalbear_account_entry *existing = NULL;
@@ -1268,7 +1341,7 @@ static wf_status request_password_reset(void *ctx,
 }
 
 static wf_status reset_password(void *ctx, const wf_xrpc_request *request,
-                                wf_xrpc_response *response) {
+                                 wf_xrpc_response *response) {
     metalbear_server *server = ctx;
     cJSON *token = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "token") : NULL;
@@ -1276,12 +1349,12 @@ static wf_status reset_password(void *ctx, const wf_xrpc_request *request,
         ? cJSON_GetObjectItemCaseSensitive(request->params, "password") : NULL;
     if (!cJSON_IsString(token) || !token->valuestring[0]) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "token is required");
+                                    "token is required");
         return WF_OK;
     }
     if (!cJSON_IsString(password) || !password->valuestring[0]) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "password is required");
+                                    "password is required");
         return WF_OK;
     }
     wf_status status = metalbear_account_verify_email_token(
@@ -1474,6 +1547,261 @@ static wf_status create_invite_codes(void *ctx,
     return set_json(response, root);
 }
 
+/* Render the current UTC time as an ISO-8601 datetime (the
+ * com.atproto.admin.defs#accountView `indexedAt` field). */
+static void iso_now(char *buf, size_t size) {
+    time_t now = time(NULL);
+    struct tm tm;
+#if defined(_WIN32)
+    gmtime_s(&tm, &now);
+#else
+    gmtime_r(&now, &tm);
+#endif
+    strftime(buf, size, "%Y-%m-%dT%H:%M:%SZ", &tm);
+}
+
+/* ---- com.atproto.admin.getAccountInfo (query, admin-gated) ----
+ * Mirrors refpds `pdsadmin account list`: look the DID up in the
+ * registry and return its did/handle/email/active. Unknown DID is an
+ * honest AccountNotFound (404), never a fabricated success. */
+static wf_status admin_get_account_info(void *ctx,
+                                      const wf_xrpc_request *request,
+                                      wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
+    if (!cJSON_IsString(did) || !did->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "did is required");
+        return WF_OK;
+    }
+    metalbear_account_entry *entry = NULL;
+    if (metalbear_account_registry_find_by_did(server->registry,
+                                                did->valuestring,
+                                                &entry) != WF_OK || !entry) {
+        wf_xrpc_response_set_error(response, 404, "AccountNotFound",
+                                    "account is not hosted here");
+        return WF_OK;
+    }
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        metalbear_account_entry_free(entry);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddStringToObject(root, "did", entry->did);
+    cJSON_AddStringToObject(root, "handle", entry->handle);
+    cJSON_AddBoolToObject(root, "active", entry->active != 0);
+    /* Email lives in the account's own store; open it read-only. */
+    char *acct_path = join_path(entry->data_directory, "account.sqlite3");
+    if (acct_path) {
+        metalbear_account_store *acct = NULL;
+        if (metalbear_account_store_open(acct_path, "", &acct) == WF_OK) {
+            char *email = NULL;
+            int confirmed = 0;
+            if (metalbear_account_get_email(acct, &email, &confirmed) == WF_OK
+                && email && email[0])
+                cJSON_AddStringToObject(root, "email", email);
+            free(email);
+            metalbear_account_store_free(acct);
+        }
+        free(acct_path);
+    }
+    char indexed_at[32];
+    iso_now(indexed_at, sizeof(indexed_at));
+    cJSON_AddStringToObject(root, "indexedAt", indexed_at);
+    metalbear_account_entry_free(entry);
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.sync.requestCrawl (procedure, public) ----
+ * Mirrors refpds `pdsadmin request-crawl`: forward the request body to
+ * each configured crawler/relay (METALBEAR_CRAWLERS). When no crawlers
+ * are configured, return an honest NoCrawlersConfigured error rather than
+ * fabricating success. */
+static wf_status request_crawl(void *ctx, const wf_xrpc_request *request,
+                               wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    if (!server->crawlers || !server->crawlers[0]) {
+        wf_xrpc_response_set_error(response, 400, "NoCrawlersConfigured",
+                                    "no crawlers are configured on this PDS");
+        return WF_OK;
+    }
+    cJSON *hostname = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "hostname") : NULL;
+    if (!cJSON_IsString(hostname) || !hostname->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "hostname is required");
+        return WF_OK;
+    }
+    /* Echo the exact body we received to each crawler so its own
+     * validation/forwarding is authoritative. */
+    char *body = request->body && request->body_len
+        ? cJSON_PrintUnformatted(request->params)
+        : NULL;
+    if (!body) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "could not encode request body");
+        return WF_OK;
+    }
+
+    char *crawlers = strdup(server->crawlers);
+    if (!crawlers) {
+        free(body);
+        return WF_ERR_ALLOC;
+    }
+    bool any = false;
+    char *save = NULL;
+    for (char *tok = strtok_r(crawlers, ",", &save); tok;
+         tok = strtok_r(NULL, ",", &save)) {
+        while (*tok == ' ') tok++;
+        if (!*tok) continue;
+        char *host = tok;
+        if (strncmp(host, "https://", 8) != 0 &&
+            strncmp(host, "http://", 7) != 0) {
+            size_t need = strlen(host) + strlen("https://") + 1;
+            char *https = malloc(need);
+            if (!https) continue;
+            snprintf(https, need, "https://%s", host);
+            host = https;
+        } else {
+            host = strdup(host);
+            if (!host) continue;
+        }
+        any = true;
+        wf_xrpc_client *client = wf_xrpc_client_new(host);
+        free(host);
+        if (!client) {
+            free(body);
+            free(crawlers);
+            wf_xrpc_response_set_error(response, 502, "UpstreamFailure",
+                                        "could not reach crawler");
+            return WF_OK;
+        }
+        wf_response upstream = {0};
+        wf_status status = wf_xrpc_procedure(client,
+                                            "com.atproto.sync.requestCrawl",
+                                            body, &upstream);
+        bool ok = status == WF_OK && upstream.status >= 200 &&
+                  upstream.status < 300;
+        wf_response_free(&upstream);
+        wf_xrpc_client_free(client);
+        if (!ok) {
+            free(body);
+            free(crawlers);
+            wf_xrpc_response_set_error(response, 502, "UpstreamFailure",
+                                        "crawler rejected the crawl request");
+            return WF_OK;
+        }
+    }
+    free(body);
+    free(crawlers);
+    if (!any) {
+        wf_xrpc_response_set_error(response, 400, "NoCrawlersConfigured",
+                                    "no crawlers are configured on this PDS");
+        return WF_OK;
+    }
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.repo.uploadBlob (procedure) ----
+ * Mirrors wolfram's blob upload handler but enforces
+ * METALBEAR_BLOB_UPLOAD_LIMIT before storing. Output shape matches
+ * the com.atproto.repo.uploadBlob schema exactly. */
+static wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
+                            wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    if (request->body_len == 0) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "blob body is empty");
+        return WF_OK;
+    }
+    if (server->blob_upload_limit > 0 &&
+        (int64_t)request->body_len > server->blob_upload_limit) {
+        wf_xrpc_response_set_error(response, 413, "BlobTooLarge",
+                                    "blob exceeds the configured upload limit");
+        return WF_OK;
+    }
+    const char *mime = request->content_type && request->content_type[0]
+                           ? request->content_type
+                           : "application/octet-stream";
+    wf_cid cid;
+    if (wf_cid_of_bytes(request->body, request->body_len, &cid) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                    "failed to compute blob CID");
+        return WF_OK;
+    }
+    char *cid_str = wf_cid_to_string(&cid);
+    if (!cid_str) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                    "failed to encode blob CID");
+        return WF_OK;
+    }
+    if (wf_blob_store_put(server->bootstrap->blobs, cid_str, mime,
+                           request->body, request->body_len) != WF_OK) {
+        free(cid_str);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                    "failed to store blob");
+        return WF_OK;
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON *blob = cJSON_CreateObject();
+    if (!root || !blob) {
+        cJSON_Delete(root);
+        cJSON_Delete(blob);
+        free(cid_str);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddStringToObject(blob, "$type", "blob");
+    cJSON_AddStringToObject(blob, "mimeType", mime);
+    cJSON *ref = cJSON_CreateObject();
+    if (!ref || !cJSON_AddStringToObject(ref, "$link", cid_str)) {
+        cJSON_Delete(root);
+        cJSON_Delete(blob);
+        cJSON_Delete(ref);
+        free(cid_str);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddItemToObject(blob, "ref", ref);
+    cJSON_AddNumberToObject(blob, "size", (double)request->body_len);
+    cJSON_AddItemToObject(root, "blob", blob);
+    free(cid_str);
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.sync.getBlob (query) ---- */
+static wf_status get_blob(void *ctx, const wf_xrpc_request *request,
+                         wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *cid = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "cid") : NULL;
+    if (!cJSON_IsString(cid) || !cid->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "missing or invalid 'cid' parameter");
+        return WF_OK;
+    }
+    unsigned char *data = NULL;
+    size_t len = 0;
+    char *mime = NULL;
+    wf_status s = wf_blob_store_get(server->bootstrap->blobs,
+                                    cid->valuestring, &data, &len, &mime);
+    if (s == WF_ERR_NOT_FOUND) {
+        wf_xrpc_response_set_error(response, 404, "BlobNotFound",
+                                    "no blob stored for the given CID");
+        return WF_OK;
+    } else if (s != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                    "failed to read blob store");
+        return WF_OK;
+    }
+    wf_xrpc_response_set_content_type(response, mime ? mime : "application/octet-stream");
+    wf_xrpc_response_set_body(response, (const char *)data, len);
+    free(data);
+    free(mime);
+    return WF_OK;
+}
+
 
 static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
                             wf_xrpc_response *response) {
@@ -1533,6 +1861,12 @@ static bool copy_config(metalbear_server *server,
     if (config->public_url) server->public_url = strdup(config->public_url);
     server->user_domain = strdup(config->user_domain);
     server->data_directory = strdup(config->data_directory);
+    if (config->admin_password && config->admin_password[0])
+        server->admin_password = strdup(config->admin_password);
+    if (config->crawlers && config->crawlers[0])
+        server->crawlers = strdup(config->crawlers);
+    server->invite_required = config->invite_required;
+    server->blob_upload_limit = config->blob_upload_limit;
     return server->service_did && (!config->public_url || server->public_url) &&
            server->user_domain && server->data_directory;
 }
@@ -1884,7 +2218,10 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "com.atproto.server.getServiceAuth", get_service_auth,
             server) != WF_OK ||
         wf_xrpc_server_register_pds_repo(server->xrpc, server->bootstrap->repo) != WF_OK ||
-        wf_xrpc_server_register_blob_store(server->xrpc, server->bootstrap->blobs) != WF_OK) {
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.repo.uploadBlob", upload_blob, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.sync.getBlob", get_blob, server) != WF_OK) {
         LOG_ERROR("cannot register XRPC routes");
         goto fail;
     }
@@ -1959,7 +2296,15 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             create_invite_code, server) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.server.createInviteCodes",
-            create_invite_codes, server) != WF_OK) {
+            create_invite_codes, server) != WF_OK ||
+        /* Admin endpoints (refpds PDS_ADMIN_PASSWORD, Basic auth) */
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.admin.getAccountInfo",
+            admin_get_account_info, server) != WF_OK ||
+        /* Public crawl declaration (refpds PDS_CRAWLERS) */
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.sync.requestCrawl",
+            request_crawl, server) != WF_OK) {
         LOG_ERROR("cannot register email/invite routes");
         goto fail;
     }
@@ -2024,5 +2369,7 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->user_domain);
     free(server->data_directory);
     free(server->account_email);
+    free(server->admin_password);
+    free(server->crawlers);
     free(server);
 }
