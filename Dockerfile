@@ -59,6 +59,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/build/metalbear /usr/local/bin/metalbear
+# metalbear_core is built as a shared library; ship it alongside the binary.
+COPY --from=build /src/build/libmetalbear_core.so /usr/local/lib/libmetalbear_core.so
+RUN ldconfig
 
 WORKDIR /data
 ENV METALBEAR_DATA=/data
