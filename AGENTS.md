@@ -1,22 +1,15 @@
 # MetalBear agent guidance
 
-MetalBear is a pure C11 AT Protocol PDS built on the sibling Wolfram SDK.
+MetalBear is a pure C11 AT Protocol PDS built on the sibling Wolfram SDK. It provides a runnable PDS foundation, supporting multi-account hosting.
 
 ## Read first and architecture
 
-- `/Volumes/Storage/Developer/Local/atproto` is the protocol and PDS behavior
-  authority. Inspect its lexicons and PDS implementation before changing
-  endpoint semantics.
-- `src/server.c` is the central file: server lifecycle, XRPC route
-  registration, auth callback, and all protocol handler functions.
-- `src/account.c` manages credential storage, app passwords, email tokens,
-  and account state (active/deactivated) in a per-account SQLite database.
-- `src/auth.c` manages session tokens (access/refresh JWTs) with scrypt-hashed
-  refresh tokens and scope-based access control.
-- `src/sequencer.c` handles the firehose event stream (commits, identity,
-  account, sync events) with configurable retention.
-- `src/account_registry.c` is the multi-account registry for future per-account
-  routing; currently used for DID-to-metadata lookup and `createAccount`.
+- `/Volumes/Storage/Developer/Local/atproto` is the protocol and PDS behavior authority. Inspect its lexicons and PDS implementation before changing endpoint semantics.
+- `src/server.c` is the central file: server lifecycle, XRPC route registration, auth callback, and all protocol handler functions.
+- `src/account.c` manages credential storage, app passwords, email tokens, and account state (active/deactivated) in a per-account SQLite database.
+- `src/auth.c` manages session tokens (access/refresh JWTs) with scrypt-hashed refresh tokens and scope-based access control.
+- `src/sequencer.c` handles the firehose event stream (commits, identity, account, sync events) with configurable retention.
+- `src/account_registry.c` is the multi-account registry, mapping account DIDs to their respective data directory paths.
 - `src/email.c` is the optional SMTP email client using libcurl.
 - `src/backup.c` implements repository backup/restore with CRC32 checksums.
 - `src/oauth.c` handles OAuth 2.0 token endpoints.
@@ -25,10 +18,8 @@ MetalBear is a pure C11 AT Protocol PDS built on the sibling Wolfram SDK.
 
 ## Reuse and safety
 
-- Reuse Wolfram primitives and server infrastructure. Do not copy Wolfram code
-  into this repository or hand-roll cryptography.
-- Keep authentication, repository ownership, persistence, and protocol errors
-  explicit. Never return fabricated success for an unfinished endpoint.
+- Reuse Wolfram primitives and server infrastructure. Do not copy Wolfram code into this repository or hand-roll cryptography.
+- Keep authentication, repository ownership, persistence, and protocol errors explicit. Never return fabricated success for an unfinished endpoint.
 - Never commit secrets, live credentials, signing keys, or PDS data.
 
 ## Endpoint correctness
