@@ -511,6 +511,27 @@ int main(void) {
     CHECK(strcmp(text, "carol-only") == 0);
     CHECK(get_record(client, "did:plc:bob", "carolpost", NULL, 0) == 404);
 
+    if (token_bob) {
+        wf_xrpc_client_set_auth(client, token_bob);
+        wf_response response = {0};
+        CHECK(wf_xrpc_query(client, "com.atproto.server.checkAccountStatus",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *json = json_response(&response);
+        cJSON *repo_blocks = cJSON_GetObjectItemCaseSensitive(json, "repoBlocks");
+        cJSON *indexed_records = cJSON_GetObjectItemCaseSensitive(
+            json, "indexedRecords");
+        cJSON *imported_blobs = cJSON_GetObjectItemCaseSensitive(
+            json, "importedBlobs");
+        CHECK(cJSON_IsNumber(repo_blocks) && repo_blocks->valuedouble > 0);
+        CHECK(cJSON_IsNumber(indexed_records) &&
+              indexed_records->valuedouble == 2);
+        CHECK(cJSON_IsNumber(imported_blobs) &&
+              imported_blobs->valuedouble == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+
     wf_xrpc_client_set_auth(client, NULL);
 
     /* listRepos must enumerate every hosted repository, not just bootstrap. */

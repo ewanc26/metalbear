@@ -1660,13 +1660,26 @@ static wf_status check_account_status(void *ctx,
     cJSON_AddBoolToObject(root, "validDid", valid_did);
     cJSON_AddStringToObject(root, "repoCommit", cid ? cid : "");
     cJSON_AddStringToObject(root, "repoRev", rev ? rev : "");
-    /* Wolfram's repo store does not yet expose block/record/blob counts,
-     * so these reflect the current store state (zero when empty). */
-    cJSON_AddNumberToObject(root, "repoBlocks", 0);
-    cJSON_AddNumberToObject(root, "indexedRecords", 0);
+    wf_repo_store_stats stats = {0};
+    char **blob_cids = NULL;
+    size_t blob_count = 0;
+    if (wf_repo_store_get_stats(acct->repo, &stats) != WF_OK ||
+        wf_blob_store_list(acct->blobs, &blob_cids, &blob_count) != WF_OK) {
+        wf_blob_store_list_free(blob_cids, blob_count);
+        cJSON_Delete(root);
+        free(rev);
+        free(cid);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not inspect account storage");
+        return WF_OK;
+    }
+    wf_blob_store_list_free(blob_cids, blob_count);
+    cJSON_AddNumberToObject(root, "repoBlocks", (double)stats.repo_blocks);
+    cJSON_AddNumberToObject(root, "indexedRecords",
+                            (double)stats.indexed_records);
     cJSON_AddNumberToObject(root, "privateStateValues", 0);
     cJSON_AddNumberToObject(root, "expectedBlobs", 0);
-    cJSON_AddNumberToObject(root, "importedBlobs", 0);
+    cJSON_AddNumberToObject(root, "importedBlobs", (double)blob_count);
     free(rev);
     free(cid);
     return set_json(response, root);
