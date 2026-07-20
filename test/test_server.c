@@ -666,6 +666,83 @@ int main(void) {
     wf_car_free(&repo_car);
     wf_response_free(&response);
 
+    /* === confirmEmail success path === */
+    wf_xrpc_client_set_auth(client, access_token);
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestEmailConfirmation",
+        "{}", &response) == WF_OK);
+    CHECK(response.status == 200);
+    wf_response_free(&response);
+
+    /* confirmEmail without token should fail */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.confirmEmail",
+        "{\"email\":\"new@example.com\"}",
+        &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                 "InvalidToken") == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* confirmEmail with wrong email should fail */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.confirmEmail",
+        "{\"email\":\"wrong@example.com\",\"token\":\"bogus\"}",
+        &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    wf_response_free(&response);
+
+    /* === requestAccountDelete === */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestAccountDelete",
+        "{}", &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    cJSON *del_token = cJSON_GetObjectItemCaseSensitive(json, "token");
+    CHECK(cJSON_IsString(del_token) && del_token->valuestring[0] != '\0');
+    char *delete_token = cJSON_IsString(del_token)
+        ? strdup(del_token->valuestring) : NULL;
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* deleteAccount with wrong token should fail */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.deleteAccount",
+        "{\"did\":\"did:plc:metalbeartest\",\"password\":\"correct horse battery staple\","
+        "\"token\":\"wrongtoken\"}",
+        &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                 "InvalidToken") == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* === resetPassword flow === */
+    /* First store an email on the account for the reset flow */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.updateEmail",
+        "{\"email\":\"reset@example.com\"}",
+        &response) == WF_OK);
+    wf_response_free(&response);
+
+    /* Request password reset */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestPasswordReset",
+        "{\"email\":\"reset@example.com\"}",
+        &response) == WF_OK);
+    CHECK(response.status == 200);
+    wf_response_free(&response);
+
+    /* resetPassword with wrong token should fail */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.resetPassword",
+        "{\"token\":\"bad\",\"password\":\"newpassword123\"}",
+        &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                 "InvalidToken") == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* deleteToken was not consumed — still valid for later use */
+    free(delete_token);
+
     firehose = firehose_connect(metalbear_server_port(server), 3);
     CHECK(firehose >= 0);
     wf_xrpc_client_set_auth(client, access_token);
@@ -843,6 +920,71 @@ int main(void) {
                                        get_params, 3, &response) == WF_OK);
             CHECK(response.status == 200);
             wf_response_free(&response);
+
+            /* === deleteAccount: end-to-end success === */
+            /* Need a fresh session after restart */
+            snprintf(login_body, sizeof(login_body),
+                "{\"identifier\":\"alice.example.com\","
+                "\"password\":\"correct horse battery staple\"}");
+            CHECK(wf_xrpc_procedure(client,
+                    "com.atproto.server.createSession", login_body,
+                    &response) == WF_OK);
+            json = json_response(&response);
+            access = cJSON_GetObjectItemCaseSensitive(json, "accessJwt");
+            char *final_access = cJSON_IsString(access)
+                ? strdup(access->valuestring) : NULL;
+            cJSON_Delete(json);
+            wf_response_free(&response);
+
+            /* Request a fresh deletion token */
+            wf_xrpc_client_set_auth(client, final_access);
+            CHECK(wf_xrpc_procedure(client,
+                    "com.atproto.server.requestAccountDelete",
+                    "{}", &response) == WF_OK);
+            CHECK(response.status == 200);
+            json = json_response(&response);
+            del_token = cJSON_GetObjectItemCaseSensitive(json, "token");
+            char *final_delete_token = cJSON_IsString(del_token)
+                ? strdup(del_token->valuestring) : NULL;
+            cJSON_Delete(json);
+            wf_response_free(&response);
+
+            /* Wrong token should be rejected */
+            wf_xrpc_client_set_auth(client, final_access);
+            CHECK(wf_xrpc_procedure(client,
+                    "com.atproto.server.deleteAccount",
+                    "{\"did\":\"did:plc:metalbeartest\","
+                    "\"password\":\"correct horse battery staple\","
+                    "\"token\":\"totallywrong\"}",
+                    &response) == WF_ERR_HTTP);
+            CHECK(response.status == 400);
+            wf_response_free(&response);
+
+            /* Correct token should succeed */
+            char del_body[512];
+            snprintf(del_body, sizeof(del_body),
+                "{\"did\":\"did:plc:metalbeartest\","
+                "\"password\":\"correct horse battery staple\","
+                "\"token\":\"%s\"}",
+                final_delete_token ? final_delete_token : "");
+            CHECK(wf_xrpc_procedure(client,
+                    "com.atproto.server.deleteAccount",
+                    del_body, &response) == WF_OK);
+            CHECK(response.status == 200);
+            wf_response_free(&response);
+
+            /* Account is deleted — getSession shows inactive */
+            CHECK(wf_xrpc_query(client, "com.atproto.server.getSession",
+                                NULL, &response) == WF_OK);
+            json = json_response(&response);
+            CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(json, "active")));
+            cJSON_Delete(json);
+            wf_response_free(&response);
+
+            free(final_access);
+            free(final_delete_token);
+
+            wf_xrpc_client_set_auth(client, NULL);
             wf_xrpc_client_free(client);
         }
         metalbear_server_free(server);

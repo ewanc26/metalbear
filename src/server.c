@@ -196,17 +196,13 @@ static wf_status request_account_delete(void *ctx,
                                         wf_xrpc_response *response) {
     (void)request;
     metalbear_server *server = ctx;
-    /* Generate a random deletion token */
-    unsigned char random_bytes[16];
-    static const char hex[] = "0123456789abcdef";
-    if (RAND_bytes(random_bytes, sizeof(random_bytes)) != 1)
-        return WF_ERR_INTERNAL;
     char token[33];
-    for (size_t i = 0; i < sizeof(random_bytes); i++) {
-        token[i * 2] = hex[random_bytes[i] >> 4];
-        token[i * 2 + 1] = hex[random_bytes[i] & 15];
+    if (metalbear_account_create_email_token(server->account, "delete",
+                                             token, sizeof(token)) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not create deletion token");
+        return WF_OK;
     }
-    token[32] = '\0';
     /* Send confirmation email if configured */
     if (server->email && server->account_email && server->account_email[0]) {
         metalbear_email_send_account_deletion(
@@ -246,6 +242,13 @@ static wf_status delete_account(void *ctx, const wf_xrpc_request *request,
                                            password->valuestring)) {
         wf_xrpc_response_set_error(response, 401, "AuthenticationRequired",
                                    "Invalid password");
+        return WF_OK;
+    }
+    wf_status token_status = metalbear_account_verify_email_token(
+        server->account, "delete", token->valuestring);
+    if (token_status != WF_OK) {
+        wf_xrpc_response_set_error(response, 400, "InvalidToken",
+                                   "Invalid or expired deletion token");
         return WF_OK;
     }
     /* Revoke all sessions */
