@@ -59,9 +59,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/build/metalbear /usr/local/bin/metalbear
-# The core/wolfram/cjson libraries are built as shared objects; ship them all
-# alongside the binary so it loads at runtime.
-COPY --from=build /src/build/*.so /usr/local/lib/
+# The core/wolfram/cjson/libcbor libraries are built as shared objects; ship
+# them all alongside the binary so it loads at runtime.
+COPY --from=build /src/build/libmetalbear_core.so /usr/local/lib/
+COPY --from=build /src/build/wolfram/libwolfram.so /usr/local/lib/
+COPY --from=build /src/build/_deps/cjson-build/libcjson.so* /usr/local/lib/
+COPY --from=build /src/build/_deps/libcbor-build/src/libcbor.so* /usr/local/lib/
 RUN ldconfig
 
 WORKDIR /data
