@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <ftw.h>
 #include <netinet/in.h>
+#include <openssl/evp.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -153,6 +154,7 @@ int main(void) {
         .account_handle = "alice.example.com",
         .user_domain = ".example.com",
         .password = "correct horse battery staple",
+        .admin_password = "secret-admin",
     };
     metalbear_server *server = metalbear_server_start(&config);
     CHECK(server != NULL);
@@ -506,6 +508,98 @@ int main(void) {
                             "{\"useCount\":2}", &response) == WF_ERR_HTTP);
     CHECK(response.status == 400);
     wf_response_free(&response);
+
+    /* === com.atproto.sync.requestCrawl (no crawlers configured) ===
+     * Mirrors refpds: when METALBEAR_CRAWLERS is empty the PDS must
+     * return an honest error, never a fabricated success. */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.sync.requestCrawl",
+            "{\"hostname\":\"example.com\"}", &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                 "NoCrawlersConfigured") == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* === com.atproto.admin.getAccountInfo (admin-gated) ===
+     * The test server sets METALBEAR_ADMIN_PASSWORD. Without/with-wrong
+     * Basic auth the endpoint is rejected (401); with the right
+     * credential it returns the account's did/handle/active. */
+    wf_xrpc_client_set_auth(client, NULL);
+    char admin_url[160];
+    snprintf(admin_url, sizeof(admin_url),
+             "%s/xrpc/com.atproto.admin.getAccountInfo?did=%s",
+             base, "did:plc:bob");
+    /* No Authorization header -> 401 */
+    CHECK(wf_http_get_with_headers(client, admin_url, NULL, 0,
+                              &response) == WF_ERR_HTTP);
+    CHECK(response.status == 401);
+    wf_response_free(&response);
+    /* Wrong Basic credential -> 401 */
+    {
+        char wrong[64];
+        int wn = snprintf(wrong, sizeof(wrong), "admin:%s", "wrong");
+        char wrong_b64[128];
+        int wlen = EVP_EncodeBlock((unsigned char *)wrong_b64,
+                                    (const unsigned char *)wrong, wn);
+        wrong_b64[wlen] = '\0';
+        char wrong_hdr[160];
+        snprintf(wrong_hdr, sizeof(wrong_hdr), "Basic %s", wrong_b64);
+        wf_http_header hdr = {"Authorization", wrong_hdr};
+        CHECK(wf_http_get_with_headers(client, admin_url, &hdr, 1,
+                                  &response) == WF_ERR_HTTP);
+        CHECK(response.status == 401);
+        wf_response_free(&response);
+    }
+    /* Correct Basic credential -> 200 with did/handle/active */
+    {
+        char right[64];
+        int rn = snprintf(right, sizeof(right), "admin:%s", "secret-admin");
+        char right_b64[128];
+        int rlen = EVP_EncodeBlock((unsigned char *)right_b64,
+                                    (const unsigned char *)right, rn);
+        right_b64[rlen] = '\0';
+        char right_hdr[160];
+        snprintf(right_hdr, sizeof(right_hdr), "Basic %s", right_b64);
+        wf_http_header hdr = {"Authorization", right_hdr};
+        CHECK(wf_http_get_with_headers(client, admin_url, &hdr, 1,
+                                  &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "did")->valuestring,
+                     "did:plc:bob") == 0);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "handle")->valuestring,
+                     "bob.example.com") == 0);
+        CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(
+            json, "active")));
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+    /* Unknown DID -> AccountNotFound (404), never a fabricated account */
+    {
+        char unknown_url[160];
+        snprintf(unknown_url, sizeof(unknown_url),
+                 "%s/xrpc/com.atproto.admin.getAccountInfo?did=%s",
+                 base, "did:plc:ghost");
+        char right[64];
+        int rn = snprintf(right, sizeof(right), "admin:%s", "secret-admin");
+        char right_b64[128];
+        int rlen = EVP_EncodeBlock((unsigned char *)right_b64,
+                                    (const unsigned char *)right, rn);
+        right_b64[rlen] = '\0';
+        char right_hdr[160];
+        snprintf(right_hdr, sizeof(right_hdr), "Basic %s", right_b64);
+        wf_http_header hdr = {"Authorization", right_hdr};
+        CHECK(wf_http_get_with_headers(client, unknown_url, &hdr, 1,
+                                  &response) == WF_ERR_HTTP);
+        CHECK(response.status == 404);
+        json = json_response(&response);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                     "AccountNotFound") == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+    wf_xrpc_client_set_auth(client, access_token);
 
     /* getRecommendedDidCredentials: auth-required, lexicon-shaped output */
     CHECK(wf_xrpc_query(client,
