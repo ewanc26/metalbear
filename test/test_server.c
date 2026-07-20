@@ -40,6 +40,18 @@ static cJSON *json_response(wf_response *response) {
                                  response->body_len);
 }
 
+/* Case-sensitive substring search over a length-delimited body. */
+static bool body_contains(const wf_response *response, const char *needle) {
+    if (!response || !response->body || !needle) return false;
+    size_t nlen = strlen(needle);
+    if (nlen == 0) return true;
+    if (response->body_len < nlen) return false;
+    for (size_t i = 0; i + nlen <= response->body_len; i++) {
+        if (memcmp(response->body + i, needle, nlen) == 0) return true;
+    }
+    return false;
+}
+
 static int write_all(int fd, const void *data, size_t length) {
     const unsigned char *cursor = data;
     while (length > 0) {
@@ -264,8 +276,17 @@ int main(void) {
     cJSON_Delete(create_json);
     wf_response_free(&response);
 
+    /* Landing page (GET /) must be dynamic HTML listing hosted accounts. */
     CHECK(wf_http_get(client, base, &response) == WF_OK);
-    CHECK(response.status == 200 && response.body_len > 0);
+    CHECK(response.status == 200);
+    CHECK(response.body_len > 0);
+    CHECK(strncmp(response.body, "<!DOCTYPE html>", 15) == 0);
+    /* The bootstrap account (alice) must appear. */
+    CHECK(body_contains(&response, "alice.example.com"));
+    CHECK(body_contains(&response, "did:plc:metalbeartest"));
+    /* A created account (bob) must also appear once it is hosted. */
+    CHECK(body_contains(&response, "bob.example.com"));
+    CHECK(body_contains(&response, "did:plc:bob"));
     wf_response_free(&response);
 
     char well_known_url[160];

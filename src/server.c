@@ -1561,6 +1561,140 @@ static char *public_url_from_service_did(const char *did) {
     return url;
 }
 
+/* ---- Dynamic landing page (GET /) ---- */
+
+/* Minimal HTML escaping for untrusted display strings (handles/DIDs). */
+static char *html_escape(const char *s) {
+    if (!s) return strdup("");
+    size_t need = 1;
+    for (const char *p = s; *p; p++) {
+        switch (*p) {
+            case '&': need += 5; break;  /* &amp;  */
+            case '<': need += 4; break;  /* &lt;   */
+            case '>': need += 4; break;  /* &gt;   */
+            case '"': need += 6; break;  /* &quot; */
+            default:  need += 1; break;
+        }
+    }
+    char *out = malloc(need);
+    if (!out) return NULL;
+    char *q = out;
+    for (const char *p = s; *p; p++) {
+        switch (*p) {
+            case '&': memcpy(q, "&amp;", 5);  q += 5; break;
+            case '<': memcpy(q, "&lt;", 4);   q += 4; break;
+            case '>': memcpy(q, "&gt;", 4);   q += 4; break;
+            case '"': memcpy(q, "&quot;", 6); q += 6; break;
+            default:  *q++ = *p; break;
+        }
+    }
+    *q = '\0';
+    return out;
+}
+
+typedef struct {
+    char *buf;
+    size_t len;
+    size_t cap;
+} sb_t;
+
+static bool sb_append(sb_t *sb, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int need = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    if (need < 0) return false;
+    if (sb->len + (size_t)need + 1 > sb->cap) {
+        size_t ncap = sb->cap ? sb->cap * 2 : 4096;
+        while (ncap < sb->len + (size_t)need + 1) ncap *= 2;
+        char *nb = realloc(sb->buf, ncap);
+        if (!nb) return false;
+        sb->buf = nb;
+        sb->cap = ncap;
+    }
+    va_start(ap, fmt);
+    vsnprintf(sb->buf + sb->len, sb->cap - sb->len, fmt, ap);
+    va_end(ap);
+    sb->len += (size_t)need;
+    return true;
+}
+
+static wf_status landing_handler(void *ctx, const wf_xrpc_request *req,
+                                 wf_xrpc_response *resp) {
+    (void)req;
+    metalbear_server *server = ctx;
+
+    metalbear_account_entry *entries = NULL;
+    size_t count = 0;
+    if (metalbear_account_registry_list(server->registry, &entries,
+                                        &count) != WF_OK) {
+        entries = NULL;
+        count = 0;
+    }
+
+    sb_t sb = {0};
+    if (!sb_append(&sb,
+            "<!DOCTYPE html>\n"
+            "<html lang=\"en\">\n"
+            "<head><meta charset=\"utf-8\">\n"
+            "<title>MetalBear — hosted accounts</title>\n"
+            "</head>\n"
+            "<body>\n"
+            "<h1>MetalBear</h1>\n"
+            "<p>An AT Protocol Personal Data Server built on Wolfram. "
+            "The XRPC API lives under <code>/xrpc/</code>. Identity "
+            "documents are published at "
+            "<code>/.well-known/did.json</code> and "
+            "<code>/.well-known/atproto-did</code>.</p>\n"
+            "<h2>Hosted accounts</h2>\n")) {
+        metalbear_account_entries_free(entries, count);
+        return WF_ERR_ALLOC;
+    }
+
+    if (count == 0) {
+        if (!sb_append(&sb, "<p>No accounts are hosted on this server yet.</p>\n")) {
+            metalbear_account_entries_free(entries, count);
+            return WF_ERR_ALLOC;
+        }
+    } else {
+        if (!sb_append(&sb, "<ul>\n")) {
+            metalbear_account_entries_free(entries, count);
+            return WF_ERR_ALLOC;
+        }
+        for (size_t i = 0; i < count; i++) {
+            char *handle = html_escape(entries[i].handle);
+            char *did = html_escape(entries[i].did);
+            const char *state = entries[i].active ? "active" : "deactivated";
+            bool ok = handle && did &&
+                sb_append(&sb,
+                          "<li><code>%s</code> — <code>%s</code> "
+                          "(<span class=\"state\">%s</span>)</li>\n",
+                          handle, did, state);
+            free(handle);
+            free(did);
+            if (!ok) {
+                metalbear_account_entries_free(entries, count);
+                return WF_ERR_ALLOC;
+            }
+        }
+        if (!sb_append(&sb, "</ul>\n")) {
+            metalbear_account_entries_free(entries, count);
+            return WF_ERR_ALLOC;
+        }
+    }
+
+    if (!sb_append(&sb, "</body>\n</html>\n")) {
+        metalbear_account_entries_free(entries, count);
+        return WF_ERR_ALLOC;
+    }
+
+    wf_xrpc_response_set_body(resp, sb.buf, sb.len);
+    wf_xrpc_response_set_content_type(resp, "text/html; charset=utf-8");
+    free(sb.buf);
+    metalbear_account_entries_free(entries, count);
+    return WF_OK;
+}
+
 static wf_status register_identity_documents(metalbear_server *server) {
     if (!server->public_url)
         server->public_url = public_url_from_service_did(server->service_did);
@@ -1597,15 +1731,10 @@ static wf_status register_identity_documents(metalbear_server *server) {
         "/.well-known/atproto-did", "text/plain; charset=utf-8",
         server->bootstrap->did, strlen(server->bootstrap->did));
     if (status != WF_OK) return status;
-    static const char landing[] =
-        "MetalBear — an AT Protocol Personal Data Server\n"
-        "\n"
-        "This is a multi-account PDS built on Wolfram. XRPC API routes live\n"
-        "under /xrpc/. Account documents are published at\n"
-        "/.well-known/did.json and /.well-known/atproto-did.\n";
-    status = wf_xrpc_server_register_static_get(
-        server->xrpc, "/", "text/plain; charset=utf-8", landing,
-        sizeof(landing) - 1);
+    /* The landing page is served by a dynamic handler so it always reflects
+     * the accounts currently hosted on this PDS. */
+    status = wf_xrpc_server_register_http_route(server->xrpc, "GET", "/",
+                                                landing_handler, server);
     if (status != WF_OK) return status;
     static const char robots[] =
         "User-agent: *\nAllow: /\n";
