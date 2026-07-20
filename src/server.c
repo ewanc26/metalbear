@@ -103,6 +103,7 @@ static bool is_public_route(const char *nsid) {
         "com.atproto.sync.getBlocks",
         "com.atproto.sync.getRepoStatus",
         "com.atproto.sync.listRepos",
+        "com.atproto.sync.listBlobs",
         "com.atproto.sync.subscribeRepos",
     };
     for (size_t i = 0; i < sizeof(public_routes) / sizeof(public_routes[0]); i++)
@@ -898,6 +899,69 @@ static wf_status get_repo_status(void *ctx, const wf_xrpc_request *request,
     return set_json(response, root);
 }
 
+/* ---- com.atproto.sync.listBlobs (query) ---- */
+static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
+                            wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
+    if (!cJSON_IsString(did) ||
+        strcmp(did->valuestring, server->account_did) != 0) {
+        wf_xrpc_response_set_error(response, 400, "RepoNotFound",
+                                   "Repository is not hosted here");
+        return WF_OK;
+    }
+    /* 'since' is accepted for lexicon compatibility; MetalBear's blob store
+     * does not track per-blob revisions, so all available blobs are listed. */
+    cJSON *limit_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "limit") : NULL;
+    int limit = 500;
+    if (cJSON_IsNumber(limit_param)) {
+        limit = (int)limit_param->valuedouble;
+        if (limit < 1) limit = 1;
+        if (limit > 1000) limit = 1000;
+    }
+    cJSON *cursor_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor") : NULL;
+    size_t offset = 0;
+    if (cJSON_IsString(cursor_param) && cursor_param->valuestring[0]) {
+        char *end = NULL;
+        long parsed = strtol(cursor_param->valuestring, &end, 10);
+        if (*cursor_param->valuestring && *end == '\0' && parsed >= 0)
+            offset = (size_t)parsed;
+    }
+
+    char **all = NULL;
+    size_t count = 0;
+    if (wf_blob_store_list(server->blobs, &all, &count) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not enumerate blobs");
+        return WF_OK;
+    }
+    if (offset > count) offset = count;
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *cids = cJSON_CreateArray();
+    if (!root || !cids) {
+        cJSON_Delete(root); cJSON_Delete(cids);
+        wf_blob_store_list_free(all, count);
+        return WF_ERR_ALLOC;
+    }
+    size_t taken = 0;
+    for (size_t i = offset; i < count && taken < (size_t)limit; i++, taken++)
+        cJSON_AddItemToArray(cids, cJSON_CreateString(all[i]));
+    wf_blob_store_list_free(all, count);
+
+    cJSON_AddItemToObject(root, "cids", cids);
+    size_t next = offset + taken;
+    if (next < count) {
+        char cursor_buf[32];
+        snprintf(cursor_buf, sizeof(cursor_buf), "%zu", next);
+        cJSON_AddStringToObject(root, "cursor", cursor_buf);
+    }
+    return set_json(response, root);
+}
+
 static wf_status create_account(void *ctx, const wf_xrpc_request *request,
                                 wf_xrpc_response *response) {
     metalbear_server *server = ctx;
@@ -1687,6 +1751,8 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "com.atproto.sync.getBlocks", get_blocks, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.sync.getRepoStatus", get_repo_status, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.sync.listBlobs", list_blobs, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.sync.listRepos", list_repos, server) != WF_OK ||
         metalbear_sequencer_register(server->sequencer,

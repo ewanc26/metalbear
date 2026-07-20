@@ -755,6 +755,37 @@ int main(void) {
     cJSON_Delete(json);
     wf_response_free(&response);
 
+    /* listBlobs: public, enumerates the uploaded blob for the account */
+    wf_xrpc_client_set_auth(client, NULL);
+    wf_xrpc_param list_blobs_params[] = {{"did", "did:plc:metalbeartest"}};
+    CHECK(wf_xrpc_query_params(client, "com.atproto.sync.listBlobs",
+                               list_blobs_params, 1, &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    cJSON *cids = cJSON_GetObjectItemCaseSensitive(json, "cids");
+    CHECK(cJSON_IsArray(cids) && cJSON_GetArraySize(cids) >= 1);
+    bool found = false;
+    for (int i = 0; i < cJSON_GetArraySize(cids); i++) {
+        cJSON *c = cJSON_GetArrayItem(cids, i);
+        if (cJSON_IsString(c) && blob_cid &&
+            strcmp(c->valuestring, blob_cid) == 0)
+            found = true;
+    }
+    CHECK(found);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* listBlobs: unknown did is RepoNotFound */
+    wf_xrpc_param wrong_did_params[] = {{"did", "did:plc:other"}};
+    CHECK(wf_xrpc_query_params(client, "com.atproto.sync.listBlobs",
+                               wrong_did_params, 1, &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                 "RepoNotFound") == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
     wf_xrpc_client_set_auth(client, NULL);
     wf_xrpc_param get_params[] = {
         {"repo", "did:plc:metalbeartest"},

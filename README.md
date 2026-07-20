@@ -17,7 +17,9 @@ MetalBear is an AT Protocol Personal Data Server written in C and built on
   writes, and CAR import
 - public record reads, collection listing, repo description, and latest commit
 - full or revision-filtered CAR repository export and CID-selected block export
-- public repository status and single-account repository enumeration
+- public repository status, single-account repository enumeration, and
+  `com.atproto.sync.listBlobs` enumeration (backed by Wolfram's
+  `wf_blob_store_list`, with limit/cursor pagination)
 - durable `com.atproto.sync.subscribeRepos` sequencing with live commit events,
   cursor replay across restarts, import sync events, and `FutureCursor` errors
 - `com.atproto.identity.resolveHandle`, `/.well-known/atproto-did` handle
