@@ -2,6 +2,7 @@
 #define _DARWIN_C_SOURCE
 
 #include "metalbear/server.h"
+#include "metalbear/account_registry.h"
 #include "wolfram/repo/car.h"
 #include "wolfram/sync_subscribe.h"
 #include "wolfram/xrpc.h"
@@ -9,6 +10,7 @@
 #include <cJSON.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <ftw.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdio.h>
@@ -17,6 +19,16 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+/* Recursively remove a directory tree (used for test cleanup). */
+static int rmtree_remove_cb(const char *path, const struct stat *sb,
+                            int type, struct FTW *ftwbuf) {
+    (void)sb; (void)type; (void)ftwbuf;
+    return remove(path);
+}
+static void rmtree(const char *path) {
+    nftw(path, rmtree_remove_cb, 64, FTW_DEPTH | FTW_PHYS);
+}
 
 static int failures;
 #define CHECK(expr) do { if (!(expr)) { \
@@ -189,6 +201,50 @@ int main(void) {
                  "HandleNotAvailable") == 0);
     cJSON_Delete(create_json);
     wf_response_free(&response);
+
+    /* createAccount must provision a real, filesystem-isolated account: a
+     * dedicated subdirectory holding the account's own repo/account/auth
+     * stores, not just a registry entry. */
+    char *bob_dir = NULL;
+    CHECK(metalbear_account_dir_for_did(directory, "did:plc:bob",
+                                         &bob_dir) == WF_OK && bob_dir);
+    struct stat st;
+    CHECK(stat(bob_dir, &st) == 0 && S_ISDIR(st.st_mode));
+    char probe[1024];
+    snprintf(probe, sizeof(probe), "%s/repo.sqlite3", bob_dir);
+    CHECK(stat(probe, &st) == 0 && S_ISREG(st.st_mode));
+    snprintf(probe, sizeof(probe), "%s/account.sqlite3", bob_dir);
+    CHECK(stat(probe, &st) == 0 && S_ISREG(st.st_mode));
+    snprintf(probe, sizeof(probe), "%s/auth.sqlite3", bob_dir);
+    CHECK(stat(probe, &st) == 0 && S_ISREG(st.st_mode));
+    snprintf(probe, sizeof(probe), "%s/blobs", bob_dir);
+    CHECK(stat(probe, &st) == 0 && S_ISDIR(st.st_mode));
+    free(bob_dir);
+
+    /* A second, distinct account gets its own separate directory. */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
+        "{\"handle\":\"dave.example.com\",\"password\":\"davesecret\","
+        "\"did\":\"did:plc:dave\"}",
+        &response) == WF_OK);
+    CHECK(response.status == 200);
+    cJSON *dave_json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(dave_json, "did")->valuestring,
+                 "did:plc:dave") == 0);
+    cJSON_Delete(dave_json);
+    wf_response_free(&response);
+
+    char *dave_dir = NULL;
+    CHECK(metalbear_account_dir_for_did(directory, "did:plc:dave",
+                                         &dave_dir) == WF_OK && dave_dir);
+    CHECK(stat(dave_dir, &st) == 0 && S_ISDIR(st.st_mode));
+    snprintf(probe, sizeof(probe), "%s/repo.sqlite3", dave_dir);
+    CHECK(stat(probe, &st) == 0 && S_ISREG(st.st_mode));
+    char *bob_dir_again = NULL;
+    CHECK(metalbear_account_dir_for_did(directory, "did:plc:bob",
+                                         &bob_dir_again) == WF_OK && bob_dir_again);
+    CHECK(strcmp(bob_dir_again, dave_dir) != 0);
+    free(bob_dir_again);
+    free(dave_dir);
 
     /* Test requestPasswordReset: accepts email, not identifier */
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestPasswordReset",
@@ -1203,7 +1259,7 @@ int main(void) {
     unlink(path);
     snprintf(path, sizeof(path), "%s/blobs", directory);
     rmdir(path);
-    rmdir(directory);
+    rmtree(directory);
     if (failures) fprintf(stderr, "%d test(s) failed\n", failures);
     return failures ? 1 : 0;
 }
