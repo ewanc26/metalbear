@@ -1377,11 +1377,16 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
 static wf_status request_email_confirmation(void *ctx,
                                             const wf_xrpc_request *request,
                                             wf_xrpc_response *response) {
-    (void)request;
     metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
     char *email = NULL;
     int confirmed = 0;
-    if (metalbear_account_get_email(server->bootstrap->account, &email, &confirmed) !=
+    if (metalbear_account_get_email(acct->account, &email, &confirmed) !=
             WF_OK || !email) {
         wf_xrpc_response_set_error(response, 400, "AccountNotFound",
                                    "No email address on file");
@@ -1395,7 +1400,7 @@ static wf_status request_email_confirmation(void *ctx,
         return WF_OK;
     }
     char token[33];
-    if (metalbear_account_create_email_token(server->bootstrap->account, "confirm",
+    if (metalbear_account_create_email_token(acct->account, "confirm",
                                              token, sizeof(token)) != WF_OK) {
         free(email);
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -1414,6 +1419,12 @@ static wf_status request_email_confirmation(void *ctx,
 static wf_status confirm_email(void *ctx, const wf_xrpc_request *request,
                                wf_xrpc_response *response) {
     metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
     cJSON *email = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "email") : NULL;
     cJSON *token = request->params
@@ -1429,7 +1440,7 @@ static wf_status confirm_email(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     wf_status status = metalbear_account_verify_email_token(
-        server->bootstrap->account, "confirm", token->valuestring);
+        acct->account, "confirm", token->valuestring);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(response, 400, "InvalidToken",
                                    "Invalid or expired confirmation token");
@@ -1444,11 +1455,16 @@ static wf_status confirm_email(void *ctx, const wf_xrpc_request *request,
 static wf_status request_email_update(void *ctx,
                                       const wf_xrpc_request *request,
                                       wf_xrpc_response *response) {
-    (void)request;
     metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
     char *email = NULL;
     int confirmed = 0;
-    if (metalbear_account_get_email(server->bootstrap->account, &email, &confirmed) !=
+    if (metalbear_account_get_email(acct->account, &email, &confirmed) !=
             WF_OK || !email) {
         free(email);
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
@@ -1456,7 +1472,7 @@ static wf_status request_email_update(void *ctx,
         return WF_OK;
     }
     char token[33];
-    if (metalbear_account_create_email_token(server->bootstrap->account, "update",
+    if (metalbear_account_create_email_token(acct->account, "update",
                                              token, sizeof(token)) != WF_OK) {
         free(email);
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -1475,6 +1491,12 @@ static wf_status request_email_update(void *ctx,
 static wf_status update_email(void *ctx, const wf_xrpc_request *request,
                               wf_xrpc_response *response) {
     metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
     cJSON *email_param = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "email") : NULL;
     cJSON *token = request->params
@@ -1487,7 +1509,7 @@ static wf_status update_email(void *ctx, const wf_xrpc_request *request,
     /* Check if current email is confirmed — token required only then */
     char *current_email = NULL;
     int confirmed = 0;
-    metalbear_account_get_email(server->bootstrap->account, &current_email, &confirmed);
+    metalbear_account_get_email(acct->account, &current_email, &confirmed);
     if (confirmed) {
         if (!cJSON_IsString(token) || !token->valuestring[0]) {
             free(current_email);
@@ -1497,7 +1519,7 @@ static wf_status update_email(void *ctx, const wf_xrpc_request *request,
             return WF_OK;
         }
         wf_status status = metalbear_account_verify_email_token(
-            server->bootstrap->account, "update", token->valuestring);
+            acct->account, "update", token->valuestring);
         if (status != WF_OK) {
             free(current_email);
             wf_xrpc_response_set_error(response, 400, "InvalidToken",
@@ -1507,7 +1529,7 @@ static wf_status update_email(void *ctx, const wf_xrpc_request *request,
     }
     free(current_email);
     /* Store the new email address and mark it unconfirmed */
-    if (metalbear_account_store_email(server->bootstrap->account,
+    if (metalbear_account_store_email(acct->account,
                                       email_param->valuestring) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not store email address");

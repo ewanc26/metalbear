@@ -356,6 +356,62 @@ int main(void) {
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);
         wf_response response = {0};
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.updateEmail",
+                                "{\"email\":\"bob@example.net\"}",
+                                &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.getSession", NULL,
+                            &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(body_contains(&response, "bob@example.net"));
+        CHECK(!body_contains(&response, "carol@example.net"));
+        wf_response_free(&response);
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.server.requestEmailUpdate",
+                                NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(body_contains(&response, "\"tokenRequired\":true"));
+        wf_response_free(&response);
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.server.requestEmailConfirmation",
+                                NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(body_contains(&response, "\"success\":true"));
+        wf_response_free(&response);
+    }
+    if (token_carol) {
+        wf_xrpc_client_set_auth(client, token_carol);
+        wf_response response = {0};
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.updateEmail",
+                                "{\"email\":\"carol@example.net\"}",
+                                &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.getSession", NULL,
+                            &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(body_contains(&response, "carol@example.net"));
+        CHECK(!body_contains(&response, "bob@example.net"));
+        wf_response_free(&response);
+        wf_xrpc_procedure(client, "com.atproto.server.confirmEmail",
+                          "{\"email\":\"carol@example.net\","
+                          "\"token\":\"invalid\"}", &response);
+        CHECK(response.status == 400);
+        CHECK(body_contains(&response, "InvalidToken"));
+        wf_response_free(&response);
+    }
+    wf_xrpc_client_set_auth(client, NULL);
+    {
+        wf_response response = {0};
+        wf_xrpc_procedure(client, "com.atproto.server.updateEmail",
+                          "{\"email\":\"none@example.net\"}", &response);
+        CHECK(response.status == 401);
+        wf_response_free(&response);
+    }
+    if (token_bob) {
+        wf_xrpc_client_set_auth(client, token_bob);
+        wf_response response = {0};
         CHECK(wf_xrpc_procedure(client,
                                 "com.atproto.server.deactivateAccount",
                                 "{\"deleteAfter\":1}", &response) ==
