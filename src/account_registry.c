@@ -15,7 +15,40 @@ struct metalbear_account_registry {
 
 static wf_status execute(sqlite3 *db, const char *sql) {
     return sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK ? WF_OK :
-                                                                  WF_ERR_INTERNAL;
+                                                                   WF_ERR_INTERNAL;
+}
+
+/* Join root + encoded-did name into a heap buffer (caller frees). */
+static char *account_dir_join(const char *root, const char *enc_did) {
+    size_t rlen = strlen(root);
+    size_t nlen = strlen(enc_did);
+    int sep = (rlen > 0 && root[rlen - 1] == '/') ? 0 : 1;
+    char *out = malloc(rlen + nlen + 1 + sep);
+    if (!out) return NULL;
+    memcpy(out, root, rlen);
+    if (sep) out[rlen] = '/';
+    memcpy(out + rlen + sep, enc_did, nlen);
+    out[rlen + sep + nlen] = '\0';
+    return out;
+}
+
+wf_status metalbear_account_dir_for_did(const char *root, const char *did,
+                                        char **out) {
+    if (!root || !did || !did[0] || !out) return WF_ERR_INVALID_ARG;
+    *out = NULL;
+    /* Encode ':' as '_' for a filesystem-safe, deterministic directory name. */
+    size_t need = 1;
+    for (const char *p = did; *p; p++) need += (*p == ':') ? 1 : 1;
+    char *enc = malloc(need);
+    if (!enc) return WF_ERR_ALLOC;
+    size_t j = 0;
+    for (const char *p = did; *p; p++) enc[j++] = (*p == ':') ? '_' : *p;
+    enc[j] = '\0';
+    char *path = account_dir_join(root, enc);
+    free(enc);
+    if (!path) return WF_ERR_ALLOC;
+    *out = path;
+    return WF_OK;
 }
 
 wf_status metalbear_account_registry_open(const char *path,

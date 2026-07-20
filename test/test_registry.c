@@ -94,6 +94,20 @@ int main(void) {
     CHECK(strcmp(entries[0].did, "did:plc:alice") == 0);
     metalbear_account_entries_free(entries, count);
 
+    /* account_dir_for_did: ':' is encoded as '_', joined to the root */
+    char *dir = NULL;
+    CHECK(metalbear_account_dir_for_did("/srv/pds", "did:plc:abc123",
+                                         &dir) == WF_OK);
+    CHECK(dir != NULL);
+    CHECK(strcmp(dir, "/srv/pds/did_plc_abc123") == 0);
+    free(dir);
+    /* Trailing slash on root is preserved without doubling */
+    dir = NULL;
+    CHECK(metalbear_account_dir_for_did("/srv/pds/", "did:web:example.com",
+                                         &dir) == WF_OK);
+    CHECK(strcmp(dir, "/srv/pds/did_web_example.com") == 0);
+    free(dir);
+
     metalbear_account_registry_free(registry);
     unlink(path);
     char sidecar[256];

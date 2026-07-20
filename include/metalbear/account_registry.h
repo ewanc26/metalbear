@@ -61,6 +61,19 @@ wf_status metalbear_account_registry_update_handle(
     metalbear_account_registry *registry,
     const char *did, const char *new_handle);
 
+/*
+ * Compute the per-account data directory name for `did` under `root`.
+ *
+ * Each account stores its repositories and state in a dedicated subdirectory
+ * of the PDS data root, named by a filesystem-safe encoding of the DID (':' is
+ * replaced with '_'). On WF_OK, *out receives a caller-owned absolute path
+ * (ending without a slash) that already joins root and the encoded name;
+ * free() it when done. The mapping is deterministic so re-opening an account
+ * always resolves to the same directory.
+ */
+wf_status metalbear_account_dir_for_did(const char *root, const char *did,
+                                        char **out);
+
 #ifdef __cplusplus
 }
 #endif

@@ -22,7 +22,7 @@ set(WOLFRAM_BUILD_CPP OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WOLFRAM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/wolfram")
 get_target_property(METALBEAR_CJSON_SOURCE_DIR cjson SOURCE_DIR)
 
-add_library(metalbear_core src/account.c src/account_registry.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/key_rotation.c src/sequencer.c src/server.c)
+add_library(metalbear_core src/account.c src/account_registry.c src/account_context.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/key_rotation.c src/sequencer.c src/server.c)
 target_include_directories(metalbear_core PUBLIC include
     PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
 target_link_libraries(metalbear_core PUBLIC wolfram cjson PRIVATE SQLite3::SQLite3 Threads::Threads)
