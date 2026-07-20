@@ -30,6 +30,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
+# glibc hides POSIX/BSD symbols (struct sigaction, strdup, nanosleep, gmtime_r,
+# ...) under strict ISO-C mode, which macOS/BSD libc expose by default. Define
+# _DEFAULT_SOURCE so the (portable) codebase builds on Linux without source
+# changes.
+ENV CFLAGS="-D_DEFAULT_SOURCE"
 COPY MetalBear ./MetalBear
 COPY wolfram ./wolfram
 
