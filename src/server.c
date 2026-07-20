@@ -13,6 +13,7 @@
 #include "metalbear/sequencer.h"
 
 #include "wolfram/blob_store.h"
+#include "wolfram/crypto.h"
 #include "wolfram/repo_store.h"
 #include "wolfram/syntax.h"
 #include "wolfram/xrpc_server.h"
@@ -68,6 +69,7 @@ struct metalbear_server {
     char *service_did;
     char *public_url;
     char *user_domain;
+    char *data_directory;
     char *account_email;
     int64_t retention_max_age;
     int64_t retention_min_events;
@@ -985,42 +987,92 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
                                    "Handle is already taken");
         return WF_OK;
     }
-    /* Use the configured DID if none provided */
-    const char *account_did = (cJSON_IsString(did) && did->valuestring[0])
-        ? did->valuestring : server->bootstrap->did;
-    /* Build data directory for the new account */
-    char *data_dir = join_path(server->user_domain, handle->valuestring);
-    if (!data_dir) {
+
+    /* Resolve the new account's DID. A caller may supply one (e.g. a
+     * did:web or a did:plc minted out of band); otherwise we mint a fresh
+     * did:key so every account is independently addressable and isolated. */
+    char *account_did = NULL;
+    if (cJSON_IsString(did) && did->valuestring[0]) {
+        account_did = strdup(did->valuestring);
+        if (!account_did) {
+            wf_xrpc_response_set_error(response, 500, "InternalError",
+                                       "Could not allocate account DID");
+            return WF_OK;
+        }
+    } else {
+        wf_signing_key key;
+        if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &key) != WF_OK ||
+            wf_signing_key_public_didkey(&key, &account_did) != WF_OK) {
+            wf_xrpc_response_set_error(response, 500, "InternalError",
+                                       "Could not generate account DID");
+            return WF_OK;
+        }
+    }
+
+    /* Provision a dedicated, filesystem-isolated data directory for the
+     * account under the PDS data root. */
+    char *data_dir = NULL;
+    if (metalbear_account_dir_for_did(server->data_directory, account_did,
+                                      &data_dir) != WF_OK || !data_dir) {
+        free(account_did);
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not build data directory");
         return WF_OK;
     }
-    wf_status status = metalbear_account_registry_add(
-        server->registry, account_did, handle->valuestring,
-        "", data_dir);
-    free(data_dir);
+
+    /* Open the account's full store bundle. This creates the repository with
+     * its own signing key and persists the password verifier in the account
+     * store — a real, isolated account rather than registry metadata alone. */
+    metalbear_account_context *acct = NULL;
+    wf_status status = metalbear_account_context_open(
+        server->service_did, server->public_url, account_did,
+        handle->valuestring, data_dir, password->valuestring, &acct);
+    if (status != WF_OK) {
+        free(account_did);
+        free(data_dir);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not provision account stores");
+        return WF_OK;
+    }
+
+    /* Record the account in the shared registry with its absolute data
+     * directory so future requests can resolve and reopen it. */
+    status = metalbear_account_registry_add(server->registry, account_did,
+                                            handle->valuestring, "", data_dir);
     if (status == WF_ERR_CONFLICT) {
+        metalbear_account_context_close(acct);
+        free(account_did);
+        free(data_dir);
         wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
                                    "Handle is already taken");
         return WF_OK;
     }
     if (status != WF_OK) {
+        metalbear_account_context_close(acct);
+        free(account_did);
+        free(data_dir);
         wf_xrpc_response_set_error(response, 500, "InternalError",
-                                   "Could not create account");
+                                   "Could not register account");
         return WF_OK;
     }
-    /* Create a session for the new account */
+
+    /* Issue a session scoped to the new account's own auth store. */
     metalbear_session_tokens tokens = {0};
     wf_status session_status = metalbear_auth_create_scoped_session(
-        server->bootstrap->auth, METALBEAR_ACCESS_FULL, NULL, &tokens);
+        acct->auth, METALBEAR_ACCESS_FULL, NULL, &tokens);
+    metalbear_account_context_close(acct);
+    free(data_dir);
     if (session_status != WF_OK) {
+        free(account_did);
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not create session");
         return WF_OK;
     }
+
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         metalbear_session_tokens_free(&tokens);
+        free(account_did);
         return WF_ERR_ALLOC;
     }
     cJSON_AddStringToObject(root, "accessJwt", tokens.access_jwt);
@@ -1028,6 +1080,7 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
     cJSON_AddStringToObject(root, "handle", handle->valuestring);
     cJSON_AddStringToObject(root, "did", account_did);
     metalbear_session_tokens_free(&tokens);
+    free(account_did);
     return set_json(response, root);
 }
 
@@ -1479,8 +1532,9 @@ static bool copy_config(metalbear_server *server,
     server->service_did = strdup(config->service_did);
     if (config->public_url) server->public_url = strdup(config->public_url);
     server->user_domain = strdup(config->user_domain);
+    server->data_directory = strdup(config->data_directory);
     return server->service_did && (!config->public_url || server->public_url) &&
-           server->user_domain;
+           server->user_domain && server->data_directory;
 }
 
 static char *public_url_from_service_did(const char *did) {
@@ -1839,6 +1893,7 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->service_did);
     free(server->public_url);
     free(server->user_domain);
+    free(server->data_directory);
     free(server->account_email);
     free(server);
 }

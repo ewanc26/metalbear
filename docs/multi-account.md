@@ -1,7 +1,11 @@
 # Multi-account support for MetalBear
 
-Status: **design plan — not yet implemented.** Code changes begin only after
-this is reviewed and approved.
+Status: **design plan — partially implemented.** Steps 1–3 are complete
+(account context + per-account directory encoding, bootstrap wiring, and
+`createAccount` provisioning a real isolated account). Steps 4–7
+(per-request resolver, switching authenticated/repo/sync handlers, and
+`listRepos`/`updateHandle`) remain. Code changes continue incrementally on
+feature branches and are merged to `main` with `--no-ff`.
 
 ## Goal
 
