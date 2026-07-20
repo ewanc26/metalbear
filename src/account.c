@@ -30,7 +30,7 @@ static wf_status derive_password(const char *password,
 wf_status metalbear_account_store_open(const char *path,
                                        const char *bootstrap_password,
                                        metalbear_account_store **out) {
-    if (!path || !bootstrap_password || !bootstrap_password[0] || !out)
+    if (!path || !bootstrap_password || !out)
         return WF_ERR_INVALID_ARG;
     *out = NULL;
     metalbear_account_store *store = calloc(1, sizeof(*store));
@@ -70,6 +70,14 @@ wf_status metalbear_account_store_open(const char *path,
         has_credentials = 1;
     sqlite3_finalize(stmt);
     if (!has_credentials) {
+        /* First provisioning of this account: a non-empty bootstrap password
+         * is required to seed the scrypt verifier. Reopening an account that
+         * already has credentials does not need one (the cache/per-request
+         * resolver reopens accounts without knowing the plaintext password). */
+        if (!bootstrap_password[0]) {
+            metalbear_account_store_free(store);
+            return WF_ERR_INVALID_ARG;
+        }
         unsigned char salt[16], hash[32];
         if (RAND_bytes(salt, sizeof(salt)) != 1 ||
             derive_password(bootstrap_password, salt, hash) != WF_OK ||

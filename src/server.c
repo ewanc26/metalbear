@@ -4,6 +4,7 @@
 #include "metalbear/account.h"
 #include "metalbear/account_registry.h"
 #include "metalbear/account_context.h"
+#include "metalbear/account_cache.h"
 #include "metalbear/auth.h"
 #include "metalbear/backup.h"
 #include "metalbear/email.h"
@@ -87,6 +88,7 @@ struct metalbear_server {
     char *crawlers;           /* comma-separated relay hosts, may be NULL */
     bool invite_required;
     int64_t blob_upload_limit; /* 0 => unlimited */
+    metalbear_account_cache *account_cache;
 };
 
 static bool constant_time_equal(const char *a, const char *b) {
@@ -169,6 +171,108 @@ static const char *bearer_token(const char *header) {
     return header + sizeof(prefix) - 1;
 }
 
+/* Decode the `sub` claim from a JWT *without* verifying its signature. This
+ * is used only to route the request to the correct account's auth store, which
+ * then performs real signature/expiry/scope verification. Returns a
+ * caller-owned string, or NULL on any parse failure. */
+static char *jwt_subject(const char *token) {
+    if (!token) return NULL;
+    const char *first = strchr(token, '.');
+    if (!first) return NULL;
+    const char *second = strchr(first + 1, '.');
+    if (!second) return NULL;
+    size_t len = (size_t)(second - (first + 1));
+    char *segment = malloc(len + 1);
+    if (!segment) return NULL;
+    memcpy(segment, first + 1, len);
+    segment[len] = '\0';
+    unsigned char *raw = NULL;
+    size_t raw_len = 0;
+    wf_status decoded = wf_crypto_base64url_decode(segment, &raw, &raw_len);
+    free(segment);
+    if (decoded != WF_OK || !raw)
+        return NULL;
+    cJSON *payload = cJSON_ParseWithLength((const char *)raw, raw_len);
+    free(raw);
+    if (!payload) return NULL;
+    cJSON *sub = cJSON_GetObjectItemCaseSensitive(payload, "sub");
+    char *result = NULL;
+    if (cJSON_IsString(sub) && sub->valuestring[0])
+        result = strdup(sub->valuestring);
+    cJSON_Delete(payload);
+    return result;
+}
+
+/* Determine the account DID implied by a request: the authenticated subject
+ * (writes / self endpoints) or a `did`/`repo` parameter (public reads). When
+ * the DID must be extracted from an `at://` `repo` value, it is written into
+ * `buf` and `buf` is returned; otherwise the parameter pointer is returned. */
+static const char *request_account_did(metalbear_server *server,
+                                        const wf_xrpc_request *req,
+                                        char *buf, size_t bufsz) {
+    (void)server;
+    if (req->authed_subject && req->authed_subject[0])
+        return req->authed_subject;
+    if (req->params && cJSON_IsObject(req->params)) {
+        cJSON *repo = cJSON_GetObjectItemCaseSensitive(req->params, "repo");
+        cJSON *did = cJSON_GetObjectItemCaseSensitive(req->params, "did");
+        const char *cand = cJSON_IsString(repo) ? repo->valuestring :
+                           (cJSON_IsString(did) ? did->valuestring : NULL);
+        if (cand && strncmp(cand, "did:", 4) == 0) return cand;
+        if (cand && strncmp(cand, "at://", 5) == 0) {
+            const char *p = cand + 5;
+            size_t n = 0;
+            while (p[n] && p[n] != '/') n++;
+            if (n > 0 && n < bufsz) {
+                memcpy(buf, p, n);
+                buf[n] = '\0';
+                return buf;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Return the open context for `did`: the bootstrap context for the primary
+ * account (avoids opening a duplicate connection to its stores), or a cached
+ * per-account context otherwise. The returned context is owned by the
+ * server/cache and must NOT be freed by the caller. Returns NULL when the DID
+ * is unknown / cannot be opened. */
+static metalbear_account_context *context_for_did(metalbear_server *server,
+                                                  const char *did) {
+    if (!did) return NULL;
+    if (server->bootstrap && strcmp(did, server->bootstrap->did) == 0)
+        return server->bootstrap;
+    return metalbear_account_cache_get(server->account_cache, server->registry,
+                                       did);
+}
+
+/* Resolve the account context for a request. Returns the bootstrap context for
+ * the primary account, or a cached per-account context otherwise. The returned
+ * context is owned by the server/cache and must NOT be freed by the caller.
+ * Returns NULL when the account cannot be resolved. */
+static metalbear_account_context *resolve_request_context(
+    metalbear_server *server, const wf_xrpc_request *req) {
+    char buf[256];
+    const char *did = request_account_did(server, req, buf, sizeof(buf));
+    return context_for_did(server, did);
+}
+
+/* wolfram per-request resolver: map a request to the correct account's repo /
+ * blob stores. Borrowed pointers remain valid for the request duration because
+ * the cache (and the bootstrap context) outlive the request. */
+static wf_status metalbear_repo_resolver(void *ctx,
+                                         const wf_xrpc_request *req,
+                                         wf_repo_store **out_repo,
+                                         wf_blob_store **out_blobs) {
+    metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, req);
+    if (!acct) return WF_ERR_NOT_FOUND;
+    *out_repo = acct->repo;
+    *out_blobs = acct->blobs;
+    return WF_OK;
+}
+
 static bool inactive_route_allowed(const char *nsid) {
     return strcmp(nsid, "com.atproto.server.getSession") == 0 ||
            strcmp(nsid, "com.atproto.server.activateAccount") == 0 ||
@@ -217,24 +321,44 @@ static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
     }
 
     const char *provided = bearer_token(req->auth_header);
+    if (!provided) return WF_ERR_PERMISSION;
+
+    /* Route to the account named by the token's `sub` claim, then verify the
+     * token against THAT account's auth store. The signature is server-wide,
+     * so verification proves the token is genuine and `sub` is the identity
+     * we bind the request to (never the bootstrap account). */
+    char *sub = jwt_subject(provided);
+    if (!sub) return WF_ERR_PERMISSION;
+    metalbear_account_context *acct = context_for_did(server, sub);
+    if (!acct) {
+        free(sub);
+        return WF_ERR_PERMISSION;
+    }
+
     bool refresh_route = strcmp(req->nsid,
                                 "com.atproto.server.refreshSession") == 0 ||
                          strcmp(req->nsid,
                                 "com.atproto.server.deleteSession") == 0;
     metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
     wf_status status = refresh_route
-        ? (provided ? WF_OK : WF_ERR_PERMISSION)
-        : metalbear_auth_verify_access_scope(server->bootstrap->auth, provided, &scope);
-    if (status != WF_OK) return status;
+        ? WF_OK
+        : metalbear_auth_verify_access_scope(acct->auth, provided, &scope);
+    if (status != WF_OK) {
+        free(sub);
+        return status;
+    }
     if (!refresh_route && full_access_route(req->nsid) &&
-        scope != METALBEAR_ACCESS_FULL)
+        scope != METALBEAR_ACCESS_FULL) {
+        free(sub);
         return WF_ERR_PERMISSION;
-    if (!metalbear_account_is_active(server->bootstrap->account) &&
-        !inactive_route_allowed(req->nsid))
+    }
+    if (!metalbear_account_is_active(acct->account) &&
+        !inactive_route_allowed(req->nsid)) {
+        free(sub);
         return WF_ERR_CONFLICT;
+    }
 
-    req->authed_subject = strdup(server->bootstrap->did);
-    if (!req->authed_subject) return WF_ERR_ALLOC;
+    req->authed_subject = sub;
     req->authed_principal_kind = WF_XRPC_PRINCIPAL_USER;
     return WF_OK;
 }
@@ -801,7 +925,13 @@ static wf_status get_service_auth(void *ctx,
         return WF_OK;
     }
     metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
-    if (metalbear_auth_verify_access_scope(server->bootstrap->auth,
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
+    if (metalbear_auth_verify_access_scope(acct->auth,
             bearer_token(request->auth_header), &scope) != WF_OK) {
         wf_xrpc_response_set_error(response, 401, "InvalidToken",
                                    "Invalid access token");
@@ -838,7 +968,7 @@ static wf_status get_service_auth(void *ctx,
         expiration = (int64_t)parsed;
     }
     char *token = NULL;
-    if (wf_repo_store_create_service_auth(server->bootstrap->repo, aud->valuestring,
+    if (wf_repo_store_create_service_auth(acct->repo, aud->valuestring,
                                            expiration, lxm, &token) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not create service token");
@@ -874,10 +1004,16 @@ static wf_status get_repo(void *ctx, const wf_xrpc_request *request,
                                    "did is required");
         return WF_OK;
     }
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 400, "RepoNotFound",
+                                   "Repository is not hosted here");
+        return WF_OK;
+    }
     unsigned char *data = NULL;
     size_t length = 0;
     wf_status status = wf_repo_store_export(
-        server->bootstrap->repo, cJSON_IsString(since) ? since->valuestring : NULL,
+        acct->repo, cJSON_IsString(since) ? since->valuestring : NULL,
         &data, &length);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(response, 400, "RepoNotFound",
@@ -895,6 +1031,12 @@ static wf_status get_blocks(void *ctx, const wf_xrpc_request *request,
     if (!cJSON_IsString(did)) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
                                    "did is required");
+        return WF_OK;
+    }
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 400, "RepoNotFound",
+                                   "Repository is not hosted here");
         return WF_OK;
     }
     const char **cids = NULL;
@@ -919,7 +1061,7 @@ static wf_status get_blocks(void *ctx, const wf_xrpc_request *request,
     }
     unsigned char *data = NULL;
     size_t length = 0;
-    wf_status status = wf_repo_store_get_blocks(server->bootstrap->repo, cids, cid_count,
+    wf_status status = wf_repo_store_get_blocks(acct->repo, cids, cid_count,
                                                 &data, &length);
     free(cids);
     if (status != WF_OK) {
@@ -935,20 +1077,21 @@ static wf_status get_repo_status(void *ctx, const wf_xrpc_request *request,
     metalbear_server *server = ctx;
     cJSON *did = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
-    if (!cJSON_IsString(did) ||
-        strcmp(did->valuestring, server->bootstrap->did) != 0) {
+    metalbear_account_context *acct = cJSON_IsString(did)
+        ? resolve_request_context(server, request) : NULL;
+    if (!acct) {
         wf_xrpc_response_set_error(response, 400, "RepoNotFound",
                                    "Repository is not hosted here");
         return WF_OK;
     }
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
-    cJSON_AddStringToObject(root, "did", server->bootstrap->did);
-    bool active = metalbear_account_is_active(server->bootstrap->account);
+    cJSON_AddStringToObject(root, "did", acct->did);
+    bool active = metalbear_account_is_active(acct->account);
     cJSON_AddBoolToObject(root, "active", active);
     if (!active) cJSON_AddStringToObject(root, "status", "deactivated");
     char *rev = NULL, *cid = NULL;
-    if (active && wf_repo_store_get_head(server->bootstrap->repo, &rev, &cid) == WF_OK)
+    if (active && wf_repo_store_get_head(acct->repo, &rev, &cid) == WF_OK)
         cJSON_AddStringToObject(root, "rev", rev);
     free(rev);
     free(cid);
@@ -961,8 +1104,9 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
     metalbear_server *server = ctx;
     cJSON *did = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
-    if (!cJSON_IsString(did) ||
-        strcmp(did->valuestring, server->bootstrap->did) != 0) {
+    metalbear_account_context *acct = cJSON_IsString(did)
+        ? resolve_request_context(server, request) : NULL;
+    if (!acct) {
         wf_xrpc_response_set_error(response, 400, "RepoNotFound",
                                    "Repository is not hosted here");
         return WF_OK;
@@ -989,7 +1133,7 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
 
     char **all = NULL;
     size_t count = 0;
-    if (wf_blob_store_list(server->bootstrap->blobs, &all, &count) != WF_OK) {
+    if (wf_blob_store_list(acct->blobs, &all, &count) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not enumerate blobs");
         return WF_OK;
@@ -1723,9 +1867,15 @@ static wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
                                     "blob exceeds the configured upload limit");
         return WF_OK;
     }
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 400, "AccountNotFound",
+                                    "account is not hosted here");
+        return WF_OK;
+    }
     const char *mime = request->content_type && request->content_type[0]
-                           ? request->content_type
-                           : "application/octet-stream";
+                            ? request->content_type
+                            : "application/octet-stream";
     wf_cid cid;
     if (wf_cid_of_bytes(request->body, request->body_len, &cid) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -1738,7 +1888,7 @@ static wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
                                     "failed to encode blob CID");
         return WF_OK;
     }
-    if (wf_blob_store_put(server->bootstrap->blobs, cid_str, mime,
+    if (wf_blob_store_put(acct->blobs, cid_str, mime,
                            request->body, request->body_len) != WF_OK) {
         free(cid_str);
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -1781,10 +1931,16 @@ static wf_status get_blob(void *ctx, const wf_xrpc_request *request,
                                     "missing or invalid 'cid' parameter");
         return WF_OK;
     }
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 404, "BlobNotFound",
+                                    "account is not hosted here");
+        return WF_OK;
+    }
     unsigned char *data = NULL;
     size_t len = 0;
     char *mime = NULL;
-    wf_status s = wf_blob_store_get(server->bootstrap->blobs,
+    wf_status s = wf_blob_store_get(acct->blobs,
                                     cid->valuestring, &data, &len, &mime);
     if (s == WF_ERR_NOT_FOUND) {
         wf_xrpc_response_set_error(response, 404, "BlobNotFound",
@@ -1814,27 +1970,47 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
         cJSON_Delete(repos);
         return WF_ERR_ALLOC;
     }
-    char *rev = NULL, *cid = NULL;
-    if (wf_repo_store_get_head(server->bootstrap->repo, &rev, &cid) == WF_OK) {
+    /* Enumerate every account hosted on this PDS, not just the bootstrap
+     * account: open each account's context (via the shared cache) and report
+     * its repository head. */
+    metalbear_account_entry *entries = NULL;
+    size_t count = 0;
+    if (metalbear_account_registry_list(server->registry, &entries,
+                                        &count) != WF_OK) {
+        entries = NULL;
+        count = 0;
+    }
+    for (size_t i = 0; i < count; i++) {
+        metalbear_account_context *acct = context_for_did(server,
+                                                          entries[i].did);
+        if (!acct) continue;
+        char *rev = NULL, *cid = NULL;
+        if (wf_repo_store_get_head(acct->repo, &rev, &cid) != WF_OK) {
+            free(rev);
+            free(cid);
+            continue;
+        }
         cJSON *repo = cJSON_CreateObject();
         if (!repo) {
             free(rev);
             free(cid);
+            metalbear_account_entries_free(entries, count);
             cJSON_Delete(root);
             cJSON_Delete(repos);
             return WF_ERR_ALLOC;
         }
-        cJSON_AddStringToObject(repo, "did", server->bootstrap->did);
+        cJSON_AddStringToObject(repo, "did", acct->did);
         cJSON_AddStringToObject(repo, "head", cid);
         cJSON_AddStringToObject(repo, "rev", rev);
-        bool active = metalbear_account_is_active(server->bootstrap->account);
+        bool active = metalbear_account_is_active(acct->account);
         cJSON_AddBoolToObject(repo, "active", active);
         if (!active)
             cJSON_AddStringToObject(repo, "status", "deactivated");
         cJSON_AddItemToArray(repos, repo);
+        free(rev);
+        free(cid);
     }
-    free(rev);
-    free(cid);
+    metalbear_account_entries_free(entries, count);
     cJSON_AddItemToObject(root, "repos", repos);
     return set_json(response, root);
 }
@@ -2178,6 +2354,17 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
 
+    /* Cache of open per-account store bundles, keyed by DID. The per-request
+     * repo/blob resolver and the auth callback route non-bootstrap accounts
+     * through this cache. public_url is resolved by register_identity_documents
+     * above, so the cache opens secondary accounts with the same config. */
+    server->account_cache = metalbear_account_cache_new(
+        server->service_did, server->public_url, server->data_directory);
+    if (!server->account_cache) {
+        LOG_ERROR("cannot create account cache");
+        goto fail;
+    }
+
     if (wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.server.describeServer", describe_server, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
@@ -2217,7 +2404,8 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.server.getServiceAuth", get_service_auth,
             server) != WF_OK ||
-        wf_xrpc_server_register_pds_repo(server->xrpc, server->bootstrap->repo) != WF_OK ||
+        wf_xrpc_server_register_pds_repo_resolver(server->xrpc,
+            metalbear_repo_resolver, server) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.repo.uploadBlob", upload_blob, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
@@ -2357,6 +2545,7 @@ uint16_t metalbear_server_port(const metalbear_server *server) {
 void metalbear_server_free(metalbear_server *server) {
     if (!server) return;
     wf_xrpc_server_free(server->xrpc);
+    metalbear_account_cache_free(server->account_cache);
     if (server->bootstrap) {
         wf_repo_store_set_event_callback(server->bootstrap->repo, NULL, NULL);
         metalbear_account_context_close(server->bootstrap);
