@@ -7,6 +7,16 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 option(METALBEAR_BUILD_TESTS "Build MetalBear tests" ON)
 find_package(SQLite3 REQUIRED)
+# Some CMake/FindSQLite3 combinations (e.g. Debian bookworm's 3.25) populate
+# SQLite3_LIBRARIES but do not define the SQLite3::SQLite3 imported target that
+# later target_link_libraries calls rely on. Create it when absent so the build
+# is portable across toolchains.
+if(NOT TARGET SQLite3::SQLite3)
+    add_library(SQLite3::SQLite3 UNKNOWN IMPORTED)
+    set_target_properties(SQLite3::SQLite3 PROPERTIES
+        IMPORTED_LOCATION "${SQLite3_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${SQLite3_INCLUDE_DIR}")
+endif()
 find_package(Threads REQUIRED)
 set(WOLFRAM_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../wolfram" CACHE PATH
     "Path to the Wolfram source tree")
