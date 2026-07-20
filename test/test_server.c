@@ -246,6 +246,11 @@ int main(void) {
     CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(json, "did")));
     CHECK(cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(
         json, "availableUserDomains")));
+    CHECK(cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(
+        json, "inviteCodeRequired")));
+    CHECK(cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(
+        json, "phoneVerificationRequired")));
+    CHECK(cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(json, "contact")));
     cJSON_Delete(json);
     wf_response_free(&response);
 
@@ -274,6 +279,20 @@ int main(void) {
     cJSON *refresh = cJSON_GetObjectItemCaseSensitive(json, "refreshJwt");
     CHECK(cJSON_IsString(access) && strchr(access->valuestring, '.') != NULL);
     CHECK(cJSON_IsString(refresh) && strchr(refresh->valuestring, '.') != NULL);
+    cJSON *did_doc = cJSON_GetObjectItemCaseSensitive(json, "didDoc");
+    CHECK(cJSON_IsObject(did_doc));
+    if (did_doc) {
+        cJSON *dd_id = cJSON_GetObjectItemCaseSensitive(did_doc, "id");
+        CHECK(cJSON_IsString(dd_id) && dd_id->valuestring[0] != '\0');
+        cJSON *dd_svc = cJSON_GetObjectItemCaseSensitive(did_doc, "service");
+        CHECK(cJSON_IsArray(dd_svc));
+        if (dd_svc && cJSON_GetArraySize(dd_svc) > 0) {
+            cJSON *svc0 = cJSON_GetArrayItem(dd_svc, 0);
+            cJSON *svc_ep = cJSON_GetObjectItemCaseSensitive(svc0,
+                                                             "serviceEndpoint");
+            CHECK(cJSON_IsString(svc_ep));
+        }
+    }
     char *access_token = cJSON_IsString(access) ? strdup(access->valuestring) : NULL;
     char *refresh_token = cJSON_IsString(refresh) ? strdup(refresh->valuestring) : NULL;
     char *privileged_password = NULL;
@@ -293,9 +312,23 @@ int main(void) {
     cJSON_Delete(json);
     wf_response_free(&response);
 
-    /* requestEmailUpdate: returns tokenRequired per lexicon */
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestEmailUpdate",
+    /* updateEmail: requires 'email' per lexicon */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.updateEmail",
+        "{}",
+        &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    wf_response_free(&response);
+
+    /* updateEmail: succeeds with email (no token needed when unconfirmed) */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.updateEmail",
         "{\"email\":\"new@example.com\"}",
+        &response) == WF_OK);
+    CHECK(response.status == 200);
+    wf_response_free(&response);
+
+    /* requestEmailUpdate: takes no input per lexicon, returns tokenRequired */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestEmailUpdate",
+        "{}",
         &response) == WF_OK);
     CHECK(response.status == 200);
     json = json_response(&response);
@@ -310,7 +343,7 @@ int main(void) {
     json = json_response(&response);
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "email")->valuestring,
                  "new@example.com") == 0);
-    CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(json,
+    CHECK(cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(json,
                                                          "emailConfirmed")));
     cJSON_Delete(json);
     wf_response_free(&response);

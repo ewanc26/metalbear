@@ -259,10 +259,7 @@ static wf_status delete_account(void *ctx, const wf_xrpc_request *request,
     /* Emit deactivation event to firehose */
     metalbear_sequencer_account_status(
         server->sequencer, server->account_did, 0, "deleted");
-    cJSON *root = cJSON_CreateObject();
-    if (!root) return WF_ERR_ALLOC;
-    cJSON_AddBoolToObject(root, "success", true);
-    return set_json(response, root);
+    return WF_OK;
 }
 
 static wf_status describe_server(void *ctx, const wf_xrpc_request *request,
@@ -271,15 +268,21 @@ static wf_status describe_server(void *ctx, const wf_xrpc_request *request,
     metalbear_server *server = ctx;
     cJSON *root = cJSON_CreateObject();
     cJSON *domains = cJSON_CreateArray();
-    if (!root || !domains) {
+    cJSON *contact = cJSON_CreateObject();
+    if (!root || !domains || !contact) {
         cJSON_Delete(root);
         cJSON_Delete(domains);
+        cJSON_Delete(contact);
         return WF_ERR_ALLOC;
     }
     cJSON_AddStringToObject(root, "did", server->service_did);
     cJSON_AddItemToArray(domains, cJSON_CreateString(server->user_domain));
     cJSON_AddItemToObject(root, "availableUserDomains", domains);
     cJSON_AddBoolToObject(root, "inviteCodeRequired", true);
+    cJSON_AddBoolToObject(root, "phoneVerificationRequired", false);
+    if (server->account_email && server->account_email[0])
+        cJSON_AddStringToObject(contact, "email", server->account_email);
+    cJSON_AddItemToObject(root, "contact", contact);
     return set_json(response, root);
 }
 
@@ -330,6 +333,30 @@ static metalbear_credential_kind valid_login(metalbear_server *server,
                       : METALBEAR_CREDENTIAL_INVALID;
 }
 
+static cJSON *build_did_doc(metalbear_server *server) {
+    cJSON *document = cJSON_CreateObject();
+    cJSON *context = cJSON_CreateArray();
+    cJSON *services = cJSON_CreateArray();
+    cJSON *service = cJSON_CreateObject();
+    if (!document || !context || !services || !service) {
+        cJSON_Delete(document);
+        cJSON_Delete(context);
+        cJSON_Delete(services);
+        cJSON_Delete(service);
+        return NULL;
+    }
+    cJSON_AddItemToArray(context,
+                         cJSON_CreateString("https://www.w3.org/ns/did/v1"));
+    cJSON_AddItemToObject(document, "@context", context);
+    cJSON_AddStringToObject(document, "id", server->account_did);
+    cJSON_AddStringToObject(service, "id", "#atproto_pds");
+    cJSON_AddStringToObject(service, "type", "AtprotoPersonalDataServer");
+    cJSON_AddStringToObject(service, "serviceEndpoint", server->public_url);
+    cJSON_AddItemToArray(services, service);
+    cJSON_AddItemToObject(document, "service", services);
+    return document;
+}
+
 static cJSON *session_json(metalbear_server *server,
                            const metalbear_session_tokens *tokens) {
     cJSON *root = cJSON_CreateObject();
@@ -351,6 +378,11 @@ static cJSON *session_json(metalbear_server *server,
         cJSON_AddBoolToObject(root, "emailConfirmed", confirmed != 0);
     }
     free(email);
+    if (server->public_url) {
+        cJSON *did_doc = build_did_doc(server);
+        if (did_doc)
+            cJSON_AddItemToObject(root, "didDoc", did_doc);
+    }
     return root;
 }
 
@@ -910,31 +942,28 @@ static wf_status confirm_email(void *ctx, const wf_xrpc_request *request,
 static wf_status request_email_update(void *ctx,
                                       const wf_xrpc_request *request,
                                       wf_xrpc_response *response) {
+    (void)request;
     metalbear_server *server = ctx;
-    cJSON *email = request->params
-        ? cJSON_GetObjectItemCaseSensitive(request->params, "email") : NULL;
-    if (!cJSON_IsString(email) || !email->valuestring[0]) {
+    char *email = NULL;
+    int confirmed = 0;
+    if (metalbear_account_get_email(server->account, &email, &confirmed) !=
+            WF_OK || !email) {
+        free(email);
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "email is required");
-        return WF_OK;
-    }
-    /* Store the new email address */
-    if (metalbear_account_store_email(server->account,
-                                      email->valuestring) != WF_OK) {
-        wf_xrpc_response_set_error(response, 500, "InternalError",
-                                   "Could not store email address");
+                                   "No email address on file");
         return WF_OK;
     }
     char token[33];
     if (metalbear_account_create_email_token(server->account, "update",
                                              token, sizeof(token)) != WF_OK) {
+        free(email);
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not create update token");
         return WF_OK;
     }
     if (server->email)
-        metalbear_email_send_verification(server->email, email->valuestring,
-                                          token);
+        metalbear_email_send_verification(server->email, email, token);
+    free(email);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     cJSON_AddBoolToObject(root, "tokenRequired", true);
@@ -944,29 +973,45 @@ static wf_status request_email_update(void *ctx,
 static wf_status update_email(void *ctx, const wf_xrpc_request *request,
                               wf_xrpc_response *response) {
     metalbear_server *server = ctx;
+    cJSON *email_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "email") : NULL;
     cJSON *token = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "token") : NULL;
-    if (!cJSON_IsString(token) || !token->valuestring[0]) {
+    if (!cJSON_IsString(email_param) || !email_param->valuestring[0]) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "token is required");
+                                   "email is required");
         return WF_OK;
     }
-    wf_status status = metalbear_account_verify_email_token(
-        server->account, "update", token->valuestring);
-    if (status != WF_OK) {
-        wf_xrpc_response_set_error(response, 400, "InvalidToken",
-                                   "Invalid or expired update token");
-        return WF_OK;
-    }
-    /* Mark the stored email as confirmed */
-    char *email = NULL;
+    /* Check if current email is confirmed — token required only then */
+    char *current_email = NULL;
     int confirmed = 0;
-    metalbear_account_get_email(server->account, &email, &confirmed);
-    free(email);
-    cJSON *root = cJSON_CreateObject();
-    if (!root) return WF_ERR_ALLOC;
-    cJSON_AddBoolToObject(root, "success", true);
-    return set_json(response, root);
+    metalbear_account_get_email(server->account, &current_email, &confirmed);
+    if (confirmed) {
+        if (!cJSON_IsString(token) || !token->valuestring[0]) {
+            free(current_email);
+            wf_xrpc_response_set_error(response, 400, "TokenRequired",
+                                       "Token is required when email is "
+                                       "already confirmed");
+            return WF_OK;
+        }
+        wf_status status = metalbear_account_verify_email_token(
+            server->account, "update", token->valuestring);
+        if (status != WF_OK) {
+            free(current_email);
+            wf_xrpc_response_set_error(response, 400, "InvalidToken",
+                                       "Invalid or expired update token");
+            return WF_OK;
+        }
+    }
+    free(current_email);
+    /* Store the new email address and mark it unconfirmed */
+    if (metalbear_account_store_email(server->account,
+                                      email_param->valuestring) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not store email address");
+        return WF_OK;
+    }
+    return WF_OK;
 }
 
 static wf_status request_password_reset(void *ctx,
