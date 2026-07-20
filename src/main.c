@@ -57,7 +57,22 @@ int main(void) {
         .from_name = getenv("METALBEAR_FROM_NAME"),
         .smtp_starttls = true,
         .account_email = getenv("METALBEAR_ACCOUNT_EMAIL"),
+        .admin_password = getenv("METALBEAR_ADMIN_PASSWORD"),
+        .crawlers = getenv("METALBEAR_CRAWLERS"),
+        .invite_required = false,
+        .blob_upload_limit = 0,
     };
+    const char *invite_required_text = getenv("METALBEAR_INVITE_REQUIRED");
+    if (invite_required_text && (strcmp(invite_required_text, "1") == 0 ||
+                          strcmp(invite_required_text, "true") == 0))
+        config.invite_required = true;
+    const char *blob_limit_text = getenv("METALBEAR_BLOB_UPLOAD_LIMIT");
+    if (blob_limit_text && blob_limit_text[0]) {
+        char *end = NULL;
+        unsigned long long lim = strtoull(blob_limit_text, &end, 10);
+        if (end && !*end)
+            config.blob_upload_limit = (int64_t)lim;
+    }
     const char *smtp_port_text = getenv("METALBEAR_SMTP_PORT");
     if (smtp_port_text && smtp_port_text[0]) {
         char *end = NULL;
