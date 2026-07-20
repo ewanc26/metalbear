@@ -82,6 +82,47 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
     return token;
 }
 
+static bool create_session(wf_xrpc_client *client, const char *identifier,
+                           const char *password, const char *expected_handle,
+                           char **out_access, char **out_refresh) {
+    *out_access = NULL;
+    *out_refresh = NULL;
+    char body[512];
+    snprintf(body, sizeof(body),
+             "{\"identifier\":\"%s\",\"password\":\"%s\"}",
+             identifier, password);
+    wf_response response = {0};
+    if (wf_xrpc_procedure(client, "com.atproto.server.createSession", body,
+                          &response) != WF_OK || response.status != 200) {
+        wf_response_free(&response);
+        return false;
+    }
+    cJSON *json = json_response(&response);
+    cJSON *access = cJSON_GetObjectItemCaseSensitive(json, "accessJwt");
+    cJSON *refresh = cJSON_GetObjectItemCaseSensitive(json, "refreshJwt");
+    cJSON *handle = cJSON_GetObjectItemCaseSensitive(json, "handle");
+    cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
+    bool valid = cJSON_IsString(access) && cJSON_IsString(refresh) &&
+                 cJSON_IsString(handle) &&
+                 strcmp(handle->valuestring, expected_handle) == 0 &&
+                 cJSON_IsString(did) &&
+                 strcmp(did->valuestring, "did:plc:bob") == 0;
+    if (valid) {
+        *out_access = strdup(access->valuestring);
+        *out_refresh = strdup(refresh->valuestring);
+        valid = *out_access != NULL && *out_refresh != NULL;
+    }
+    cJSON_Delete(json);
+    wf_response_free(&response);
+    if (!valid) {
+        free(*out_access);
+        free(*out_refresh);
+        *out_access = NULL;
+        *out_refresh = NULL;
+    }
+    return valid;
+}
+
 /* createRecord as the currently-authenticated client. Returns HTTP status. */
 static long create_record(wf_xrpc_client *client, const char *repo,
                           const char *rkey, const char *text) {
@@ -156,8 +197,6 @@ int main(void) {
     CHECK(token_bob != NULL);
     CHECK(token_carol != NULL);
 
-    /* (c) The access token's `sub` claim must route the request to that
-     * account's own auth store. Bob's token authenticates bob-owned routes. */
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);
         wf_response response = {0};
@@ -165,11 +204,272 @@ int main(void) {
                             &response) == WF_OK);
         CHECK(response.status == 200);
         cJSON *json = json_response(&response);
-        /* getSession still reports the bootstrap identity (session endpoints
-         * are not multi-tenant in this slice), but the request must have been
-         * accepted by routing bob's token to bob's auth store. */
-        CHECK(cJSON_IsObject(json));
+        cJSON *handle = cJSON_GetObjectItemCaseSensitive(json, "handle");
+        cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
+        CHECK(cJSON_IsString(handle));
+        CHECK(cJSON_IsString(handle) &&
+              strcmp(handle->valuestring, "bob.example.com") == 0);
+        CHECK(cJSON_IsString(did));
+        CHECK(cJSON_IsString(did) &&
+              strcmp(did->valuestring, "did:plc:bob") == 0);
         cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+
+    char *login_access = NULL;
+    char *login_refresh = NULL;
+    CHECK(create_session(client, "bob.example.com", "bobsecret",
+                         "bob.example.com", &login_access, &login_refresh));
+    if (login_refresh) {
+        wf_xrpc_client_set_auth(client, login_refresh);
+        wf_response response = {0};
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.refreshSession",
+                                NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *json = json_response(&response);
+        cJSON *handle = cJSON_GetObjectItemCaseSensitive(json, "handle");
+        cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
+        CHECK(cJSON_IsString(handle) &&
+              strcmp(handle->valuestring, "bob.example.com") == 0);
+        CHECK(cJSON_IsString(did) &&
+              strcmp(did->valuestring, "did:plc:bob") == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+    free(login_access);
+    free(login_refresh);
+
+    if (token_bob) {
+        wf_xrpc_client_set_auth(client, token_bob);
+        wf_response response = {0};
+        wf_xrpc_procedure(client, "com.atproto.identity.updateHandle",
+                          "{\"handle\":\"carol.example.com\"}", &response);
+        CHECK(response.status == 400);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_procedure(client, "com.atproto.identity.updateHandle",
+                                "{\"handle\":\"robert.example.com\"}",
+                                &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+    }
+    {
+        wf_xrpc_param params[] = {{"handle", "robert.example.com"}};
+        wf_response response = {0};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.identity.resolveHandle",
+                                   params, 1, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *json = json_response(&response);
+        cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
+        CHECK(cJSON_IsString(did) &&
+              strcmp(did->valuestring, "did:plc:bob") == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+    {
+        wf_xrpc_param params[] = {{"repo", "did:plc:bob"}};
+        wf_response response = {0};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.repo.describeRepo",
+                                   params, 1, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *json = json_response(&response);
+        cJSON *handle = cJSON_GetObjectItemCaseSensitive(json, "handle");
+        CHECK(cJSON_IsString(handle) &&
+              strcmp(handle->valuestring, "robert.example.com") == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+    login_access = NULL;
+    login_refresh = NULL;
+    CHECK(create_session(client, "robert.example.com", "bobsecret",
+                         "robert.example.com", &login_access, &login_refresh));
+    free(login_access);
+    free(login_refresh);
+
+    if (token_bob) {
+        wf_xrpc_client_set_auth(client, token_bob);
+        wf_response response = {0};
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.server.createAppPassword",
+                                "{}", &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.server.createAppPassword",
+                                "{\"name\":\"shared-device\"}",
+                                &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *json = json_response(&response);
+        cJSON *name = cJSON_GetObjectItemCaseSensitive(json, "name");
+        cJSON *password = cJSON_GetObjectItemCaseSensitive(json, "password");
+        cJSON *created_at = cJSON_GetObjectItemCaseSensitive(json, "createdAt");
+        CHECK(cJSON_IsString(name) &&
+              strcmp(name->valuestring, "shared-device") == 0);
+        CHECK(cJSON_IsString(password) && password->valuestring[0]);
+        CHECK(cJSON_IsString(created_at) && created_at->valuestring[0]);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(body_contains(&response, "shared-device"));
+        wf_response_free(&response);
+    }
+    if (token_carol) {
+        wf_xrpc_client_set_auth(client, token_carol);
+        wf_response response = {0};
+        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(!body_contains(&response, "shared-device"));
+        wf_response_free(&response);
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.server.createAppPassword",
+                                "{\"name\":\"shared-device\",\"privileged\":true}",
+                                &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+    }
+    if (token_bob) {
+        wf_xrpc_client_set_auth(client, token_bob);
+        wf_response response = {0};
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.server.revokeAppPassword",
+                                "{\"name\":\"shared-device\"}",
+                                &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(!body_contains(&response, "shared-device"));
+        wf_response_free(&response);
+    }
+    if (token_carol) {
+        wf_xrpc_client_set_auth(client, token_carol);
+        wf_response response = {0};
+        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(body_contains(&response, "shared-device"));
+        wf_response_free(&response);
+    }
+    if (token_bob) {
+        wf_xrpc_client_set_auth(client, token_bob);
+        wf_response response = {0};
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.updateEmail",
+                                "{\"email\":\"bob@example.net\"}",
+                                &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.getSession", NULL,
+                            &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(body_contains(&response, "bob@example.net"));
+        CHECK(!body_contains(&response, "carol@example.net"));
+        wf_response_free(&response);
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.server.requestEmailUpdate",
+                                NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(body_contains(&response, "\"tokenRequired\":true"));
+        wf_response_free(&response);
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.server.requestEmailConfirmation",
+                                NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(body_contains(&response, "\"success\":true"));
+        wf_response_free(&response);
+    }
+    if (token_carol) {
+        wf_xrpc_client_set_auth(client, token_carol);
+        wf_response response = {0};
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.updateEmail",
+                                "{\"email\":\"carol@example.net\"}",
+                                &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.getSession", NULL,
+                            &response) == WF_OK);
+        CHECK(response.status == 200);
+        CHECK(body_contains(&response, "carol@example.net"));
+        CHECK(!body_contains(&response, "bob@example.net"));
+        wf_response_free(&response);
+        wf_xrpc_procedure(client, "com.atproto.server.confirmEmail",
+                          "{\"email\":\"carol@example.net\","
+                          "\"token\":\"invalid\"}", &response);
+        CHECK(response.status == 400);
+        CHECK(body_contains(&response, "InvalidToken"));
+        wf_response_free(&response);
+    }
+    wf_xrpc_client_set_auth(client, NULL);
+    {
+        wf_response response = {0};
+        wf_xrpc_procedure(client, "com.atproto.server.updateEmail",
+                          "{\"email\":\"none@example.net\"}", &response);
+        CHECK(response.status == 401);
+        wf_response_free(&response);
+    }
+    if (token_bob) {
+        wf_xrpc_client_set_auth(client, token_bob);
+        wf_response response = {0};
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.server.deactivateAccount",
+                                "{\"deleteAfter\":1}", &response) ==
+              WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.server.deactivateAccount",
+                                "{}", &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_query(client,
+                            "com.atproto.server.checkAccountStatus",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *json = json_response(&response);
+        cJSON *activated = cJSON_GetObjectItemCaseSensitive(json, "activated");
+        CHECK(cJSON_IsFalse(activated));
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+    if (token_carol) {
+        wf_xrpc_client_set_auth(client, token_carol);
+        wf_response response = {0};
+        CHECK(wf_xrpc_query(client,
+                            "com.atproto.server.checkAccountStatus",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *json = json_response(&response);
+        cJSON *activated = cJSON_GetObjectItemCaseSensitive(json, "activated");
+        CHECK(cJSON_IsTrue(activated));
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+    if (token_bob) {
+        wf_xrpc_client_set_auth(client, token_bob);
+        wf_response response = {0};
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.server.activateAccount",
+                                NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_query(client,
+                            "com.atproto.server.checkAccountStatus",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *json = json_response(&response);
+        cJSON *activated = cJSON_GetObjectItemCaseSensitive(json, "activated");
+        CHECK(cJSON_IsTrue(activated));
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+    wf_xrpc_client_set_auth(client, NULL);
+    {
+        wf_response response = {0};
+        CHECK(wf_xrpc_query(client, "com.atproto.server.checkAccountStatus",
+                            NULL, &response) == WF_ERR_HTTP);
+        CHECK(response.status == 401);
         wf_response_free(&response);
     }
 
@@ -211,6 +511,27 @@ int main(void) {
     CHECK(strcmp(text, "carol-only") == 0);
     CHECK(get_record(client, "did:plc:bob", "carolpost", NULL, 0) == 404);
 
+    if (token_bob) {
+        wf_xrpc_client_set_auth(client, token_bob);
+        wf_response response = {0};
+        CHECK(wf_xrpc_query(client, "com.atproto.server.checkAccountStatus",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *json = json_response(&response);
+        cJSON *repo_blocks = cJSON_GetObjectItemCaseSensitive(json, "repoBlocks");
+        cJSON *indexed_records = cJSON_GetObjectItemCaseSensitive(
+            json, "indexedRecords");
+        cJSON *imported_blobs = cJSON_GetObjectItemCaseSensitive(
+            json, "importedBlobs");
+        CHECK(cJSON_IsNumber(repo_blocks) && repo_blocks->valuedouble > 0);
+        CHECK(cJSON_IsNumber(indexed_records) &&
+              indexed_records->valuedouble == 2);
+        CHECK(cJSON_IsNumber(imported_blobs) &&
+              imported_blobs->valuedouble == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+
     wf_xrpc_client_set_auth(client, NULL);
 
     /* listRepos must enumerate every hosted repository, not just bootstrap. */
@@ -232,7 +553,7 @@ int main(void) {
         CHECK(strncmp(response.body, "<!DOCTYPE html>", 15) == 0);
         CHECK(body_contains(&response, "alice.example.com"));
         CHECK(body_contains(&response, "did:plc:metalbeartest"));
-        CHECK(body_contains(&response, "bob.example.com"));
+        CHECK(body_contains(&response, "robert.example.com"));
         CHECK(body_contains(&response, "did:plc:bob"));
         CHECK(body_contains(&response, "carol.example.com"));
         CHECK(body_contains(&response, "did:plc:carol"));
