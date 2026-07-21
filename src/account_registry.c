@@ -457,6 +457,51 @@ void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
     free(entries);
 }
 
+wf_status metalbear_account_registry_disable_invite_codes(
+    metalbear_account_registry *registry,
+    const char **codes, size_t code_count,
+    const char **accounts, size_t account_count) {
+    if (!registry) return WF_ERR_INVALID_ARG;
+    if ((!codes || code_count == 0) && (!accounts || account_count == 0))
+        return WF_ERR_INVALID_ARG;
+
+    pthread_mutex_lock(&registry->mutex);
+    int touched = 0;
+
+    if (codes && code_count > 0) {
+        for (size_t i = 0; i < code_count; i++) {
+            if (!codes[i] || !codes[i][0]) continue;
+            sqlite3_stmt *stmt = NULL;
+            if (sqlite3_prepare_v2(registry->db,
+                    "UPDATE invite_code SET disabled=1 WHERE code=?;",
+                    -1, &stmt, NULL) == SQLITE_OK) {
+                sqlite3_bind_text(stmt, 1, codes[i], -1, SQLITE_TRANSIENT);
+                int rc = sqlite3_step(stmt);
+                if (rc == SQLITE_DONE) touched += sqlite3_changes(registry->db);
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    if (accounts && account_count > 0) {
+        for (size_t i = 0; i < account_count; i++) {
+            if (!accounts[i] || !accounts[i][0]) continue;
+            sqlite3_stmt *stmt = NULL;
+            if (sqlite3_prepare_v2(registry->db,
+                    "UPDATE invite_code SET disabled=1 WHERE for_account=?;",
+                    -1, &stmt, NULL) == SQLITE_OK) {
+                sqlite3_bind_text(stmt, 1, accounts[i], -1, SQLITE_TRANSIENT);
+                int rc = sqlite3_step(stmt);
+                if (rc == SQLITE_DONE) touched += sqlite3_changes(registry->db);
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    pthread_mutex_unlock(&registry->mutex);
+    return touched > 0 ? WF_OK : WF_ERR_NOT_FOUND;
+}
+
 static int count_nonnull(const char *a, const char *b, const char *c) {
     int n = 0;
     if (a && a[0]) n++;
