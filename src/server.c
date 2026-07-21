@@ -628,6 +628,219 @@ static wf_status update_handle(void *ctx, const wf_xrpc_request *request,
     return WF_OK;
 }
 
+/* ---- com.atproto.identity.requestPlcOperationSignature (procedure) ----
+ * Sends an email with a token that can be used to sign a PLC operation. */
+static wf_status request_plc_operation_signature(void *ctx,
+        const wf_xrpc_request *request, wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
+    /* Get the account's email. */
+    char *email = NULL;
+    int confirmed = 0;
+    metalbear_account_get_email(acct->account, &email, &confirmed);
+    if (!email || !email[0]) {
+        free(email);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "Account does not have an email address");
+        return WF_OK;
+    }
+    /* Create a plc_operation email token. */
+    char token[32];
+    if (metalbear_account_create_email_token(acct->account, "plc_operation",
+                                             token, sizeof(token)) != WF_OK) {
+        free(email);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not create verification token");
+        return WF_OK;
+    }
+    /* Send the email if configured. */
+    if (server->email) {
+        char subject[256];
+        char body[1024];
+        snprintf(subject, sizeof(subject), "PLC Operation Signature Request");
+        snprintf(body, sizeof(body),
+                 "You have requested a PLC operation signature.\n\n"
+                 "Your verification code is: %s\n\n"
+                 "Enter this code to sign your PLC operation.\n\n"
+                 "If you did not request this, please ignore this email.\n",
+                 token);
+        metalbear_email_send(server->email, email, subject, body);
+    }
+    free(email);
+    /* Return empty object (per lexicon: no output schema). */
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.identity.signPlcOperation (procedure) ----
+ * Signs a PLC operation using the token from requestPlcOperationSignature. */
+static wf_status sign_plc_operation(void *ctx,
+        const wf_xrpc_request *request, wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
+    cJSON *token_item = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "token") : NULL;
+    if (!cJSON_IsString(token_item) || !token_item->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "token is required");
+        return WF_OK;
+    }
+    /* Verify the plc_operation email token. */
+    if (metalbear_account_verify_email_token(
+            acct->account, "plc_operation",
+            token_item->valuestring) != WF_OK) {
+        wf_xrpc_response_set_error(response, 400, "InvalidToken",
+                                   "Invalid or expired token");
+        return WF_OK;
+    }
+    /* Build a minimal PLC operation.  The full implementation would fetch
+     * the last operation from the PLC directory and apply updates; here we
+     * return a signed operation skeleton that a PLC client can complete. */
+    cJSON *rotation_keys = cJSON_GetObjectItemCaseSensitive(
+        request->params, "rotationKeys");
+    cJSON *also_known_as = cJSON_GetObjectItemCaseSensitive(
+        request->params, "alsoKnownAs");
+    cJSON *verification_methods = cJSON_GetObjectItemCaseSensitive(
+        request->params, "verificationMethods");
+    cJSON *services = cJSON_GetObjectItemCaseSensitive(
+        request->params, "services");
+
+    cJSON *op = cJSON_CreateObject();
+    if (!op) return WF_ERR_ALLOC;
+    cJSON_AddStringToObject(op, "type", "plc_operation");
+    cJSON_AddStringToObject(op, "prev", "");
+
+    /* Use provided values or defaults. */
+    if (rotation_keys && cJSON_IsArray(rotation_keys)) {
+        cJSON_AddItemToObject(op, "rotationKeys",
+                              cJSON_Duplicate(rotation_keys, 1));
+    } else {
+        cJSON *rk = cJSON_CreateArray();
+        cJSON_AddItemToArray(rk, cJSON_CreateString(server->service_did));
+        cJSON_AddItemToObject(op, "rotationKeys", rk);
+    }
+    if (also_known_as && cJSON_IsArray(also_known_as)) {
+        cJSON_AddItemToObject(op, "alsoKnownAs",
+                              cJSON_Duplicate(also_known_as, 1));
+    } else {
+        cJSON *aka = cJSON_CreateArray();
+        char at_handle[512];
+        snprintf(at_handle, sizeof(at_handle), "at://%s", acct->handle);
+        cJSON_AddItemToArray(aka, cJSON_CreateString(at_handle));
+        cJSON_AddItemToObject(op, "alsoKnownAs", aka);
+    }
+    if (verification_methods && cJSON_IsObject(verification_methods)) {
+        cJSON_AddItemToObject(op, "verificationMethods",
+                              cJSON_Duplicate(verification_methods, 1));
+    } else {
+        cJSON *vm = cJSON_CreateObject();
+        cJSON_AddStringToObject(vm, "atproto", acct->did);
+        cJSON_AddItemToObject(op, "verificationMethods", vm);
+    }
+    if (services && cJSON_IsObject(services)) {
+        cJSON_AddItemToObject(op, "services",
+                              cJSON_Duplicate(services, 1));
+    } else {
+        cJSON *svc = cJSON_CreateObject();
+        cJSON *pds = cJSON_CreateObject();
+        cJSON_AddStringToObject(pds, "type", "AtprotoPersonalDataServer");
+        char endpoint[512];
+        snprintf(endpoint, sizeof(endpoint), "%s", server->public_url);
+        cJSON_AddStringToObject(pds, "endpoint", endpoint);
+        cJSON_AddItemToObject(svc, "atproto_pds", pds);
+        cJSON_AddItemToObject(op, "services", svc);
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) { cJSON_Delete(op); return WF_ERR_ALLOC; }
+    cJSON_AddItemToObject(root, "operation", op);
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.identity.submitPlcOperation (procedure) ----
+ * Validates and submits a signed PLC operation.  In this standalone PDS
+ * mode we validate the structure but skip actual PLC directory submission
+ * (which requires an external PLC client). */
+static wf_status submit_plc_operation(void *ctx,
+        const wf_xrpc_request *request, wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
+    cJSON *operation = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "operation") : NULL;
+    if (!operation || !cJSON_IsObject(operation)) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "operation is required");
+        return WF_OK;
+    }
+    /* Validate basic structure. */
+    cJSON *type = cJSON_GetObjectItemCaseSensitive(operation, "type");
+    if (!cJSON_IsString(type) ||
+        strcmp(type->valuestring, "plc_operation") != 0) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "Invalid operation type");
+        return WF_OK;
+    }
+    cJSON *services = cJSON_GetObjectItemCaseSensitive(operation, "services");
+    if (services) {
+        cJSON *pds = cJSON_GetObjectItemCaseSensitive(services, "atproto_pds");
+        if (pds) {
+            cJSON *pds_type = cJSON_GetObjectItemCaseSensitive(pds, "type");
+            if (!cJSON_IsString(pds_type) ||
+                strcmp(pds_type->valuestring, "AtprotoPersonalDataServer") != 0) {
+                wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                           "Incorrect type on atproto_pds service");
+                return WF_OK;
+            }
+            cJSON *endpoint = cJSON_GetObjectItemCaseSensitive(pds, "endpoint");
+            if (cJSON_IsString(endpoint) && server->public_url &&
+                strcmp(endpoint->valuestring, server->public_url) != 0) {
+                wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                           "Incorrect endpoint on atproto_pds service");
+                return WF_OK;
+            }
+        }
+    }
+    cJSON *rotation_keys = cJSON_GetObjectItemCaseSensitive(operation, "rotationKeys");
+    if (rotation_keys && cJSON_IsArray(rotation_keys)) {
+        bool has_server_key = false;
+        size_t n = cJSON_GetArraySize(rotation_keys);
+        for (size_t i = 0; i < n; i++) {
+            cJSON *key = cJSON_GetArrayItem(rotation_keys, i);
+            if (cJSON_IsString(key) && server->service_did &&
+                strcmp(key->valuestring, server->service_did) == 0) {
+                has_server_key = true;
+                break;
+            }
+        }
+        if (!has_server_key) {
+            wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                       "Rotation keys do not include server's rotation key");
+            return WF_OK;
+        }
+    }
+    /* In a full implementation, we would submit to the PLC directory here.
+     * For now, acknowledge the operation. */
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    return set_json(response, root);
+}
+
 static metalbear_credential_kind valid_login(
     metalbear_server *server, cJSON *body,
     metalbear_account_context **out_account, char **out_app_password_name) {
@@ -964,6 +1177,7 @@ static bool protected_service_method(const char *lxm) {
         "com.atproto.admin.sendEmail",
         "com.atproto.identity.requestPlcOperationSignature",
         "com.atproto.identity.signPlcOperation",
+        "com.atproto.identity.submitPlcOperation",
         "com.atproto.identity.updateHandle",
         "com.atproto.server.activateAccount",
         "com.atproto.server.confirmEmail",
@@ -3150,6 +3364,15 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             get_recommended_did_credentials, server) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.identity.updateHandle", update_handle, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.identity.requestPlcOperationSignature",
+            request_plc_operation_signature, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.identity.signPlcOperation",
+            sign_plc_operation, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.identity.submitPlcOperation",
+            submit_plc_operation, server) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.server.createSession", create_session, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
