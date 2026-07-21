@@ -49,6 +49,9 @@ typedef struct metalbear_config {
     /* Maximum blob upload size in bytes (refpds PDS_BLOB_UPLOAD_LIMIT).
      * 0 => no limit. Enforced in the blob upload path. */
     int64_t blob_upload_limit;
+    /* PLC directory URL for did:plc account creation. NULL/empty => accounts
+     * default to did:key instead of did:plc. */
+    const char *plc_url;
 } metalbear_config;
 
 /* Start a single-account AT Protocol PDS. All strings are copied. */

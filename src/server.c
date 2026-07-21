@@ -93,6 +93,7 @@ struct metalbear_server {
     char *crawlers;           /* comma-separated relay hosts, may be NULL */
     bool invite_required;
     int64_t blob_upload_limit; /* 0 => unlimited */
+    char *plc_url;            /* PLC directory URL or NULL */
     metalbear_account_cache *account_cache;
 };
 
@@ -2928,6 +2929,8 @@ static bool copy_config(metalbear_server *server,
         server->crawlers = strdup(config->crawlers);
     server->invite_required = config->invite_required;
     server->blob_upload_limit = config->blob_upload_limit;
+    if (config->plc_url && config->plc_url[0])
+        server->plc_url = strdup(config->plc_url);
     return server->service_did && (!config->public_url || server->public_url) &&
            server->user_domain && server->data_directory;
 }
@@ -3483,5 +3486,6 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->account_email);
     free(server->admin_password);
     free(server->crawlers);
+    free(server->plc_url);
     free(server);
 }
