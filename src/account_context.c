@@ -60,7 +60,7 @@ wf_status metalbear_account_context_open(const char *service_did,
 
     if (metalbear_repo_store_open(repo_path, did, handle, &ctx->repo) != WF_OK)
         goto cleanup;
-    ctx->blobs = wf_blob_store_new(blob_path);
+    ctx->blobs = metalbear_blob_store_new(blob_path);
     if (!ctx->blobs) goto cleanup;
     if (metalbear_auth_store_open(auth_path, service_did, did,
                                   &ctx->auth) != WF_OK)
@@ -91,7 +91,7 @@ cleanup:
 void metalbear_account_context_close(metalbear_account_context *ctx) {
     if (!ctx) return;
     if (ctx->repo) metalbear_repo_store_free(ctx->repo);
-    if (ctx->blobs) wf_blob_store_free(ctx->blobs);
+    if (ctx->blobs) metalbear_blob_store_free(ctx->blobs);
     if (ctx->auth) metalbear_auth_store_free(ctx->auth);
     if (ctx->account) metalbear_account_store_free(ctx->account);
     if (ctx->sequencer) metalbear_sequencer_free(ctx->sequencer);

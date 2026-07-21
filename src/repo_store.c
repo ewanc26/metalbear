@@ -1357,7 +1357,7 @@ typedef struct metalbear_pds_repo_bundle {
     metalbear_xrpc_repo_resolver resolver;
     void *resolver_ctx;
     metalbear_repo_store *fallback_repo;
-    wf_blob_store *fallback_blobs;
+    metalbear_blob_store *fallback_blobs;
 } metalbear_pds_repo_bundle;
 
 /*
@@ -1372,7 +1372,7 @@ static metalbear_repo_store *resolve_repo(metalbear_pds_repo_bundle *b,
     metalbear_repo_store *store = b->fallback_repo;
     if (b->resolver) {
         metalbear_repo_store *out_repo = NULL;
-        wf_blob_store *out_blobs = NULL;
+        metalbear_blob_store *out_blobs = NULL;
         if (b->resolver(b->resolver_ctx, req, &out_repo, &out_blobs) != WF_OK ||
             !out_repo) {
             wf_xrpc_response_set_error(resp, 400, "RepoNotFound",

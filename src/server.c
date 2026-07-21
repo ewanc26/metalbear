@@ -13,7 +13,7 @@
 #include "metalbear/oauth_routes.h"
 #include "metalbear/sequencer.h"
 
-#include "wolfram/blob_store.h"
+#include "metalbear/blob_store.h"
 #include "wolfram/crypto.h"
 #include "metalbear/repo_store.h"
 #include "wolfram/repo/cid.h"
@@ -272,7 +272,7 @@ static metalbear_account_context *resolve_request_context(
 static wf_status metalbear_repo_resolver(void *ctx,
                                          const wf_xrpc_request *req,
                                          metalbear_repo_store **out_repo,
-                                         wf_blob_store **out_blobs) {
+                                         metalbear_blob_store **out_blobs) {
     metalbear_server *server = ctx;
     metalbear_account_context *acct = resolve_request_context(server, req);
     if (!acct) return WF_ERR_NOT_FOUND;
@@ -1206,7 +1206,7 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
 
     char **all = NULL;
     size_t count = 0;
-    if (wf_blob_store_list(acct->blobs, &all, &count) != WF_OK) {
+    if (metalbear_blob_store_list(acct->blobs, &all, &count) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not enumerate blobs");
         return WF_OK;
@@ -1217,13 +1217,13 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
     cJSON *cids = cJSON_CreateArray();
     if (!root || !cids) {
         cJSON_Delete(root); cJSON_Delete(cids);
-        wf_blob_store_list_free(all, count);
+        metalbear_blob_store_list_free(all, count);
         return WF_ERR_ALLOC;
     }
     size_t taken = 0;
     for (size_t i = offset; i < count && taken < (size_t)limit; i++, taken++)
         cJSON_AddItemToArray(cids, cJSON_CreateString(all[i]));
-    wf_blob_store_list_free(all, count);
+    metalbear_blob_store_list_free(all, count);
 
     cJSON_AddItemToObject(root, "cids", cids);
     size_t next = offset + taken;
@@ -1664,8 +1664,8 @@ static wf_status check_account_status(void *ctx,
     char **blob_cids = NULL;
     size_t blob_count = 0;
     if (metalbear_repo_store_get_stats(acct->repo, &stats) != WF_OK ||
-        wf_blob_store_list(acct->blobs, &blob_cids, &blob_count) != WF_OK) {
-        wf_blob_store_list_free(blob_cids, blob_count);
+        metalbear_blob_store_list(acct->blobs, &blob_cids, &blob_count) != WF_OK) {
+        metalbear_blob_store_list_free(blob_cids, blob_count);
         cJSON_Delete(root);
         free(rev);
         free(cid);
@@ -1673,7 +1673,7 @@ static wf_status check_account_status(void *ctx,
                                    "Could not inspect account storage");
         return WF_OK;
     }
-    wf_blob_store_list_free(blob_cids, blob_count);
+    metalbear_blob_store_list_free(blob_cids, blob_count);
     cJSON_AddNumberToObject(root, "repoBlocks", (double)stats.repo_blocks);
     cJSON_AddNumberToObject(root, "indexedRecords",
                             (double)stats.indexed_records);
@@ -2001,7 +2001,7 @@ static wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
                                     "failed to encode blob CID");
         return WF_OK;
     }
-    if (wf_blob_store_put(acct->blobs, cid_str, mime,
+    if (metalbear_blob_store_put(acct->blobs, cid_str, mime,
                            request->body, request->body_len) != WF_OK) {
         free(cid_str);
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -2053,7 +2053,7 @@ static wf_status get_blob(void *ctx, const wf_xrpc_request *request,
     unsigned char *data = NULL;
     size_t len = 0;
     char *mime = NULL;
-    wf_status s = wf_blob_store_get(acct->blobs,
+    wf_status s = metalbear_blob_store_get(acct->blobs,
                                     cid->valuestring, &data, &len, &mime);
     if (s == WF_ERR_NOT_FOUND) {
         wf_xrpc_response_set_error(response, 404, "BlobNotFound",

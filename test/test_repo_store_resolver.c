@@ -26,7 +26,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "metalbear/repo_store.h"
-#include "wolfram/blob_store.h"
+#include "metalbear/blob_store.h"
 #include "wolfram/xrpc.h"
 #include "wolfram/xrpc_server.h"
 #include "wolfram/repo/cid.h"
@@ -51,7 +51,7 @@
 typedef struct acct {
     const char   *did;
     metalbear_repo_store *repo;
-    wf_blob_store *blobs;
+    metalbear_blob_store *blobs;
     char          path[256];   /* file-backed repo store path (temp) */
 } acct_t;
 
@@ -79,7 +79,7 @@ static const char *did_from_req(const wf_xrpc_request *req) {
 
 static wf_status resolver(void *ctx, const wf_xrpc_request *req,
                           metalbear_repo_store **out_repo,
-                          wf_blob_store **out_blobs) {
+                          metalbear_blob_store **out_blobs) {
     registry_t *reg = (registry_t *)ctx;
     const char *did = did_from_req(req);
     if (!did) return WF_ERR_NOT_FOUND;
@@ -94,11 +94,11 @@ static wf_status resolver(void *ctx, const wf_xrpc_request *req,
 }
 
 static wf_status blob_resolver(void *ctx, const wf_xrpc_request *req,
-                               wf_repo_store **out_repo,
-                               wf_blob_store **out_blobs) {
+                               metalbear_repo_store **out_repo,
+                               metalbear_blob_store **out_blobs) {
     metalbear_repo_store *repo = NULL;
     wf_status status = resolver(ctx, req, &repo, out_blobs);
-    *out_repo = (wf_repo_store *)repo;
+    *out_repo = (metalbear_repo_store *)repo;
     return status;
 }
 
@@ -263,12 +263,12 @@ static int run(void) {
         if (s != WF_OK) {
             for (size_t j = 0; j < i; j++) {
                 metalbear_repo_store_free(accounts[j].repo);
-                wf_blob_store_free(accounts[j].blobs);
+                metalbear_blob_store_free(accounts[j].blobs);
                 unlink(accounts[j].path);
             }
             return failures + 1;
         }
-        accounts[i].blobs = wf_blob_store_new(NULL);
+        accounts[i].blobs = metalbear_blob_store_new(NULL);
         WF_CHECK(accounts[i].blobs != NULL);
     }
 
@@ -278,7 +278,7 @@ static int run(void) {
     wf_xrpc_server_set_auth_callback(server, auth_cb, NULL);
     WF_CHECK(metalbear_xrpc_server_register_pds_repo_resolver(
                  server, resolver, &reg) == WF_OK);
-    WF_CHECK(wf_xrpc_server_register_blob_store_resolver(
+    WF_CHECK(metalbear_xrpc_server_register_blob_store_resolver(
                   server, blob_resolver, &reg) == WF_OK);
 
     uint16_t port = wf_xrpc_server_port(server);
@@ -453,7 +453,7 @@ static int run(void) {
 cleanup:
     for (size_t i = 0; i < reg.n; i++) {
         if (accounts[i].repo) metalbear_repo_store_free(accounts[i].repo);
-        if (accounts[i].blobs) wf_blob_store_free(accounts[i].blobs);
+        if (accounts[i].blobs) metalbear_blob_store_free(accounts[i].blobs);
         unlink(accounts[i].path);
     }
     return failures;

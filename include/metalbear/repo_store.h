@@ -40,7 +40,7 @@
 #include "wolfram/xrpc_server.h"
 
 /* Forward declaration; the resolver may resolve a blob store per request. */
-typedef struct wf_blob_store wf_blob_store;
+typedef struct metalbear_blob_store metalbear_blob_store;
 
 #ifdef __cplusplus
 extern "C" {
@@ -336,7 +336,7 @@ wf_status metalbear_xrpc_server_register_pds_repo(wf_xrpc_server *server,
 typedef wf_status (*metalbear_xrpc_repo_resolver)(void *ctx,
                                            const wf_xrpc_request *req,
                                            metalbear_repo_store **out_repo,
-                                           wf_blob_store **out_blobs);
+                                           metalbear_blob_store **out_blobs);
 
 /**
  * Register the com.atproto.repo read/write route handlers on an XRPC
