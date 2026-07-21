@@ -297,10 +297,23 @@ wf_status metalbear_repo_store_export(metalbear_repo_store *store,
  * caller owns `*out_data` and frees it with free().
  */
 wf_status metalbear_repo_store_get_blocks(metalbear_repo_store *store,
-                                    const char *const *cids,
-                                    size_t cid_count,
-                                    unsigned char **out_data,
-                                    size_t *out_len);
+                                     const char *const *cids,
+                                     size_t cid_count,
+                                     unsigned char **out_data,
+                                     size_t *out_len);
+
+/**
+ * Fetch a single record as a CAR file rooted at the current commit.
+ *
+ * The returned CAR contains the commit block as root and the requested
+ * record block.  The caller owns `*out_data` and frees it with free().
+ * Returns WF_ERR_NOT_FOUND when the record does not exist.
+ */
+wf_status metalbear_repo_store_get_record_car(metalbear_repo_store *store,
+                                       const char *collection,
+                                       const char *rkey,
+                                       unsigned char **out_data,
+                                       size_t *out_len);
 
 /** Mint a service-auth JWT with the repository's persisted signing key. */
 wf_status metalbear_repo_store_create_service_auth(metalbear_repo_store *store,

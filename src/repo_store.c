@@ -1841,6 +1841,56 @@ wf_status metalbear_repo_store_get_blocks(metalbear_repo_store *s,
     return status;
 }
 
+wf_status metalbear_repo_store_get_record_car(metalbear_repo_store *s,
+                                       const char *collection,
+                                       const char *rkey,
+                                       unsigned char **out_data,
+                                       size_t *out_len) {
+    if (!s || !collection || !rkey || !out_data || !out_len)
+        return WF_ERR_INVALID_ARG;
+    *out_data = NULL;
+    *out_len = 0;
+    if (s->head.len == 0) return WF_ERR_NOT_FOUND;
+
+    /* Get the record CID. */
+    char *record_json = NULL;
+    char *record_cid_str = NULL;
+    wf_status status = metalbear_repo_store_get_record(s, collection, rkey,
+                                                       &record_json, &record_cid_str);
+    if (status != WF_OK) return status;
+    free(record_json);
+
+    /* Parse the record CID. */
+    wf_cid record_cid;
+    if (wf_cid_from_string(record_cid_str, &record_cid) != WF_OK) {
+        free(record_cid_str);
+        return WF_ERR_INTERNAL;
+    }
+    free(record_cid_str);
+
+    /* Find the record block in the CAR. */
+    wf_car_block *record_block = wf_car_find_block(&s->car, &record_cid);
+    if (!record_block) return WF_ERR_NOT_FOUND;
+
+    /* Build a CAR with the commit as root and the record block. */
+    wf_car out = {0};
+    out.roots = &s->head;
+    out.root_count = 1;
+
+    /* Add commit block. */
+    wf_car_block *commit_block = wf_car_find_block(&s->car, &s->head);
+    if (!commit_block) return WF_ERR_NOT_FOUND;
+    out.blocks = calloc(2, sizeof(*out.blocks));
+    if (!out.blocks) return WF_ERR_ALLOC;
+    out.blocks[0] = *commit_block;
+    out.blocks[1] = *record_block;
+    out.block_count = 2;
+
+    status = wf_car_write(&out, out_data, out_len);
+    free(out.blocks);
+    return status;
+}
+
 wf_status metalbear_repo_store_create_service_auth(metalbear_repo_store *s,
                                              const char *audience,
                                              int64_t expiration,
