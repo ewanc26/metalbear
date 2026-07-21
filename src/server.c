@@ -1,4 +1,8 @@
-#define _POSIX_C_SOURCE 200809L
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE
+#else
+#define _GNU_SOURCE
+#endif
 
 #include "metalbear/server.h"
 #include "metalbear/account.h"
@@ -34,6 +38,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#include <ftw.h>
 
 typedef enum metalbear_log_level {
     METALBEAR_LOG_DEBUG = 0,
@@ -88,6 +93,7 @@ struct metalbear_server {
     char *crawlers;           /* comma-separated relay hosts, may be NULL */
     bool invite_required;
     int64_t blob_upload_limit; /* 0 => unlimited */
+    char *plc_url;            /* PLC directory URL or NULL */
     metalbear_account_cache *account_cache;
 };
 
@@ -132,7 +138,9 @@ static bool is_admin_route(const char *nsid) {
            strcmp(nsid, "com.atproto.admin.updateAccountPassword") == 0 ||
            strcmp(nsid, "com.atproto.admin.enableAccountInvites") == 0 ||
            strcmp(nsid, "com.atproto.admin.disableAccountInvites") == 0 ||
-           strcmp(nsid, "com.atproto.admin.getInviteCodes") == 0;
+           strcmp(nsid, "com.atproto.admin.getInviteCodes") == 0 ||
+           strcmp(nsid, "com.atproto.admin.disableInviteCodes") == 0 ||
+           strcmp(nsid, "com.atproto.admin.deleteAccount") == 0;
 }
 
 /* Parse and verify the HTTP Basic credential against the configured admin
@@ -2452,6 +2460,7 @@ static wf_status admin_send_email(void *ctx,
 /* ---- Helper: build accountView JSON for admin endpoints ---- */
 static cJSON *build_account_view(metalbear_server *server,
                                  const metalbear_account_entry *entry) {
+    (void)server;
     cJSON *obj = cJSON_CreateObject();
     if (!obj) return NULL;
     cJSON_AddStringToObject(obj, "did", entry->did);
@@ -2743,6 +2752,111 @@ static wf_status admin_get_invite_codes(void *ctx,
     return set_json(response, root);
 }
 
+/* ---- com.atproto.admin.disableInviteCodes (procedure, admin-gated) ---- */
+static wf_status admin_disable_invite_codes(void *ctx,
+                                            const wf_xrpc_request *request,
+                                            wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *codes = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "codes") : NULL;
+    cJSON *accounts = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "accounts") : NULL;
+
+    size_t code_count = 0, account_count = 0;
+    const char **code_ptrs = NULL, **account_ptrs = NULL;
+
+    if (cJSON_IsArray(codes) && cJSON_GetArraySize(codes) > 0) {
+        code_count = cJSON_GetArraySize(codes);
+        code_ptrs = calloc(code_count, sizeof(*code_ptrs));
+        if (!code_ptrs) return WF_ERR_ALLOC;
+        for (size_t i = 0; i < code_count; i++) {
+            cJSON *item = cJSON_GetArrayItem(codes, i);
+            code_ptrs[i] = cJSON_IsString(item) ? item->valuestring : NULL;
+        }
+    }
+    if (cJSON_IsArray(accounts) && cJSON_GetArraySize(accounts) > 0) {
+        account_count = cJSON_GetArraySize(accounts);
+        account_ptrs = calloc(account_count, sizeof(*account_ptrs));
+        if (!account_ptrs) { free(code_ptrs); return WF_ERR_ALLOC; }
+        for (size_t i = 0; i < account_count; i++) {
+            cJSON *item = cJSON_GetArrayItem(accounts, i);
+            account_ptrs[i] = cJSON_IsString(item) ? item->valuestring : NULL;
+        }
+        for (size_t i = 0; i < account_count; i++) {
+            if (account_ptrs[i] && strcmp(account_ptrs[i], "admin") == 0) {
+                free(code_ptrs);
+                free(account_ptrs);
+                wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                            "cannot disable admin invite codes");
+                return WF_OK;
+            }
+        }
+    }
+
+    wf_status status = metalbear_account_registry_disable_invite_codes(
+        server->registry, code_ptrs, code_count, account_ptrs, account_count);
+    free(code_ptrs);
+    free(account_ptrs);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    cJSON_AddBoolToObject(root, "disabled", status == WF_OK);
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.admin.deleteAccount (procedure, admin-gated) ---- */
+static int rmtree_remove_cb(const char *path, const struct stat *sb,
+                            int type, struct FTW *ftwbuf) {
+    (void)sb; (void)type; (void)ftwbuf;
+    return remove(path);
+}
+static void rmtree(const char *path) {
+    nftw(path, rmtree_remove_cb, 64, FTW_DEPTH | FTW_PHYS);
+}
+
+static wf_status admin_delete_account(void *ctx,
+                                     const wf_xrpc_request *request,
+                                     wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
+    if (!cJSON_IsString(did) || !did->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "did is required");
+        return WF_OK;
+    }
+    metalbear_account_entry *entry = NULL;
+    if (metalbear_account_registry_find_by_did(
+            server->registry, did->valuestring, &entry) != WF_OK || !entry) {
+        wf_xrpc_response_set_error(response, 404, "AccountNotFound",
+                                    "account is not hosted here");
+        return WF_OK;
+    }
+
+    char *data_dir = strdup(entry->data_directory);
+    metalbear_account_entry_free(entry);
+    if (!data_dir) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                    "could not copy data directory");
+        return WF_OK;
+    }
+
+    metalbear_account_registry_remove(server->registry, did->valuestring);
+
+    metalbear_account_context *acct = context_for_did(server, did->valuestring);
+    if (acct) {
+        metalbear_sequencer_account_status(
+            acct->sequencer, did->valuestring, 0, "deleted");
+    }
+
+    rmtree(data_dir);
+    free(data_dir);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    return set_json(response, root);
+}
+
 /* ---- com.atproto.sync.requestCrawl (procedure, public) ----
  * Mirrors refpds `pdsadmin request-crawl`: forward the request body to
  * each configured crawler/relay (METALBEAR_CRAWLERS). When no crawlers
@@ -3029,6 +3143,8 @@ static bool copy_config(metalbear_server *server,
         server->crawlers = strdup(config->crawlers);
     server->invite_required = config->invite_required;
     server->blob_upload_limit = config->blob_upload_limit;
+    if (config->plc_url && config->plc_url[0])
+        server->plc_url = strdup(config->plc_url);
     return server->service_did && (!config->public_url || server->public_url) &&
            server->user_domain && server->data_directory;
 }
@@ -3136,7 +3252,7 @@ static wf_status landing_handler(void *ctx, const wf_xrpc_request *req,
             "<title>MetalBear — hosted accounts</title>\n"
             "</head>\n"
             "<body>\n"
-            "<h1>MetalBear</h1>\n"
+            "<h1>MetalBear " METALBEAR_VERSION "</h1>\n"
             "<p>An AT Protocol Personal Data Server built on Wolfram. "
             "The XRPC API lives under <code>/xrpc/</code>. Identity "
             "documents are published at "
@@ -3516,6 +3632,12 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.admin.getInviteCodes",
             admin_get_invite_codes, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.admin.disableInviteCodes",
+            admin_disable_invite_codes, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.admin.deleteAccount",
+            admin_delete_account, server) != WF_OK ||
         /* Public crawl declaration (refpds PDS_CRAWLERS) */
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.sync.requestCrawl",
@@ -3587,5 +3709,6 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->account_email);
     free(server->admin_password);
     free(server->crawlers);
+    free(server->plc_url);
     free(server);
 }

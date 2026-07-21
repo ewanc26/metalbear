@@ -45,7 +45,7 @@ RUN cmake -S MetalBear -B build \
     && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)"
 
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update     && apt-get install -y --no-install-recommends \
         ca-certificates \
         libsqlite3-0 \
         libcurl4 \
@@ -56,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libc-ares2 \
         libidn2-0 \
         zlib1g \
+        wget \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/build/metalbear /usr/local/bin/metalbear

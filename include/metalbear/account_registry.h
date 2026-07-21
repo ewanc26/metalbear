@@ -104,6 +104,14 @@ wf_status metalbear_account_registry_get_invite_codes(
     const char *did,
     metalbear_invite_code_entry **out, size_t *out_count);
 
+/* Disable invite codes by exact code string or by account. Pass an array of
+ *  codes and/or accounts; both may be NULL/empty. Returns WF_OK when at least
+ *  one row was touched, WF_ERR_NOT_FOUND when nothing matched. */
+wf_status metalbear_account_registry_disable_invite_codes(
+    metalbear_account_registry *registry,
+    const char **codes, size_t code_count,
+    const char **accounts, size_t account_count);
+
 void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
                                        size_t count);
 
