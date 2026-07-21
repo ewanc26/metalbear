@@ -1,7 +1,10 @@
 # MetalBear
 
 MetalBear is an AT Protocol Personal Data Server written in C and built on
-[Wolfram](../wolfram). It provides a runnable single-account PDS foundation:
+[Wolfram](../wolfram). It provides a runnable PDS foundation with multi-account
+hosting, admin tooling, and a dynamic landing page.
+
+**Version:** 0.2.0
 
 ## Core Features
 
@@ -25,7 +28,7 @@ MetalBear is an AT Protocol Personal Data Server written in C and built on
 - `com.atproto.identity.resolveHandle`, `/.well-known/atproto-did` handle
   resolution, and a `did:web` service document
 - `com.atproto.identity.updateHandle` (constrained to the configured user
-  domain for this single-account PDS) and
+  domain) and
   `com.atproto.identity.getRecommendedDidCredentials` exposing the account's
   signing key, rotation keys, alsoKnownAs, and PDS service endpoint
 - durable account deactivation/reactivation with repository availability,
@@ -38,6 +41,24 @@ MetalBear is an AT Protocol Personal Data Server written in C and built on
   single-account invite codes
 - session/account responses carrying the lexicon `emailAuthFactor` flag
 - durable SQLite-backed signed repositories and file-backed blob upload/serving
+
+## Admin Endpoints
+
+Admin-gated `com.atproto.admin.*` procedures require HTTP Basic auth with the
+configured admin password:
+
+- `com.atproto.admin.getAccountInfo` — resolve DID to handle/email/active state
+- `com.atproto.admin.sendEmail` — send templated email to an account
+- `com.atproto.admin.getInviteCodes` — list invite codes with account/use metadata
+- `com.atproto.admin.disableInviteCodes` — disable invite codes by exact code or
+  by account; rejects attempts to disable the bootstrap admin account
+- `com.atproto.admin.deleteAccount` — permanently remove an account, its data
+  directory, and its registry entry
+- `com.atproto.admin.updateSubjectStatus` — apply takedown, deactivation, or
+  reactivation status to a repo, record, or blob subject
+- `com.atproto.admin.updateAccountPassword` — reset an account password (admin)
+- `com.atproto.admin.enableAccountInvites` / `disableAccountInvites` — toggle
+  whether an account may create invite codes
 
 ## OAuth Authorization Server
 
@@ -92,16 +113,28 @@ Automatic pruning of old firehose events:
 - `metalbear_key_rotation_rotate()` for safe key rotation
 - Keys survive daemon restarts
 
+## Admin CLI
+
+The `pdsadmin/metalbear-admin.sh` script mirrors the reference PDS admin tooling:
+
+```sh
+./pdsadmin/metalbear-admin.sh account list
+./pdsadmin/metalbear-admin.sh account create alice@example.com alice.example.com
+./pdsadmin/metalbear-admin.sh account delete did:plc:...
+./pdsadmin/metalbear-admin.sh account takedown did:plc:...
+./pdsadmin/metalbear-admin.sh account untakedown did:plc:...
+./pdsadmin/metalbear-admin.sh account reset-password did:plc:...
+./pdsadmin/metalbear-admin.sh create-invite-code [useCount]
+./pdsadmin/metalbear-admin.sh request-crawl [RELAY HOST,...]
+```
+
 ## Operational
 
 - Per-IP token-bucket rate limiting (100 requests/60 seconds default)
 - Configurable listen address and port
 - Optional email notifications for account operations
 - Automatic firehose event retention
-
-This is not yet a production-complete PDS. DID document publication via PLC,
-TLS termination, and operational hardening (logging, metrics, monitoring)
-remain to be implemented.
+- Dynamic landing page at `/` listing hosted accounts and version
 
 ## Build and test
 
@@ -172,3 +205,9 @@ a per-installation HS256 secret. The configured account password is only used
 to bootstrap the durable scrypt verifier. Bind to loopback or place MetalBear
 behind a TLS reverse proxy; do not expose this milestone directly to the public
 internet.
+
+## Status
+
+This is not yet a production-complete PDS. PLC DID document publication, TLS
+termination, and operational hardening (logging, metrics, monitoring) remain to
+be implemented.
