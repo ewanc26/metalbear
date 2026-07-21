@@ -59,6 +59,7 @@ int main(void) {
         .account_email = getenv("METALBEAR_ACCOUNT_EMAIL"),
         .admin_password = getenv("METALBEAR_ADMIN_PASSWORD"),
         .crawlers = getenv("METALBEAR_CRAWLERS"),
+        .plc_url = getenv("METALBEAR_PLC_URL"),
         .invite_required = false,
         .blob_upload_limit = 0,
     };

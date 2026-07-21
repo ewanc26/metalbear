@@ -599,7 +599,118 @@ int main(void) {
         cJSON_Delete(json);
         wf_response_free(&response);
     }
-    wf_xrpc_client_set_auth(client, access_token);
+    /* === com.atproto.admin.disableInviteCodes (admin-gated) === */
+    {
+        char admin_hdr[160];
+        char right[64];
+        int rn = snprintf(right, sizeof(right), "admin:%s", "secret-admin");
+        char right_b64[128];
+        int rlen = EVP_EncodeBlock((unsigned char *)right_b64,
+                                    (const unsigned char *)right, rn);
+        right_b64[rlen] = '\0';
+        snprintf(admin_hdr, sizeof(admin_hdr), "Basic %s", right_b64);
+
+        /* Create invite codes for bob so we have something to disable. */
+        wf_xrpc_client_set_auth(client, access_token);
+        CHECK(wf_xrpc_procedure(client,
+            "com.atproto.server.createInviteCodes",
+            "{\"codeCount\":2,\"useCount\":1,\"forAccounts\":[\"bob\"]}",
+            &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        cJSON *codes_arr = cJSON_GetObjectItemCaseSensitive(json, "codes");
+        cJSON *bob_codes = cJSON_GetArrayItem(codes_arr, 0);
+        cJSON *bob_code_list = cJSON_GetObjectItemCaseSensitive(bob_codes, "codes");
+        cJSON *first_code = cJSON_GetArrayItem(bob_code_list, 0);
+        char *code_to_disable = cJSON_IsString(first_code)
+            ? strdup(first_code->valuestring) : NULL;
+        cJSON_Delete(json);
+        wf_response_free(&response);
+        CHECK(code_to_disable != NULL);
+
+        /* Disable by exact code string. */
+        char disable_body[512];
+        snprintf(disable_body, sizeof(disable_body),
+            "{\"codes\":[\"%s\"]}", code_to_disable);
+        wf_http_header hdr = {"Authorization", admin_hdr};
+        char disable_url[256];
+        snprintf(disable_url, sizeof(disable_url),
+            "%s/xrpc/com.atproto.admin.disableInviteCodes", base);
+        CHECK(wf_http_post(client, disable_url, "application/json",
+                           disable_body, &hdr, 1, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "disabled")));
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* Disable by account should also work. */
+        snprintf(disable_body, sizeof(disable_body),
+            "{\"accounts\":[\"bob\"]}");
+        CHECK(wf_http_post(client, disable_url, "application/json",
+                           disable_body, &hdr, 1, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "disabled")));
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* Cannot disable admin codes. */
+        snprintf(disable_body, sizeof(disable_body),
+            "{\"accounts\":[\"admin\"]}");
+        CHECK(wf_http_post(client, disable_url, "application/json",
+                           disable_body, &hdr, 1, &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        wf_response_free(&response);
+
+        free(code_to_disable);
+        wf_xrpc_client_set_auth(client, access_token);
+    }
+
+    /* === com.atproto.admin.deleteAccount (admin-gated) === */
+    {
+        char admin_hdr[160];
+        char right[64];
+        int rn = snprintf(right, sizeof(right), "admin:%s", "secret-admin");
+        char right_b64[128];
+        int rlen = EVP_EncodeBlock((unsigned char *)right_b64,
+                                    (const unsigned char *)right, rn);
+        right_b64[rlen] = '\0';
+        snprintf(admin_hdr, sizeof(admin_hdr), "Basic %s", right_b64);
+
+        /* Create a throwaway account to delete. */
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
+            "{\"handle\":\"charlie.example.com\",\"password\":\"charliepw\","
+            "\"did\":\"did:plc:charlie\"}",
+            &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON_Delete(json_response(&response));
+        wf_response_free(&response);
+
+        /* Admin delete the account. */
+        char del_body[256];
+        snprintf(del_body, sizeof(del_body),
+            "{\"did\":\"did:plc:charlie\"}");
+        wf_http_header hdr = {"Authorization", admin_hdr};
+        char del_url[256];
+        snprintf(del_url, sizeof(del_url),
+            "%s/xrpc/com.atproto.admin.deleteAccount", base);
+        CHECK(wf_http_post(client, del_url, "application/json",
+                           del_body, &hdr, 1, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON_Delete(json_response(&response));
+        wf_response_free(&response);
+
+        /* Account should no longer be resolvable. */
+        wf_xrpc_client_set_auth(client, NULL);
+        CHECK(wf_xrpc_query_params(client, "com.atproto.identity.resolveHandle",
+            (wf_xrpc_param[]){{"handle", "charlie.example.com"}}, 1,
+            &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        wf_response_free(&response);
+
+        wf_xrpc_client_set_auth(client, access_token);
+    }
 
     /* getRecommendedDidCredentials: auth-required, lexicon-shaped output */
     CHECK(wf_xrpc_query(client,

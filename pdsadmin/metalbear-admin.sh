@@ -117,6 +117,132 @@ if [[ "${COMMAND}" == "account" ]]; then
     echo "Save this password, it will not be displayed again."
     echo
 
+  elif [[ "${SUBCOMMAND}" == "delete" ]]; then
+    DID="${2:-}"
+
+    if [[ "${DID}" == "" ]]; then
+      echo "ERROR: missing DID parameter." >/dev/stderr
+      echo "Usage: $0 account delete <DID>" >/dev/stderr
+      exit 1
+    fi
+
+    if [[ "${DID}" != did:* ]]; then
+      echo "ERROR: DID parameter must start with \"did:\"." >/dev/stderr
+      echo "Usage: $0 account delete <DID>" >/dev/stderr
+      exit 1
+    fi
+
+    echo "This action is permanent."
+    read -r -p "Are you sure you'd like to delete ${DID}? [y/N] " response
+    if [[ ! "${response}" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+      exit 0
+    fi
+
+    curl_cmd_post \
+      --user "admin:${METALBEAR_ADMIN_PASSWORD}" \
+      --data "{\"did\": \"${DID}\"}" \
+      "https://${METALBEAR_HOSTNAME}/xrpc/com.atproto.admin.deleteAccount" >/dev/null
+
+    echo "${DID} deleted"
+
+  elif [[ "${SUBCOMMAND}" == "takedown" ]]; then
+    DID="${2:-}"
+    TAKEDOWN_REF="$(date +%s)"
+
+    if [[ "${DID}" == "" ]]; then
+      echo "ERROR: missing DID parameter." >/dev/stderr
+      echo "Usage: $0 account takedown <DID>" >/dev/stderr
+      exit 1
+    fi
+
+    if [[ "${DID}" != did:* ]]; then
+      echo "ERROR: DID parameter must start with \"did:\"." >/dev/stderr
+      echo "Usage: $0 account takedown <DID>" >/dev/stderr
+      exit 1
+    fi
+
+    PAYLOAD="$(cat <<EOF
+    {
+      "subject": {
+        "\$type": "com.atproto.admin.defs#repoRef",
+        "did": "${DID}"
+      },
+      "takedown": {
+        "applied": true,
+        "ref": "${TAKEDOWN_REF}"
+      }
+    }
+EOF
+  )"
+
+    curl_cmd_post \
+      --user "admin:${METALBEAR_ADMIN_PASSWORD}" \
+      --data "${PAYLOAD}" \
+      "https://${METALBEAR_HOSTNAME}/xrpc/com.atproto.admin.updateSubjectStatus" >/dev/null
+
+    echo "${DID} taken down"
+
+  elif [[ "${SUBCOMMAND}" == "untakedown" ]]; then
+    DID="${2:-}"
+
+    if [[ "${DID}" == "" ]]; then
+      echo "ERROR: missing DID parameter." >/dev/stderr
+      echo "Usage: $0 account untakedown <DID>" >/dev/stderr
+      exit 1
+    fi
+
+    if [[ "${DID}" != did:* ]]; then
+      echo "ERROR: DID parameter must start with \"did:\"." >/dev/stderr
+      echo "Usage: $0 account untakedown <DID>" >/dev/stderr
+      exit 1
+    fi
+
+    PAYLOAD=$(cat <<EOF
+    {
+      "subject": {
+        "\$type": "com.atproto.admin.defs#repoRef",
+        "did": "${DID}"
+      },
+      "takedown": {
+        "applied": false
+      }
+    }
+EOF
+  )
+
+    curl_cmd_post \
+      --user "admin:${METALBEAR_ADMIN_PASSWORD}" \
+      --data "${PAYLOAD}" \
+      "https://${METALBEAR_HOSTNAME}/xrpc/com.atproto.admin.updateSubjectStatus" >/dev/null
+
+    echo "${DID} untaken down"
+
+  elif [[ "${SUBCOMMAND}" == "reset-password" ]]; then
+    DID="${2:-}"
+    PASSWORD="$(openssl rand -base64 30 | tr -d "=+/" | cut -c1-24)"
+
+    if [[ "${DID}" == "" ]]; then
+      echo "ERROR: missing DID parameter." >/dev/stderr
+      echo "Usage: $0 account reset-password <DID>" >/dev/stderr
+      exit 1
+    fi
+
+    if [[ "${DID}" != did:* ]]; then
+      echo "ERROR: DID parameter must start with \"did:\"." >/dev/stderr
+      echo "Usage: $0 account reset-password <DID>" >/dev/stderr
+      exit 1
+    fi
+
+    curl_cmd_post \
+      --user "admin:${METALBEAR_ADMIN_PASSWORD}" \
+      --data "{ \"did\": \"${DID}\", \"password\": \"${PASSWORD}\" }" \
+      "https://${METALBEAR_HOSTNAME}/xrpc/com.atproto.admin.updateAccountPassword" >/dev/null
+
+    echo
+    echo "Password reset for ${DID}"
+    echo "New password: ${PASSWORD}"
+    echo
+
   else
     echo "Unknown subcommand: account ${SUBCOMMAND}" >/dev/stderr
     exit 1
@@ -172,6 +298,10 @@ MetalBear admin CLI (mirrors refpds `pdsadmin`)
 Usage:
   metalbear-admin account list
   metalbear-admin account create <EMAIL> <HANDLE>
+  metalbear-admin account delete <DID>
+  metalbear-admin account takedown <DID>
+  metalbear-admin account untakedown <DID>
+  metalbear-admin account reset-password <DID>
   metalbear-admin create-invite-code [useCount]
   metalbear-admin request-crawl [RELAY HOST,...]
 
