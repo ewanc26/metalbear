@@ -123,9 +123,16 @@ static bool is_public_route(const char *nsid) {
  * `admin:<METALBEAR_ADMIN_PASSWORD>`. */
 static bool is_admin_route(const char *nsid) {
     return strcmp(nsid, "com.atproto.admin.getAccountInfo") == 0 ||
+           strcmp(nsid, "com.atproto.admin.getAccountInfos") == 0 ||
            strcmp(nsid, "com.atproto.admin.getSubjectStatus") == 0 ||
            strcmp(nsid, "com.atproto.admin.updateSubjectStatus") == 0 ||
-           strcmp(nsid, "com.atproto.admin.sendEmail") == 0;
+           strcmp(nsid, "com.atproto.admin.sendEmail") == 0 ||
+           strcmp(nsid, "com.atproto.admin.updateAccountHandle") == 0 ||
+           strcmp(nsid, "com.atproto.admin.updateAccountEmail") == 0 ||
+           strcmp(nsid, "com.atproto.admin.updateAccountPassword") == 0 ||
+           strcmp(nsid, "com.atproto.admin.enableAccountInvites") == 0 ||
+           strcmp(nsid, "com.atproto.admin.disableAccountInvites") == 0 ||
+           strcmp(nsid, "com.atproto.admin.getInviteCodes") == 0;
 }
 
 /* Parse and verify the HTTP Basic credential against the configured admin
@@ -2228,6 +2235,300 @@ static wf_status admin_send_email(void *ctx,
     return set_json(response, root);
 }
 
+/* ---- Helper: build accountView JSON for admin endpoints ---- */
+static cJSON *build_account_view(metalbear_server *server,
+                                 const metalbear_account_entry *entry) {
+    cJSON *obj = cJSON_CreateObject();
+    if (!obj) return NULL;
+    cJSON_AddStringToObject(obj, "did", entry->did);
+    cJSON_AddStringToObject(obj, "handle", entry->handle);
+    cJSON_AddBoolToObject(obj, "active", entry->active != 0);
+    char *acct_path = join_path(entry->data_directory, "account.sqlite3");
+    if (acct_path) {
+        metalbear_account_store *acct = NULL;
+        if (metalbear_account_store_open(acct_path, "", &acct) == WF_OK) {
+            char *email = NULL;
+            int confirmed = 0;
+            if (metalbear_account_get_email(acct, &email, &confirmed) == WF_OK
+                && email && email[0]) {
+                cJSON_AddStringToObject(obj, "email", email);
+                if (confirmed) {
+                    char indexed_at[32];
+                    iso_now(indexed_at, sizeof(indexed_at));
+                    cJSON_AddStringToObject(obj, "emailConfirmedAt", indexed_at);
+                }
+            }
+            free(email);
+            metalbear_account_store_free(acct);
+        }
+        free(acct_path);
+    }
+    char indexed_at[32];
+    iso_now(indexed_at, sizeof(indexed_at));
+    cJSON_AddStringToObject(obj, "indexedAt", indexed_at);
+    return obj;
+}
+
+/* ---- com.atproto.admin.getAccountInfos (query, admin-gated) ---- */
+static wf_status admin_get_account_infos(void *ctx,
+                                          const wf_xrpc_request *request,
+                                          wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *dids = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "dids") : NULL;
+    if (!cJSON_IsArray(dids) || cJSON_GetArraySize(dids) == 0) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "dids array is required");
+        return WF_OK;
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON *infos = cJSON_CreateArray();
+    if (!root || !infos) { cJSON_Delete(root); cJSON_Delete(infos); return WF_ERR_ALLOC; }
+    size_t n = cJSON_GetArraySize(dids);
+    for (size_t i = 0; i < n; i++) {
+        cJSON *item = cJSON_GetArrayItem(dids, i);
+        if (!cJSON_IsString(item) || !item->valuestring[0]) continue;
+        metalbear_account_entry *entry = NULL;
+        if (metalbear_account_registry_find_by_did(
+                server->registry, item->valuestring, &entry) != WF_OK || !entry)
+            continue;
+        cJSON *view = build_account_view(server, entry);
+        metalbear_account_entry_free(entry);
+        if (view) cJSON_AddItemToArray(infos, view);
+    }
+    cJSON_AddItemToObject(root, "infos", infos);
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.admin.updateAccountHandle (procedure, admin-gated) ---- */
+static wf_status admin_update_account_handle(void *ctx,
+                                              const wf_xrpc_request *request,
+                                              wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
+    cJSON *handle = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "handle") : NULL;
+    if (!cJSON_IsString(did) || !did->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "did is required");
+        return WF_OK;
+    }
+    if (!cJSON_IsString(handle) || !handle->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "handle is required");
+        return WF_OK;
+    }
+    /* Check handle is not already taken by another account. */
+    metalbear_account_entry *existing = NULL;
+    if (metalbear_account_registry_find_by_handle(
+            server->registry, handle->valuestring, &existing) == WF_OK) {
+        bool conflict = existing && strcmp(existing->did, did->valuestring) != 0;
+        metalbear_account_entry_free(existing);
+        if (conflict) {
+            wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
+                                       "Handle is already taken");
+            return WF_OK;
+        }
+    }
+    /* Update the registry. */
+    if (metalbear_account_registry_update_handle(
+            server->registry, did->valuestring, handle->valuestring) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not update handle");
+        return WF_OK;
+    }
+    /* Update the account context if open. */
+    metalbear_account_context *acct = context_for_did(server, did->valuestring);
+    if (acct) {
+        metalbear_repo_store_set_handle(acct->repo, handle->valuestring);
+        free(acct->handle);
+        acct->handle = strdup(handle->valuestring);
+    }
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.admin.updateAccountEmail (procedure, admin-gated) ---- */
+static wf_status admin_update_account_email(void *ctx,
+                                             const wf_xrpc_request *request,
+                                             wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *account = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "account") : NULL;
+    cJSON *email = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "email") : NULL;
+    if (!cJSON_IsString(account) || !account->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "account (DID or handle) is required");
+        return WF_OK;
+    }
+    if (!cJSON_IsString(email) || !email->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "email is required");
+        return WF_OK;
+    }
+    /* Resolve to DID. */
+    metalbear_account_entry *entry = NULL;
+    wf_status lookup = metalbear_account_registry_find_by_did(
+        server->registry, account->valuestring, &entry);
+    if (lookup != WF_OK || !entry) {
+        lookup = metalbear_account_registry_find_by_handle(
+            server->registry, account->valuestring, &entry);
+    }
+    if (lookup != WF_OK || !entry) {
+        wf_xrpc_response_set_error(response, 404, "AccountNotFound",
+                                   "Account not found");
+        return WF_OK;
+    }
+    char *acct_path = join_path(entry->data_directory, "account.sqlite3");
+    metalbear_account_entry_free(entry);
+    if (!acct_path) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Internal error");
+        return WF_OK;
+    }
+    metalbear_account_store *acct = NULL;
+    wf_status status = metalbear_account_store_open(acct_path, "", &acct);
+    free(acct_path);
+    if (status != WF_OK || !acct) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not open account store");
+        return WF_OK;
+    }
+    metalbear_account_store_email(acct, email->valuestring);
+    metalbear_account_store_free(acct);
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.admin.updateAccountPassword (procedure, admin-gated) ---- */
+static wf_status admin_update_account_password(void *ctx,
+                                                const wf_xrpc_request *request,
+                                                wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
+    cJSON *password = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "password") : NULL;
+    if (!cJSON_IsString(did) || !did->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "did is required");
+        return WF_OK;
+    }
+    if (!cJSON_IsString(password) || !password->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "password is required");
+        return WF_OK;
+    }
+    metalbear_account_entry *entry = NULL;
+    if (metalbear_account_registry_find_by_did(
+            server->registry, did->valuestring, &entry) != WF_OK || !entry) {
+        wf_xrpc_response_set_error(response, 404, "AccountNotFound",
+                                   "Account not found");
+        return WF_OK;
+    }
+    char *acct_path = join_path(entry->data_directory, "account.sqlite3");
+    metalbear_account_entry_free(entry);
+    if (!acct_path) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Internal error");
+        return WF_OK;
+    }
+    metalbear_account_store *acct = NULL;
+    wf_status status = metalbear_account_store_open(acct_path, "", &acct);
+    free(acct_path);
+    if (status != WF_OK || !acct) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not open account store");
+        return WF_OK;
+    }
+    metalbear_account_reset_password(acct, password->valuestring);
+    metalbear_account_store_free(acct);
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.admin.enableAccountInvites (procedure, admin-gated) ---- */
+static wf_status admin_enable_account_invites(void *ctx,
+                                               const wf_xrpc_request *request,
+                                               wf_xrpc_response *response) {
+    (void)ctx; (void)request;
+    /* For now, this is a no-op stub. MetalBear does not yet track per-account
+     * invite enablement. Return success for protocol compatibility. */
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.admin.disableAccountInvites (procedure, admin-gated) ---- */
+static wf_status admin_disable_account_invites(void *ctx,
+                                                const wf_xrpc_request *request,
+                                                wf_xrpc_response *response) {
+    (void)ctx; (void)request;
+    /* Stub: same as enable — no per-account invite tracking yet. */
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.admin.getInviteCodes (query, admin-gated) ---- */
+static wf_status admin_get_invite_codes(void *ctx,
+                                         const wf_xrpc_request *request,
+                                         wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *limit_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "limit") : NULL;
+    int limit = 100;
+    if (cJSON_IsNumber(limit_param)) {
+        limit = (int)limit_param->valuedouble;
+        if (limit < 1) limit = 1;
+        if (limit > 500) limit = 500;
+    }
+    /* Enumerate all accounts and collect their invite codes. */
+    metalbear_account_entry *entries = NULL;
+    size_t count = 0;
+    if (metalbear_account_registry_list(server->registry, &entries,
+                                         &count) != WF_OK) {
+        entries = NULL;
+        count = 0;
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON *codes = cJSON_CreateArray();
+    if (!root || !codes) {
+        cJSON_Delete(root); cJSON_Delete(codes);
+        metalbear_account_entries_free(entries, count);
+        return WF_ERR_ALLOC;
+    }
+    int taken = 0;
+    for (size_t i = 0; i < count && taken < limit; i++) {
+        metalbear_invite_code_entry *icode_entries = NULL;
+        size_t icode_count = 0;
+        if (metalbear_account_registry_get_invite_codes(
+                server->registry, entries[i].did,
+                &icode_entries, &icode_count) != WF_OK)
+            continue;
+        for (size_t j = 0; j < icode_count && taken < limit; j++) {
+            cJSON *obj = cJSON_CreateObject();
+            if (!obj) continue;
+            cJSON_AddStringToObject(obj, "code", icode_entries[j].code);
+            cJSON_AddStringToObject(obj, "availableBy", entries[i].handle);
+            cJSON_AddNumberToObject(obj, "uses", icode_entries[j].uses_remaining);
+            cJSON_AddBoolToObject(obj, "disabled", icode_entries[j].disabled != 0);
+            cJSON_AddStringToObject(obj, "createdAt", icode_entries[j].created_at);
+            cJSON_AddItemToArray(codes, obj);
+            taken++;
+        }
+        metalbear_invite_code_entries_free(icode_entries, icode_count);
+    }
+    metalbear_account_entries_free(entries, count);
+    cJSON_AddItemToObject(root, "codes", codes);
+    return set_json(response, root);
+}
+
 /* ---- com.atproto.sync.requestCrawl (procedure, public) ----
  * Mirrors refpds `pdsadmin request-crawl`: forward the request body to
  * each configured crawler/relay (METALBEAR_CRAWLERS). When no crawlers
@@ -2971,6 +3272,27 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.admin.sendEmail",
             admin_send_email, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.admin.getAccountInfos",
+            admin_get_account_infos, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.admin.updateAccountHandle",
+            admin_update_account_handle, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.admin.updateAccountEmail",
+            admin_update_account_email, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.admin.updateAccountPassword",
+            admin_update_account_password, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.admin.enableAccountInvites",
+            admin_enable_account_invites, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.admin.disableAccountInvites",
+            admin_disable_account_invites, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.admin.getInviteCodes",
+            admin_get_invite_codes, server) != WF_OK ||
         /* Public crawl declaration (refpds PDS_CRAWLERS) */
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.sync.requestCrawl",
