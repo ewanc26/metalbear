@@ -121,7 +121,10 @@ static bool is_public_route(const char *nsid) {
 /* Admin endpoints (refpds model): gated behind HTTP Basic
  * `admin:<METALBEAR_ADMIN_PASSWORD>`. */
 static bool is_admin_route(const char *nsid) {
-    return strcmp(nsid, "com.atproto.admin.getAccountInfo") == 0;
+    return strcmp(nsid, "com.atproto.admin.getAccountInfo") == 0 ||
+           strcmp(nsid, "com.atproto.admin.getSubjectStatus") == 0 ||
+           strcmp(nsid, "com.atproto.admin.updateSubjectStatus") == 0 ||
+           strcmp(nsid, "com.atproto.admin.sendEmail") == 0;
 }
 
 /* Parse and verify the HTTP Basic credential against the configured admin
@@ -1926,6 +1929,254 @@ static wf_status admin_get_account_info(void *ctx,
     return set_json(response, root);
 }
 
+/* ---- com.atproto.admin.getSubjectStatus (query, admin-gated) ---- */
+static wf_status admin_get_subject_status(void *ctx,
+                                           const wf_xrpc_request *request,
+                                           wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
+    cJSON *uri_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "uri") : NULL;
+    cJSON *blob_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "blob") : NULL;
+    const char *did = cJSON_IsString(did_param) ? did_param->valuestring : NULL;
+    const char *uri = cJSON_IsString(uri_param) ? uri_param->valuestring : NULL;
+    const char *blob = cJSON_IsString(blob_param) ? blob_param->valuestring : NULL;
+    if (!did && !uri && !blob) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "at least one of did, uri, or blob is required");
+        return WF_OK;
+    }
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+
+    /* Build subject union. */
+    cJSON *subject = cJSON_CreateObject();
+    if (!subject) { cJSON_Delete(root); return WF_ERR_ALLOC; }
+    if (did) {
+        cJSON_AddStringToObject(subject, "$type",
+                                "com.atproto.admin.defs#repoRef");
+        cJSON_AddStringToObject(subject, "did", did);
+    } else if (uri) {
+        cJSON_AddStringToObject(subject, "$type",
+                                "com.atproto.repo.strongRef");
+        cJSON_AddStringToObject(subject, "uri", uri);
+    } else {
+        cJSON_AddStringToObject(subject, "$type",
+                                "com.atproto.admin.defs#repoBlobRef");
+        /* repoBlobRef requires did+cid; extract from blob CID or require did. */
+        cJSON_AddStringToObject(subject, "did", did ? did : "");
+        cJSON_AddStringToObject(subject, "cid", blob);
+    }
+    cJSON_AddItemToObject(root, "subject", subject);
+
+    /* Check takedown status. */
+    char *takedown_ref = NULL;
+    if (metalbear_account_registry_get_takedown(
+            server->registry, did, uri, blob, &takedown_ref) == WF_OK &&
+        takedown_ref) {
+        cJSON *td = cJSON_CreateObject();
+        if (td) {
+            cJSON_AddBoolToObject(td, "applied", true);
+            cJSON_AddStringToObject(td, "ref", takedown_ref);
+            cJSON_AddItemToObject(root, "takedown", td);
+        }
+        free(takedown_ref);
+    }
+
+    /* Check deactivation status (accounts only). */
+    if (did) {
+        metalbear_account_entry *entry = NULL;
+        if (metalbear_account_registry_find_by_did(
+                server->registry, did, &entry) == WF_OK && entry) {
+            if (!entry->active) {
+                cJSON *deact = cJSON_CreateObject();
+                if (deact) {
+                    cJSON_AddBoolToObject(deact, "applied", true);
+                    cJSON_AddItemToObject(root, "deactivated", deact);
+                }
+            }
+            metalbear_account_entry_free(entry);
+        }
+    }
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.admin.updateSubjectStatus (procedure, admin-gated) ---- */
+static wf_status admin_update_subject_status(void *ctx,
+                                              const wf_xrpc_request *request,
+                                              wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *subject = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "subject") : NULL;
+    if (!subject) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "subject is required");
+        return WF_OK;
+    }
+    cJSON *type = cJSON_GetObjectItemCaseSensitive(subject, "$type");
+    const char *type_str = cJSON_IsString(type) ? type->valuestring : NULL;
+    cJSON *takedown = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "takedown") : NULL;
+    cJSON *deactivated = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "deactivated")
+        : NULL;
+
+    const char *did = NULL, *uri = NULL, *blob_cid = NULL;
+    char did_buf[256] = {0}, uri_buf[1024] = {0}, blob_buf[128] = {0};
+
+    if (type_str && strcmp(type_str, "com.atproto.admin.defs#repoRef") == 0) {
+        cJSON *d = cJSON_GetObjectItemCaseSensitive(subject, "did");
+        if (!cJSON_IsString(d) || !d->valuestring[0]) {
+            wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                       "did is required for repoRef");
+            return WF_OK;
+        }
+        snprintf(did_buf, sizeof(did_buf), "%s", d->valuestring);
+        did = did_buf;
+    } else if (type_str && strcmp(type_str, "com.atproto.repo.strongRef") == 0) {
+        cJSON *u = cJSON_GetObjectItemCaseSensitive(subject, "uri");
+        if (!cJSON_IsString(u) || !u->valuestring[0]) {
+            wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                       "uri is required for strongRef");
+            return WF_OK;
+        }
+        snprintf(uri_buf, sizeof(uri_buf), "%s", u->valuestring);
+        uri = uri_buf;
+    } else if (type_str && strcmp(type_str, "com.atproto.admin.defs#repoBlobRef") == 0) {
+        cJSON *d = cJSON_GetObjectItemCaseSensitive(subject, "did");
+        cJSON *c = cJSON_GetObjectItemCaseSensitive(subject, "cid");
+        if (!cJSON_IsString(d) || !d->valuestring[0] ||
+            !cJSON_IsString(c) || !c->valuestring[0]) {
+            wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                       "did and cid are required for repoBlobRef");
+            return WF_OK;
+        }
+        snprintf(did_buf, sizeof(did_buf), "%s", d->valuestring);
+        snprintf(blob_buf, sizeof(blob_buf), "%s", c->valuestring);
+        did = did_buf;
+        blob_cid = blob_buf;
+    } else {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "unknown subject type");
+        return WF_OK;
+    }
+
+    /* Apply takedown if present. */
+    if (takedown) {
+        cJSON *applied = cJSON_GetObjectItemCaseSensitive(takedown, "applied");
+        cJSON *ref = cJSON_GetObjectItemCaseSensitive(takedown, "ref");
+        const char *ref_str = cJSON_IsString(ref) ? ref->valuestring : "admin";
+        if (cJSON_IsTrue(applied)) {
+            metalbear_account_registry_set_takedown(
+                server->registry, did, uri, blob_cid, ref_str);
+        } else {
+            metalbear_account_registry_set_takedown(
+                server->registry, did, uri, blob_cid, NULL);
+        }
+    }
+
+    /* Handle account deactivation (repoRef only). */
+    if (deactivated && did && !uri && !blob_cid) {
+        cJSON *applied = cJSON_GetObjectItemCaseSensitive(deactivated, "applied");
+        if (cJSON_IsTrue(applied)) {
+            metalbear_account_context *acct = context_for_did(server, did);
+            if (acct) {
+                metalbear_account_deactivate(acct->account, NULL);
+                metalbear_sequencer_account_status(
+                    acct->sequencer, did, 0, "deactivated");
+            }
+        } else {
+            metalbear_account_context *acct = context_for_did(server, did);
+            if (acct) {
+                metalbear_account_activate(acct->account);
+                metalbear_sequencer_account_status(
+                    acct->sequencer, did, 1, NULL);
+            }
+        }
+    }
+
+    /* Return updated status (echo subject + takedown). */
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    cJSON *out_subject = cJSON_Duplicate(subject, 1);
+    if (!out_subject) { cJSON_Delete(root); return WF_ERR_ALLOC; }
+    cJSON_AddItemToObject(root, "subject", out_subject);
+    if (takedown) {
+        cJSON *out_td = cJSON_Duplicate(takedown, 1);
+        if (out_td) cJSON_AddItemToObject(root, "takedown", out_td);
+    }
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.admin.sendEmail (procedure, admin-gated) ---- */
+static wf_status admin_send_email(void *ctx,
+                                   const wf_xrpc_request *request,
+                                   wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *recipient = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "recipientDid")
+        : NULL;
+    cJSON *content = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "content")
+        : NULL;
+    cJSON *subject_item = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "subject")
+        : NULL;
+    if (!cJSON_IsString(recipient) || !recipient->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "recipientDid is required");
+        return WF_OK;
+    }
+    if (!cJSON_IsString(content) || !content->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "content is required");
+        return WF_OK;
+    }
+    /* Look up the recipient's email. */
+    metalbear_account_entry *entry = NULL;
+    if (metalbear_account_registry_find_by_did(
+            server->registry, recipient->valuestring,
+            &entry) != WF_OK || !entry) {
+        wf_xrpc_response_set_error(response, 404, "AccountNotFound",
+                                   "recipient account not found");
+        return WF_OK;
+    }
+    char *email = NULL;
+    int confirmed = 0;
+    char *acct_path = join_path(entry->data_directory, "account.sqlite3");
+    if (acct_path) {
+        metalbear_account_store *acct = NULL;
+        if (metalbear_account_store_open(acct_path, "", &acct) == WF_OK) {
+            metalbear_account_get_email(acct, &email, &confirmed);
+            metalbear_account_store_free(acct);
+        }
+        free(acct_path);
+    }
+    metalbear_account_entry_free(entry);
+    if (!email || !email[0]) {
+        free(email);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "recipient has no email address");
+        return WF_OK;
+    }
+    /* Send the email if the email module is configured. */
+    const char *subj = cJSON_IsString(subject_item)
+                           ? subject_item->valuestring
+                           : "Message from PDS administrator";
+    bool sent = false;
+    if (server->email) {
+        sent = metalbear_email_send(server->email, email, subj,
+                                    content->valuestring) == WF_OK;
+    }
+    free(email);
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    cJSON_AddBoolToObject(root, "sent", sent);
+    return set_json(response, root);
+}
+
 /* ---- com.atproto.sync.requestCrawl (procedure, public) ----
  * Mirrors refpds `pdsadmin request-crawl`: forward the request body to
  * each configured crawler/relay (METALBEAR_CRAWLERS). When no crawlers
@@ -2658,6 +2909,15 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.admin.getAccountInfo",
             admin_get_account_info, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.admin.getSubjectStatus",
+            admin_get_subject_status, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.admin.updateSubjectStatus",
+            admin_update_subject_status, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.admin.sendEmail",
+            admin_send_email, server) != WF_OK ||
         /* Public crawl declaration (refpds PDS_CRAWLERS) */
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.sync.requestCrawl",

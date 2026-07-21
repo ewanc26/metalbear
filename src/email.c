@@ -144,8 +144,8 @@ wf_status metalbear_email_send_password_reset(metalbear_email *email,
 }
 
 wf_status metalbear_email_send_account_deletion(metalbear_email *email,
-                                                const char *to_address,
-                                                const char *confirmation_code) {
+                                                 const char *to_address,
+                                                 const char *confirmation_code) {
     if (!email || !to_address || !confirmation_code)
         return WF_ERR_INVALID_ARG;
     char subject[256];
@@ -158,5 +158,12 @@ wf_status metalbear_email_send_account_deletion(metalbear_email *email,
              "cannot be undone.\n\n"
              "If you did not request this, please ignore this email.\n",
              confirmation_code);
+    return send_email(email, to_address, subject, body);
+}
+
+wf_status metalbear_email_send(metalbear_email *email,
+                               const char *to_address,
+                               const char *subject,
+                               const char *body) {
     return send_email(email, to_address, subject, body);
 }
