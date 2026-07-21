@@ -2949,6 +2949,23 @@ static wf_status request_crawl(void *ctx, const wf_xrpc_request *request,
     return set_json(response, root);
 }
 
+/* ---- com.atproto.temp.checkSignupQueue (query) ----
+ * Temporary unspecced route. MetalBear has no entryway, so always
+ * returns { activated: true }. */
+static wf_status check_signup_queue(void *ctx,
+                                     const wf_xrpc_request *request,
+                                     wf_xrpc_response *response) {
+    (void)ctx;
+    (void)request;
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    if (!cJSON_AddBoolToObject(root, "activated", 1)) {
+        cJSON_Delete(root);
+        return WF_ERR_ALLOC;
+    }
+    return set_json(response, root);
+}
+
 /* ---- com.atproto.repo.uploadBlob (procedure) ----
  * Mirrors wolfram's blob upload handler but enforces
  * METALBEAR_BLOB_UPLOAD_LIMIT before storing. Output shape matches
@@ -3641,7 +3658,11 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         /* Public crawl declaration (refpds PDS_CRAWLERS) */
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.sync.requestCrawl",
-            request_crawl, server) != WF_OK) {
+            request_crawl, server) != WF_OK ||
+        /* Temporary unspecced route — always returns { activated: true } */
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.temp.checkSignupQueue",
+            check_signup_queue, server) != WF_OK) {
         LOG_ERROR("cannot register email/invite routes");
         goto fail;
     }
