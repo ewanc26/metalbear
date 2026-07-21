@@ -80,7 +80,13 @@ wf_status metalbear_account_registry_open(const char *path,
             "CREATE TABLE IF NOT EXISTS invite_code_use("
             "code TEXT NOT NULL,"
             "used_by TEXT NOT NULL,"
-            "used_at TEXT NOT NULL);") != WF_OK) {
+            "used_at TEXT NOT NULL);"
+            "CREATE TABLE IF NOT EXISTS subject_takedown("
+            "did TEXT,"
+            "uri TEXT,"
+            "blob_cid TEXT,"
+            "takedown_ref TEXT NOT NULL,"
+            "created_at TEXT NOT NULL);") != WF_OK) {
         metalbear_account_registry_free(reg);
         return WF_ERR_INTERNAL;
     }
@@ -449,4 +455,91 @@ void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
         free(entries[i].created_at);
     }
     free(entries);
+}
+
+static int count_nonnull(const char *a, const char *b, const char *c) {
+    int n = 0;
+    if (a && a[0]) n++;
+    if (b && b[0]) n++;
+    if (c && c[0]) n++;
+    return n;
+}
+
+wf_status metalbear_account_registry_set_takedown(
+    metalbear_account_registry *registry,
+    const char *did, const char *uri, const char *blob_cid,
+    const char *ref) {
+    if (!registry) return WF_ERR_INVALID_ARG;
+    if (count_nonnull(did, uri, blob_cid) != 1)
+        return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&registry->mutex);
+    /* Remove any existing takedown for this subject. */
+    sqlite3_stmt *del = NULL;
+    if (sqlite3_prepare_v2(registry->db,
+            "DELETE FROM subject_takedown WHERE "
+            "((did IS ? AND ? IS NOT NULL) OR "
+            " (uri IS ? AND ? IS NOT NULL) OR "
+            " (blob_cid IS ? AND ? IS NOT NULL));",
+            -1, &del, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(del, 1, did, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(del, 2, did, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(del, 3, uri, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(del, 4, uri, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(del, 5, blob_cid, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(del, 6, blob_cid, -1, SQLITE_TRANSIENT);
+        sqlite3_step(del);
+    }
+    sqlite3_finalize(del);
+    /* Insert new takedown if ref is non-NULL. */
+    if (ref && ref[0]) {
+        sqlite3_stmt *ins = NULL;
+        if (sqlite3_prepare_v2(registry->db,
+                "INSERT INTO subject_takedown(did,uri,blob_cid,"
+                "takedown_ref,created_at) VALUES(?,?,?,?,datetime('now'));",
+                -1, &ins, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(ins, 1, did, -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(ins, 2, uri, -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(ins, 3, blob_cid, -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(ins, 4, ref, -1, SQLITE_TRANSIENT);
+            sqlite3_step(ins);
+        }
+        sqlite3_finalize(ins);
+    }
+    pthread_mutex_unlock(&registry->mutex);
+    return WF_OK;
+}
+
+wf_status metalbear_account_registry_get_takedown(
+    metalbear_account_registry *registry,
+    const char *did, const char *uri, const char *blob_cid,
+    char **out_ref) {
+    if (!registry || !out_ref) return WF_ERR_INVALID_ARG;
+    *out_ref = NULL;
+    if (count_nonnull(did, uri, blob_cid) != 1)
+        return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&registry->mutex);
+    sqlite3_stmt *sel = NULL;
+    wf_status status = WF_OK;
+    if (sqlite3_prepare_v2(registry->db,
+            "SELECT takedown_ref FROM subject_takedown WHERE "
+            "(did IS ? AND ? IS NOT NULL) OR "
+            "(uri IS ? AND ? IS NOT NULL) OR "
+            "(blob_cid IS ? AND ? IS NOT NULL) LIMIT 1;",
+            -1, &sel, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(sel, 1, did, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(sel, 2, did, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(sel, 3, uri, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(sel, 4, uri, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(sel, 5, blob_cid, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(sel, 6, blob_cid, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(sel) == SQLITE_ROW) {
+            const char *ref = (const char *)sqlite3_column_text(sel, 0);
+            *out_ref = ref ? strdup(ref) : NULL;
+        }
+    } else {
+        status = WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(sel);
+    pthread_mutex_unlock(&registry->mutex);
+    return status;
 }

@@ -33,8 +33,12 @@ wf_status metalbear_email_send_password_reset(metalbear_email *email,
                                               const char *to_address,
                                               const char *reset_token);
 wf_status metalbear_email_send_account_deletion(metalbear_email *email,
-                                                const char *to_address,
-                                                const char *confirmation_code);
+                                                 const char *to_address,
+                                                 const char *confirmation_code);
+wf_status metalbear_email_send(metalbear_email *email,
+                               const char *to_address,
+                               const char *subject,
+                               const char *body);
 
 #ifdef __cplusplus
 }

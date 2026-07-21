@@ -107,6 +107,23 @@ wf_status metalbear_account_registry_get_invite_codes(
 void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
                                        size_t count);
 
+/* --- Subject takedown status -------------------------------------------- */
+
+/* Set or clear a takedown on a subject.  Exactly one of did, uri, or
+ * blob_cid must be non-NULL.  Pass ref=NULL to clear the takedown. */
+wf_status metalbear_account_registry_set_takedown(
+    metalbear_account_registry *registry,
+    const char *did, const char *uri, const char *blob_cid,
+    const char *ref);
+
+/* Get takedown status for a subject.  Exactly one of did, uri, or
+ * blob_cid must be non-NULL.  On WF_OK *out_ref is either NULL (no
+ * takedown) or a heap-allocated ref string; caller frees it. */
+wf_status metalbear_account_registry_get_takedown(
+    metalbear_account_registry *registry,
+    const char *did, const char *uri, const char *blob_cid,
+    char **out_ref);
+
 #ifdef __cplusplus
 }
 #endif
