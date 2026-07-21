@@ -110,6 +110,7 @@ static bool is_public_route(const char *nsid) {
         "com.atproto.sync.getRepoStatus",
         "com.atproto.sync.listRepos",
         "com.atproto.sync.listBlobs",
+        "com.atproto.sync.getRecord",
         "com.atproto.sync.subscribeRepos",
         "com.atproto.sync.requestCrawl",
     };
@@ -1236,6 +1237,56 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
         cJSON_AddStringToObject(root, "cursor", cursor_buf);
     }
     return set_json(response, root);
+}
+
+/* ---- com.atproto.sync.getRecord (query, public) ----
+ * Return a single record as a CAR file rooted at the current commit. */
+static wf_status get_record(void *ctx, const wf_xrpc_request *request,
+                            wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
+    cJSON *collection = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "collection") : NULL;
+    cJSON *rkey = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "rkey") : NULL;
+    if (!cJSON_IsString(did) || !did->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "did is required");
+        return WF_OK;
+    }
+    if (!cJSON_IsString(collection) || !collection->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "collection is required");
+        return WF_OK;
+    }
+    if (!cJSON_IsString(rkey) || !rkey->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "rkey is required");
+        return WF_OK;
+    }
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 400, "RepoNotFound",
+                                   "Repository is not hosted here");
+        return WF_OK;
+    }
+    unsigned char *data = NULL;
+    size_t length = 0;
+    wf_status status = metalbear_repo_store_get_record_car(
+        acct->repo, collection->valuestring, rkey->valuestring,
+        &data, &length);
+    if (status == WF_ERR_NOT_FOUND) {
+        wf_xrpc_response_set_error(response, 404, "RecordNotFound",
+                                   "Record not found");
+        return WF_OK;
+    }
+    if (status != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not export record");
+        return WF_OK;
+    }
+    return set_car_response(response, data, length);
 }
 
 static wf_status create_account(void *ctx, const wf_xrpc_request *request,
@@ -2843,6 +2894,8 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "com.atproto.sync.listBlobs", list_blobs, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.sync.listRepos", list_repos, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.sync.getRecord", get_record, server) != WF_OK ||
         metalbear_sequencer_register(server->bootstrap->sequencer,
                                      server->xrpc) != WF_OK) {
         LOG_ERROR("cannot register sync export routes");
