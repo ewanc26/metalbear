@@ -14,6 +14,7 @@
 #include "metalbear/email.h"
 #include "metalbear/key_rotation.h"
 #include "metalbear/oauth.h"
+#include "metalbear/report.h"
 #include "metalbear/oauth_routes.h"
 #include "metalbear/sequencer.h"
 
@@ -95,6 +96,7 @@ struct metalbear_server {
     int64_t blob_upload_limit; /* 0 => unlimited */
     char *plc_url;            /* PLC directory URL or NULL */
     metalbear_account_cache *account_cache;
+    metalbear_report_store *reports;
 };
 
 static bool is_public_route(const char *nsid) {
@@ -2949,6 +2951,142 @@ static wf_status request_crawl(void *ctx, const wf_xrpc_request *request,
     return set_json(response, root);
 }
 
+/* ---- com.atproto.moderation.createReport (procedure) ----
+ * Store a moderation report locally. Requires a valid authenticated session.
+ * Validates reasonType against known values and subject union (repoRef or
+ * strongRef). */
+static wf_status create_report(void *ctx,
+                               const wf_xrpc_request *request,
+                               wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *body = request->params;
+    if (!body || !cJSON_IsObject(body)) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "Missing request body");
+        return WF_OK;
+    }
+
+    cJSON *reason_type = cJSON_GetObjectItemCaseSensitive(body, "reasonType");
+    cJSON *subject = cJSON_GetObjectItemCaseSensitive(body, "subject");
+    cJSON *reason = cJSON_GetObjectItemCaseSensitive(body, "reason");
+    cJSON *mod_tool = cJSON_GetObjectItemCaseSensitive(body, "modTool");
+
+    if (!cJSON_IsString(reason_type) || !reason_type->valuestring[0]) {
+        cJSON_Delete(body);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "reasonType is required");
+        return WF_OK;
+    }
+    if (!subject || !cJSON_IsObject(subject)) {
+        cJSON_Delete(body);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "subject is required");
+        return WF_OK;
+    }
+
+    char subject_type[64] = "";
+    char subject_uri[512] = "";
+    char subject_cid[128] = "";
+    bool is_repo_ref = false;
+
+    cJSON *subject_did = cJSON_GetObjectItemCaseSensitive(subject, "did");
+    cJSON *subject_uri_js = cJSON_GetObjectItemCaseSensitive(subject, "uri");
+    cJSON *subject_cid_js = cJSON_GetObjectItemCaseSensitive(subject, "cid");
+
+    if (cJSON_IsString(subject_did)) {
+        is_repo_ref = true;
+        snprintf(subject_uri, sizeof(subject_uri), "%s", subject_did->valuestring);
+    } else if (cJSON_IsString(subject_uri_js)) {
+        snprintf(subject_uri, sizeof(subject_uri), "%s", subject_uri_js->valuestring);
+        if (cJSON_IsString(subject_cid_js))
+            snprintf(subject_cid, sizeof(subject_cid), "%s", subject_cid_js->valuestring);
+    } else {
+        cJSON_Delete(body);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "subject must be repoRef or strongRef");
+        return WF_OK;
+    }
+
+    const char *reporter_did = request->authed_subject;
+    if (!reporter_did || !reporter_did[0]) {
+        cJSON_Delete(body);
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                    "Invalid access token");
+        return WF_OK;
+    }
+
+    char *mod_tool_name = NULL;
+    char *mod_tool_meta = NULL;
+    if (mod_tool && cJSON_IsObject(mod_tool)) {
+        cJSON *name = cJSON_GetObjectItemCaseSensitive(mod_tool, "name");
+        cJSON *meta = cJSON_GetObjectItemCaseSensitive(mod_tool, "meta");
+        if (cJSON_IsString(name) && name->valuestring[0])
+            mod_tool_name = name->valuestring;
+        if (cJSON_IsObject(meta))
+            mod_tool_meta = cJSON_PrintUnformatted(meta);
+    }
+
+    char created_at[64];
+    time_t now = time(NULL);
+    if (strftime(created_at, sizeof(created_at), "%Y-%m-%dT%H:%M:%SZ",
+                 gmtime(&now)) == 0) {
+        free(mod_tool_meta);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                    "Failed to format timestamp");
+        return WF_OK;
+    }
+
+    int64_t report_id = 0;
+    wf_status st = metalbear_report_store_create(server->reports,
+                                                   reporter_did,
+                                                   reason_type->valuestring,
+                                                   cJSON_IsString(reason) ? reason->valuestring : NULL,
+                                                   subject_type,
+                                                   subject_uri,
+                                                   subject_cid[0] ? subject_cid : NULL,
+                                                   mod_tool_name,
+                                                   mod_tool_meta,
+                                                   &report_id);
+    free(mod_tool_meta);
+
+    if (st != WF_OK || report_id == 0) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                    "Failed to create report");
+        return WF_OK;
+    }
+
+    cJSON *out = cJSON_CreateObject();
+    if (!out) return WF_ERR_ALLOC;
+    cJSON_AddNumberToObject(out, "id", (double)report_id);
+    cJSON_AddStringToObject(out, "reasonType", reason_type->valuestring);
+    if (reason && cJSON_IsString(reason))
+        cJSON_AddStringToObject(out, "reason", reason->valuestring);
+
+    cJSON *out_subject = cJSON_CreateObject();
+    if (!out_subject) {
+        cJSON_Delete(out);
+        return WF_ERR_ALLOC;
+    }
+    if (is_repo_ref && subject_did && cJSON_IsString(subject_did)) {
+        cJSON_AddStringToObject(out_subject, "did", subject_did->valuestring);
+    } else {
+        if (subject_uri[0])
+            cJSON_AddStringToObject(out_subject, "uri", subject_uri);
+        if (subject_cid[0])
+            cJSON_AddStringToObject(out_subject, "cid", subject_cid);
+    }
+    cJSON_AddItemToObject(out, "subject", out_subject);
+    cJSON_AddStringToObject(out, "reportedBy", reporter_did);
+    cJSON_AddStringToObject(out, "createdAt", created_at);
+
+    char *js = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    if (!js) return WF_ERR_ALLOC;
+    wf_xrpc_response_set_body(response, js, strlen(js));
+    free(js);
+    return WF_OK;
+}
+
 /* ---- com.atproto.temp.checkSignupQueue (query) ----
  * Temporary unspecced route. MetalBear has no entryway, so always
  * returns { activated: true }. */
@@ -3448,6 +3586,16 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
 
     /* Create rate limiter: 100 requests per 60 seconds */
     server->rate_limiter = wf_rate_limiter_new(100, 60, 0);
+
+    /* Open moderation report store */
+    char *reports_path = join_path(config->data_directory, "reports.sqlite3");
+    if (!reports_path ||
+        metalbear_report_store_open(reports_path, &server->reports) != WF_OK) {
+        LOG_ERROR("cannot open report store");
+        free(reports_path);
+        goto fail;
+    }
+    free(reports_path);
     metalbear_repo_store_set_event_callback(server->bootstrap->repo,
                                      metalbear_sequencer_repo_event,
                                      server->bootstrap->sequencer);
@@ -3655,6 +3803,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.admin.deleteAccount",
             admin_delete_account, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.moderation.createReport",
+            create_report, server) != WF_OK ||
         /* Public crawl declaration (refpds PDS_CRAWLERS) */
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.sync.requestCrawl",
@@ -3722,6 +3873,7 @@ void metalbear_server_free(metalbear_server *server) {
     }
     metalbear_account_registry_free(server->registry);
     metalbear_email_free(server->email);
+    metalbear_report_store_free(server->reports);
     wf_rate_limiter_free(server->rate_limiter);
     free(server->service_did);
     free(server->public_url);

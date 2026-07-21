@@ -1375,6 +1375,64 @@ int main(void) {
             CHECK(response.status == 200);
             wf_response_free(&response);
 
+            /* === com.atproto.moderation.createReport (auth-gated) ===
+             * Requires a valid authenticated session. Returns the persisted
+             * report with generated id and timestamps. */
+            {
+                wf_xrpc_client_set_auth(client, access_token);
+                CHECK(wf_xrpc_procedure(client,
+                    "com.atproto.moderation.createReport",
+                    "{\"reasonType\":\"com.atproto.moderation.defs#reasonSpam\","
+                    "\"subject\":{\"did\":\"did:plc:bob\"}}",
+                    &response) == WF_OK);
+                CHECK(response.status == 200);
+                cJSON *report = json_response(&response);
+                CHECK(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(report,
+                                                                     "id")));
+                CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(report,
+                        "reasonType")->valuestring,
+                        "com.atproto.moderation.defs#reasonSpam") == 0);
+                CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(report,
+                        "reportedBy")->valuestring,
+                        "did:plc:metalbeartest") == 0);
+                CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(report,
+                                                                     "createdAt")));
+                cJSON *subject = cJSON_GetObjectItemCaseSensitive(report, "subject");
+                CHECK(cJSON_IsObject(subject));
+                CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(subject,
+                                                                     "did")));
+                cJSON_Delete(report);
+                wf_response_free(&response);
+
+                CHECK(wf_xrpc_procedure(client,
+                    "com.atproto.moderation.createReport",
+                    "{\"reasonType\":\"com.atproto.moderation.defs#reasonViolation\","
+                    "\"reason\":\"test report\","
+                    "\"subject\":{\"uri\":\"at://did:plc:bob/app.bsky.feed.post/xyz\","
+                    "\"cid\":\"bafkreid7example\"}}",
+                    &response) == WF_OK);
+                CHECK(response.status == 200);
+                report = json_response(&response);
+                CHECK(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(report, "id")));
+                subject = cJSON_GetObjectItemCaseSensitive(report, "subject");
+                CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(subject, "uri")));
+                CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(subject, "cid")));
+                cJSON_Delete(report);
+                wf_response_free(&response);
+
+                /* No auth -> 401 */
+                wf_xrpc_client_set_auth(client, NULL);
+                CHECK(wf_xrpc_procedure(client,
+                    "com.atproto.moderation.createReport",
+                    "{\"reasonType\":\"com.atproto.moderation.defs#reasonSpam\","
+                    "\"subject\":{\"did\":\"did:plc:bob\"}}",
+                    &response) == WF_ERR_HTTP);
+                CHECK(response.status == 401);
+                wf_response_free(&response);
+
+                wf_xrpc_client_set_auth(client, access_token);
+            }
+
             /* === deleteAccount: end-to-end success === */
             /* Need a fresh session after restart */
             snprintf(login_body, sizeof(login_body),
@@ -1482,6 +1540,12 @@ int main(void) {
     snprintf(path, sizeof(path), "%s/accounts.sqlite3-shm", directory);
     unlink(path);
     snprintf(path, sizeof(path), "%s/accounts.sqlite3-wal", directory);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/reports.sqlite3", directory);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/reports.sqlite3-shm", directory);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/reports.sqlite3-wal", directory);
     unlink(path);
     snprintf(path, sizeof(path), "%s/blobs", directory);
     rmdir(path);
