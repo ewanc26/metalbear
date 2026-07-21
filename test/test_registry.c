@@ -108,6 +108,77 @@ int main(void) {
     CHECK(strcmp(dir, "/srv/pds/did_web_example.com") == 0);
     free(dir);
 
+    /* --- Invite code tests --- */
+
+    /* Create invite codes */
+    const char *code1 = "TEST-CODE-AAAA";
+    const char *code2 = "TEST-CODE-BBBB";
+    const char *code3 = "TEST-CODE-CCCC";
+    const char *codes_batch[] = { code1, code2, code3 };
+    CHECK(metalbear_account_registry_create_invite_codes(
+            registry, "admin", codes_batch, 3, 2) == WF_OK);
+
+    /* Get invite codes for admin */
+    metalbear_invite_code_entry *icode_entries = NULL;
+    size_t icode_count = 0;
+    CHECK(metalbear_account_registry_get_invite_codes(
+            registry, "admin", &icode_entries, &icode_count) == WF_OK);
+    CHECK(icode_count == 3);
+    /* Verify codes exist (order may vary with same timestamp) */
+    int found_c1 = 0, found_c2 = 0, found_c3 = 0;
+    for (size_t i = 0; i < icode_count; i++) {
+        if (strcmp(icode_entries[i].code, code1) == 0) found_c1 = 1;
+        if (strcmp(icode_entries[i].code, code2) == 0) found_c2 = 1;
+        if (strcmp(icode_entries[i].code, code3) == 0) found_c3 = 1;
+        CHECK(strcmp(icode_entries[i].for_account, "admin") == 0);
+    }
+    CHECK(found_c1 && found_c2 && found_c3);
+    metalbear_invite_code_entries_free(icode_entries, icode_count);
+
+    /* Consume an invite code (use 1 of 2) */
+    CHECK(metalbear_account_registry_consume_invite_code(
+            registry, code1, "did:plc:alice") == WF_OK);
+
+    /* Verify remaining uses */
+    icode_entries = NULL;
+    icode_count = 0;
+    CHECK(metalbear_account_registry_get_invite_codes(
+            registry, "admin", &icode_entries, &icode_count) == WF_OK);
+    CHECK(icode_count == 3);
+    /* Find code1 in the results */
+    int found_code1 = 0;
+    for (size_t i = 0; i < icode_count; i++) {
+        if (strcmp(icode_entries[i].code, code1) == 0) {
+            CHECK(icode_entries[i].uses_remaining == 1);
+            found_code1 = 1;
+        }
+    }
+    CHECK(found_code1);
+    metalbear_invite_code_entries_free(icode_entries, icode_count);
+
+    /* Consume again (use 2 of 2) */
+    CHECK(metalbear_account_registry_consume_invite_code(
+            registry, code1, "did:plc:bob") == WF_OK);
+
+    /* Consume once more — should fail (exhausted) */
+    CHECK(metalbear_account_registry_consume_invite_code(
+            registry, code1, "did:plc:charlie") != WF_OK);
+
+    /* Nonexistent code */
+    CHECK(metalbear_account_registry_consume_invite_code(
+            registry, "DOES-NOT-EXIST", "did:plc:alice") == WF_ERR_NOT_FOUND);
+
+    /* Persistence across restart */
+    metalbear_account_registry_free(registry);
+    registry = NULL;
+    CHECK(metalbear_account_registry_open(path, &registry) == WF_OK);
+    icode_entries = NULL;
+    icode_count = 0;
+    CHECK(metalbear_account_registry_get_invite_codes(
+            registry, "admin", &icode_entries, &icode_count) == WF_OK);
+    CHECK(icode_count == 3);
+    metalbear_invite_code_entries_free(icode_entries, icode_count);
+
     metalbear_account_registry_free(registry);
     unlink(path);
     char sidecar[256];

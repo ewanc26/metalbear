@@ -472,7 +472,7 @@ static wf_status describe_server(void *ctx, const wf_xrpc_request *request,
     cJSON_AddStringToObject(root, "did", server->service_did);
     cJSON_AddItemToArray(domains, cJSON_CreateString(server->user_domain));
     cJSON_AddItemToObject(root, "availableUserDomains", domains);
-    cJSON_AddBoolToObject(root, "inviteCodeRequired", true);
+    cJSON_AddBoolToObject(root, "inviteCodeRequired", server->invite_required);
     cJSON_AddBoolToObject(root, "phoneVerificationRequired", false);
     if (server->account_email && server->account_email[0])
         cJSON_AddStringToObject(contact, "email", server->account_email);
@@ -1255,8 +1255,8 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     /* Invite-gated signups (refpds PDS_INVITE_REQUIRED): when enabled,
-     * reject account creation unless a non-empty invite code is supplied.
-     * Honest minimum: parse and reject when required and absent. */
+     * reject account creation unless a non-empty invite code is supplied
+     * and the code has remaining uses. */
     if (server->invite_required) {
         cJSON *invite = request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params,
@@ -1264,6 +1264,14 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
         if (!cJSON_IsString(invite) || !invite->valuestring[0]) {
             wf_xrpc_response_set_error(response, 400, "InvalidInviteCode",
                                         "an invite code is required to sign up");
+            return WF_OK;
+        }
+        /* Validate and consume the invite code. */
+        if (metalbear_account_registry_consume_invite_code(
+                server->registry, invite->valuestring,
+                handle->valuestring) != WF_OK) {
+            wf_xrpc_response_set_error(response, 400, "InvalidInviteCode",
+                                        "the invite code is invalid or exhausted");
             return WF_OK;
         }
     }
@@ -1617,14 +1625,34 @@ static wf_status get_account_invite_codes(void *ctx,
                                            const wf_xrpc_request *request,
                                            wf_xrpc_response *response) {
     (void)request;
-    (void)ctx;
-    /* Single-account PDS: return empty invite codes */
+    metalbear_server *server = ctx;
+    /* The auth callback resolves the DID into authed_subject; use it
+     * to look up the account's invite codes. */
+    const char *did = request->authed_subject;
     cJSON *root = cJSON_CreateObject();
     cJSON *codes = cJSON_CreateArray();
     if (!root || !codes) {
         cJSON_Delete(root);
         cJSON_Delete(codes);
         return WF_ERR_ALLOC;
+    }
+    if (did && server->registry) {
+        metalbear_invite_code_entry *entries = NULL;
+        size_t count = 0;
+        if (metalbear_account_registry_get_invite_codes(
+                server->registry, did, &entries, &count) == WF_OK) {
+            for (size_t i = 0; i < count; i++) {
+                cJSON *obj = cJSON_CreateObject();
+                if (!obj) continue;
+                cJSON_AddStringToObject(obj, "code", entries[i].code);
+                cJSON_AddNumberToObject(obj, "usesAvailable",
+                                        entries[i].uses_remaining);
+                if (entries[i].disabled)
+                    cJSON_AddBoolToObject(obj, "disabled", true);
+                cJSON_AddItemToArray(codes, obj);
+            }
+            metalbear_invite_code_entries_free(entries, count);
+        }
     }
     cJSON_AddItemToObject(root, "codes", codes);
     return set_json(response, root);
@@ -1728,7 +1756,7 @@ static void gen_invite_code(char *buf, size_t size) {
 static wf_status create_invite_code(void *ctx,
                                     const wf_xrpc_request *request,
                                     wf_xrpc_response *response) {
-    (void)ctx;
+    metalbear_server *server = ctx;
     cJSON *useCount = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "useCount") : NULL;
     if (!cJSON_IsNumber(useCount) || useCount->valuedouble < 1) {
@@ -1736,8 +1764,22 @@ static wf_status create_invite_code(void *ctx,
                                    "useCount is required and must be > 0");
         return WF_OK;
     }
+    cJSON *forAccount = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "forAccount")
+        : NULL;
+    const char *account = (cJSON_IsString(forAccount) &&
+                           forAccount->valuestring[0])
+                              ? forAccount->valuestring : "admin";
     char code[64];
     gen_invite_code(code, sizeof(code));
+    const char *codes[] = { code };
+    if (metalbear_account_registry_create_invite_codes(
+            server->registry, account, codes, 1,
+            (int)useCount->valuedouble) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not persist invite code");
+        return WF_OK;
+    }
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     cJSON_AddStringToObject(root, "code", code);
@@ -1748,7 +1790,7 @@ static wf_status create_invite_code(void *ctx,
 static wf_status create_invite_codes(void *ctx,
                                      const wf_xrpc_request *request,
                                      wf_xrpc_response *response) {
-    (void)ctx;
+    metalbear_server *server = ctx;
     cJSON *codeCount = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "codeCount") : NULL;
     cJSON *useCount = request->params
@@ -1761,42 +1803,56 @@ static wf_status create_invite_codes(void *ctx,
     }
     int count = (int)codeCount->valuedouble;
     if (count > 100) count = 100;
+    int per_code_uses = (int)useCount->valuedouble;
     cJSON *forAccounts = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "forAccounts") : NULL;
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     cJSON *codes_arr = cJSON_CreateArray();
     if (!codes_arr) { cJSON_Delete(root); return WF_ERR_ALLOC; }
+
+    /* Collect accounts to create codes for. */
+    const char *accounts[32];
+    size_t account_count = 0;
     if (cJSON_IsArray(forAccounts) && cJSON_GetArraySize(forAccounts) > 0) {
-        int n = cJSON_GetArraySize(forAccounts);
-        for (int a = 0; a < n; a++) {
+        size_t n = cJSON_GetArraySize(forAccounts);
+        if (n > 32) n = 32;
+        for (size_t a = 0; a < n; a++) {
             cJSON *acct = cJSON_GetArrayItem(forAccounts, a);
-            const char *account = (cJSON_IsString(acct) && acct->valuestring)
-                                      ? acct->valuestring : "admin";
-            cJSON *account_obj = cJSON_CreateObject();
-            if (!account_obj) { cJSON_Delete(root); cJSON_Delete(codes_arr); return WF_ERR_ALLOC; }
-            cJSON_AddStringToObject(account_obj, "account", account);
-            cJSON *code_list = cJSON_CreateArray();
-            if (!code_list) { cJSON_Delete(root); cJSON_Delete(codes_arr); cJSON_Delete(account_obj); return WF_ERR_ALLOC; }
-            for (int i = 0; i < count; i++) {
-                char code[64];
-                gen_invite_code(code, sizeof(code));
-                cJSON_AddItemToArray(code_list, cJSON_CreateString(code));
-            }
-            cJSON_AddItemToObject(account_obj, "codes", code_list);
-            cJSON_AddItemToArray(codes_arr, account_obj);
+            accounts[a] = (cJSON_IsString(acct) && acct->valuestring)
+                              ? acct->valuestring : "admin";
         }
+        account_count = n;
     } else {
+        accounts[0] = "admin";
+        account_count = 1;
+    }
+
+    for (size_t a = 0; a < account_count; a++) {
         cJSON *account_obj = cJSON_CreateObject();
         if (!account_obj) { cJSON_Delete(root); cJSON_Delete(codes_arr); return WF_ERR_ALLOC; }
-        cJSON_AddStringToObject(account_obj, "account", "admin");
+        cJSON_AddStringToObject(account_obj, "account", accounts[a]);
         cJSON *code_list = cJSON_CreateArray();
         if (!code_list) { cJSON_Delete(root); cJSON_Delete(codes_arr); cJSON_Delete(account_obj); return WF_ERR_ALLOC; }
+
+        /* Generate and persist codes. */
+        const char *generated[100];
         for (int i = 0; i < count; i++) {
             char code[64];
             gen_invite_code(code, sizeof(code));
+            generated[i] = NULL; /* stack; persist below */
             cJSON_AddItemToArray(code_list, cJSON_CreateString(code));
+            /* Persist each code individually (gen_invite_code writes to stack). */
+            char *code_copy = strdup(code);
+            if (code_copy) {
+                const char *single_code[] = { code_copy };
+                metalbear_account_registry_create_invite_codes(
+                    server->registry, accounts[a], single_code, 1,
+                    per_code_uses);
+                free(code_copy);
+            }
         }
+        (void)generated;
         cJSON_AddItemToObject(account_obj, "codes", code_list);
         cJSON_AddItemToArray(codes_arr, account_obj);
     }

@@ -69,7 +69,18 @@ wf_status metalbear_account_registry_open(const char *path,
             "handle TEXT UNIQUE NOT NULL,"
             "password_hash TEXT NOT NULL,"
             "data_directory TEXT NOT NULL,"
-            "active INTEGER NOT NULL DEFAULT 1);") != WF_OK) {
+            "active INTEGER NOT NULL DEFAULT 1);"
+            "CREATE TABLE IF NOT EXISTS invite_code("
+            "code TEXT PRIMARY KEY,"
+            "for_account TEXT NOT NULL,"
+            "uses_remaining INTEGER NOT NULL,"
+            "disabled INTEGER NOT NULL DEFAULT 0,"
+            "created_by TEXT,"
+            "created_at TEXT NOT NULL);"
+            "CREATE TABLE IF NOT EXISTS invite_code_use("
+            "code TEXT NOT NULL,"
+            "used_by TEXT NOT NULL,"
+            "used_at TEXT NOT NULL);") != WF_OK) {
         metalbear_account_registry_free(reg);
         return WF_ERR_INTERNAL;
     }
@@ -280,4 +291,162 @@ wf_status metalbear_account_registry_update_handle(
     sqlite3_finalize(stmt);
     pthread_mutex_unlock(&registry->mutex);
     return status;
+}
+
+wf_status metalbear_account_registry_create_invite_codes(
+    metalbear_account_registry *registry,
+    const char *for_account,
+    const char **codes, size_t code_count,
+    int use_count) {
+    if (!registry || !for_account || !codes || code_count == 0 ||
+        use_count < 1)
+        return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&registry->mutex);
+    wf_status status = WF_OK;
+    for (size_t i = 0; i < code_count && status == WF_OK; i++) {
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(registry->db,
+                "INSERT INTO invite_code(code,for_account,uses_remaining,"
+                "created_at) VALUES(?,?,?,datetime('now'));",
+                -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, codes[i], -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 2, for_account, -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int(stmt, 3, use_count);
+            int r = sqlite3_step(stmt);
+            status = (r == SQLITE_DONE) ? WF_OK : WF_ERR_INTERNAL;
+        } else {
+            status = WF_ERR_INTERNAL;
+        }
+        sqlite3_finalize(stmt);
+    }
+    pthread_mutex_unlock(&registry->mutex);
+    return status;
+}
+
+wf_status metalbear_account_registry_consume_invite_code(
+    metalbear_account_registry *registry,
+    const char *code, const char *used_by) {
+    if (!registry || !code || !used_by) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&registry->mutex);
+    wf_status status = WF_ERR_NOT_FOUND;
+
+    /* Check code exists, is not disabled, and has remaining uses. */
+    sqlite3_stmt *sel = NULL;
+    if (sqlite3_prepare_v2(registry->db,
+            "SELECT uses_remaining,disabled FROM invite_code "
+            "WHERE code=?;", -1, &sel, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(sel, 1, code, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(sel) == SQLITE_ROW) {
+            int remaining = sqlite3_column_int(sel, 0);
+            int disabled  = sqlite3_column_int(sel, 1);
+            if (disabled) {
+                status = WF_ERR_CONFLICT;
+            } else if (remaining > 0) {
+                status = WF_OK;
+            }
+        }
+    }
+    sqlite3_finalize(sel);
+
+    if (status != WF_OK) {
+        pthread_mutex_unlock(&registry->mutex);
+        return status;
+    }
+
+    /* Decrement uses_remaining. */
+    sqlite3_stmt *upd = NULL;
+    if (sqlite3_prepare_v2(registry->db,
+            "UPDATE invite_code SET uses_remaining = uses_remaining - 1 "
+            "WHERE code=? AND uses_remaining > 0;", -1, &upd, NULL) ==
+            SQLITE_OK) {
+        sqlite3_bind_text(upd, 1, code, -1, SQLITE_TRANSIENT);
+        sqlite3_step(upd);
+    }
+    sqlite3_finalize(upd);
+
+    /* Record usage. */
+    sqlite3_stmt *ins = NULL;
+    if (sqlite3_prepare_v2(registry->db,
+            "INSERT INTO invite_code_use(code,used_by,used_at) "
+            "VALUES(?,?,datetime('now'));", -1, &ins, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(ins, 1, code, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(ins, 2, used_by, -1, SQLITE_TRANSIENT);
+        sqlite3_step(ins);
+    }
+    sqlite3_finalize(ins);
+
+    pthread_mutex_unlock(&registry->mutex);
+    return WF_OK;
+}
+
+wf_status metalbear_account_registry_get_invite_codes(
+    metalbear_account_registry *registry,
+    const char *did,
+    metalbear_invite_code_entry **out, size_t *out_count) {
+    if (!registry || !did || !out || !out_count) return WF_ERR_INVALID_ARG;
+    *out = NULL;
+    *out_count = 0;
+    pthread_mutex_lock(&registry->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_OK;
+    size_t capacity = 0;
+    if (sqlite3_prepare_v2(registry->db,
+            "SELECT code,for_account,uses_remaining,disabled,"
+            "created_by,created_at FROM invite_code "
+            "WHERE for_account=? OR created_by=? "
+            "ORDER BY created_at DESC;",
+            -1, &stmt, NULL) != SQLITE_OK) {
+        status = WF_ERR_INTERNAL;
+    } else {
+        sqlite3_bind_text(stmt, 1, did, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, did, -1, SQLITE_TRANSIENT);
+    }
+    while (status == WF_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        if (*out_count == capacity) {
+            size_t next = capacity ? capacity * 2 : 4;
+            void *resized = realloc(*out,
+                                    next * sizeof(**out));
+            if (!resized) { status = WF_ERR_ALLOC; break; }
+            *out = resized;
+            memset(*out + capacity, 0,
+                   (next - capacity) * sizeof(**out));
+            capacity = next;
+        }
+        metalbear_invite_code_entry *item = &(*out)[*out_count];
+        const char *c0 = (const char *)sqlite3_column_text(stmt, 0);
+        const char *c1 = (const char *)sqlite3_column_text(stmt, 1);
+        const char *c4 = (const char *)sqlite3_column_text(stmt, 4);
+        const char *c5 = (const char *)sqlite3_column_text(stmt, 5);
+        item->code           = c0 ? strdup(c0) : NULL;
+        item->for_account    = c1 ? strdup(c1) : NULL;
+        item->uses_remaining = sqlite3_column_int(stmt, 2);
+        item->disabled       = sqlite3_column_int(stmt, 3);
+        item->created_by     = c4 ? strdup(c4) : NULL;
+        item->created_at     = c5 ? strdup(c5) : NULL;
+        if (!item->code || !item->for_account) {
+            status = WF_ERR_ALLOC;
+        } else {
+            (*out_count)++;
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&registry->mutex);
+    if (status != WF_OK) {
+        metalbear_invite_code_entries_free(*out, *out_count);
+        *out = NULL;
+        *out_count = 0;
+    }
+    return status;
+}
+
+void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
+                                       size_t count) {
+    if (!entries) return;
+    for (size_t i = 0; i < count; i++) {
+        free(entries[i].code);
+        free(entries[i].for_account);
+        free(entries[i].created_by);
+        free(entries[i].created_at);
+    }
+    free(entries);
 }

@@ -20,6 +20,15 @@ typedef struct metalbear_account_entry {
     int active;
 } metalbear_account_entry;
 
+typedef struct metalbear_invite_code_entry {
+    char *code;
+    char *for_account;
+    int uses_remaining;
+    int disabled;
+    char *created_by;
+    char *created_at;
+} metalbear_invite_code_entry;
+
 /* Open the account registry, creating it when absent. */
 wf_status metalbear_account_registry_open(const char *path,
                                           metalbear_account_registry **out);
@@ -73,6 +82,30 @@ wf_status metalbear_account_registry_update_handle(
  */
 wf_status metalbear_account_dir_for_did(const char *root, const char *did,
                                         char **out);
+
+/* --- Invite codes ------------------------------------------------------- */
+
+wf_status metalbear_account_registry_create_invite_codes(
+    metalbear_account_registry *registry,
+    const char *for_account,
+    const char **codes, size_t code_count,
+    int use_count);
+
+/* Validate and consume an invite code.  Returns WF_OK on success,
+ * WF_ERR_NOT_FOUND if the code does not exist or is exhausted, and
+ * WF_ERR_CONFLICT if the code is disabled. */
+wf_status metalbear_account_registry_consume_invite_code(
+    metalbear_account_registry *registry,
+    const char *code, const char *used_by);
+
+/* Return invite codes created for (or attributed to) the given DID. */
+wf_status metalbear_account_registry_get_invite_codes(
+    metalbear_account_registry *registry,
+    const char *did,
+    metalbear_invite_code_entry **out, size_t *out_count);
+
+void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
+                                       size_t count);
 
 #ifdef __cplusplus
 }
