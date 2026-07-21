@@ -167,7 +167,7 @@ wf_status metalbear_sequencer_account_status(metalbear_sequencer *s,
 
 wf_status metalbear_sequencer_account_activation(
         metalbear_sequencer *s, const char *did, const char *handle,
-        wf_repo_store *repo) {
+        metalbear_repo_store *repo) {
     if (!s || !did || !handle || !repo) return WF_ERR_INVALID_ARG;
     wf_subscribe_event identity = {.type = WF_SUBSCRIBE_EVENT_IDENTITY};
     snprintf(identity.data.identity.did, sizeof(identity.data.identity.did),
@@ -181,13 +181,13 @@ wf_status metalbear_sequencer_account_activation(
     if (status != WF_OK) return status;
 
     char *rev = NULL, *cid = NULL;
-    status = wf_repo_store_get_head(repo, &rev, &cid);
+    status = metalbear_repo_store_get_head(repo, &rev, &cid);
     free(cid);
     if (status == WF_ERR_NOT_FOUND) return WF_OK;
     if (status != WF_OK) return status;
     unsigned char *blocks = NULL;
     size_t blocks_len = 0;
-    status = wf_repo_store_export(repo, NULL, &blocks, &blocks_len);
+    status = metalbear_repo_store_export(repo, NULL, &blocks, &blocks_len);
     if (status == WF_OK) {
         wf_subscribe_event sync = {.type = WF_SUBSCRIBE_EVENT_SYNC};
         snprintf(sync.data.sync.did, sizeof(sync.data.sync.did), "%s", did);
@@ -232,12 +232,12 @@ wf_status metalbear_sequencer_open(const char *path, const char *did,
     return WF_OK;
 }
 
-void metalbear_sequencer_repo_event(const wf_repo_store_event *repo_event,
+void metalbear_sequencer_repo_event(const metalbear_repo_store_event *repo_event,
                                     void *context) {
     metalbear_sequencer *s = context;
     if (!s || !repo_event) return;
     wf_subscribe_event event = {0};
-    if (repo_event->kind == WF_REPO_STORE_EVENT_SYNC) {
+    if (repo_event->kind == METALBEAR_REPO_STORE_EVENT_SYNC) {
         event.type = WF_SUBSCRIBE_EVENT_SYNC;
         snprintf(event.data.sync.did, sizeof(event.data.sync.did), "%s",
                  repo_event->did);
@@ -276,11 +276,11 @@ void metalbear_sequencer_repo_event(const wf_repo_store_event *repo_event,
 }
 
 wf_status metalbear_sequencer_reconcile_repo(metalbear_sequencer *s,
-                                             wf_repo_store *repo) {
+                                             metalbear_repo_store *repo) {
     if (!s || !repo) return WF_ERR_INVALID_ARG;
     char *head_rev = NULL;
     char *head_cid = NULL;
-    wf_status status = wf_repo_store_get_head(repo, &head_rev, &head_cid);
+    wf_status status = metalbear_repo_store_get_head(repo, &head_rev, &head_cid);
     if (status == WF_ERR_NOT_FOUND) return WF_OK;
     if (status != WF_OK) return status;
 
@@ -319,11 +319,11 @@ wf_status metalbear_sequencer_reconcile_repo(metalbear_sequencer *s,
 
     unsigned char *blocks = NULL;
     size_t blocks_len = 0;
-    status = wf_repo_store_export(repo, NULL, &blocks, &blocks_len);
+    status = metalbear_repo_store_export(repo, NULL, &blocks, &blocks_len);
     if (status == WF_OK) {
         wf_subscribe_event event = {.type = WF_SUBSCRIBE_EVENT_SYNC};
         snprintf(event.data.sync.did, sizeof(event.data.sync.did), "%s",
-                 wf_repo_store_did(repo));
+                 metalbear_repo_store_did(repo));
         snprintf(event.data.sync.rev, sizeof(event.data.sync.rev), "%s",
                  head_rev);
         event.data.sync.blocks = blocks;

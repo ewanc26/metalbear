@@ -6,8 +6,8 @@
 #include "metalbear/key_rotation.h"
 #include "metalbear/oauth.h"
 #include "metalbear/sequencer.h"
-#include "wolfram/blob_store.h"
-#include "wolfram/repo_store.h"
+#include "metalbear/blob_store.h"
+#include "metalbear/repo_store.h"
 #include "wolfram/xrpc.h"
 
 #ifdef __cplusplus
@@ -30,8 +30,8 @@ typedef struct metalbear_account_context {
     char *did;
     char *handle;
     char *data_directory; /* absolute path to the account's store directory */
-    wf_repo_store *repo;
-    wf_blob_store *blobs;
+    metalbear_repo_store *repo;
+    metalbear_blob_store *blobs;
     metalbear_auth_store *auth;
     metalbear_account_store *account;
     metalbear_sequencer *sequencer;
