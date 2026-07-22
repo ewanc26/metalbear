@@ -38,7 +38,7 @@ int main(void) {
 
     wf_signing_key key1 = {0};
     CHECK(metalbear_key_rotation_current_key(key_store, &key1) == WF_OK);
-    CHECK(key1.type == WF_KEY_TYPE_P256);
+    CHECK(key1.type == WF_KEY_TYPE_SECP256K1);
 
     wf_signing_key key2 = {0};
     CHECK(metalbear_key_rotation_current_key(key_store, &key2) == WF_OK);
@@ -48,7 +48,7 @@ int main(void) {
     char *didkey = NULL;
     CHECK(metalbear_key_rotation_rotate(key_store, &rotated,
                                          &didkey) == WF_OK);
-    CHECK(rotated.type == WF_KEY_TYPE_P256);
+    CHECK(rotated.type == WF_KEY_TYPE_SECP256K1);
     CHECK(didkey != NULL && strstr(didkey, "did:key:") != NULL);
     free(didkey);
 
