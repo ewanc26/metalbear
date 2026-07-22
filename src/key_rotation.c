@@ -66,7 +66,7 @@ wf_status metalbear_key_rotation_current_key(
         int length = sqlite3_column_bytes(stmt, 0);
         if (bytes && length == 32) {
             memcpy(out->bytes, bytes, 32);
-            out->type = WF_KEY_TYPE_P256;
+            out->type = WF_KEY_TYPE_SECP256K1;
             sqlite3_finalize(stmt);
             pthread_mutex_unlock(&store->mutex);
             return WF_OK;
@@ -74,8 +74,8 @@ wf_status metalbear_key_rotation_current_key(
     }
     sqlite3_finalize(stmt);
 
-    /* Generate new key */
-    if (wf_signing_key_generate(WF_KEY_TYPE_P256, out) != WF_OK) {
+    /* Generate new key (secp256k1 for PLC compatibility) */
+    if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, out) != WF_OK) {
         pthread_mutex_unlock(&store->mutex);
         return WF_ERR_CRYPTO;
     }
@@ -99,7 +99,7 @@ wf_status metalbear_key_rotation_rotate(metalbear_key_rotation *store,
     memset(out_new_key, 0, sizeof(*out_new_key));
     if (out_didkey) *out_didkey = NULL;
 
-    if (wf_signing_key_generate(WF_KEY_TYPE_P256, out_new_key) != WF_OK)
+    if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, out_new_key) != WF_OK)
         return WF_ERR_CRYPTO;
 
     pthread_mutex_lock(&store->mutex);
@@ -126,7 +126,7 @@ wf_status metalbear_key_rotation_reserve(metalbear_key_rotation *store,
 
     wf_signing_key key;
     memset(&key, 0, sizeof(key));
-    if (wf_signing_key_generate(WF_KEY_TYPE_P256, &key) != WF_OK)
+    if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &key) != WF_OK)
         return WF_ERR_CRYPTO;
 
     return wf_signing_key_public_didkey(&key, out_didkey);
