@@ -3542,6 +3542,69 @@ static bool sb_append(sb_t *sb, const char *fmt, ...) {
     return true;
 }
 
+/* ---- /tls-check (public, mimics refpds on_demand_tls ask endpoint) ---- */
+static wf_status tls_check_handler(void *ctx, const wf_xrpc_request *req,
+                                   wf_xrpc_response *resp) {
+    metalbear_server *server = ctx;
+    cJSON *domain_item = req->params
+        ? cJSON_GetObjectItemCaseSensitive(req->params, "domain") : NULL;
+    if (!cJSON_IsString(domain_item) || !domain_item->valuestring[0]) {
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
+                                   "bad or missing domain query param");
+        return WF_OK;
+    }
+    const char *domain = domain_item->valuestring;
+
+    char service_hostname[256] = {0};
+    if (strncmp(server->service_did, "did:web:", 9) == 0) {
+        size_t len = strlen(server->service_did + 9);
+        if (len < sizeof(service_hostname)) {
+            memcpy(service_hostname, server->service_did + 9, len);
+            service_hostname[len] = '\0';
+        }
+    } else if (server->public_url) {
+        const char *p = strstr(server->public_url, "://");
+        if (p) {
+            p += 3;
+            const char *slash = strchr(p, '/');
+            size_t len = slash ? (size_t)(slash - p) : strlen(p);
+            if (len < sizeof(service_hostname)) {
+                memcpy(service_hostname, p, len);
+                service_hostname[len] = '\0';
+            }
+        }
+    }
+
+    if (service_hostname[0] && strcmp(domain, service_hostname) == 0) {
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddBoolToObject(root, "success", true);
+        return set_json(resp, root);
+    }
+
+    size_t domain_len = strlen(domain);
+    size_t ud_len = server->user_domain ? strlen(server->user_domain) : 0;
+    if (ud_len == 0 || domain_len <= ud_len ||
+        strcmp(domain + domain_len - ud_len, server->user_domain) != 0) {
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
+                                   "handles are not provided on this domain");
+        return WF_OK;
+    }
+
+    metalbear_account_entry *entry = NULL;
+    if (metalbear_account_registry_find_by_handle(server->registry, domain,
+                                                   &entry) == WF_OK && entry) {
+        metalbear_account_entry_free(entry);
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddBoolToObject(root, "success", true);
+        return set_json(resp, root);
+    }
+    metalbear_account_entry_free(entry);
+
+    wf_xrpc_response_set_error(resp, 404, "NotFound",
+                               "handle not found for this domain");
+    return WF_OK;
+}
+
 static wf_status landing_handler(void *ctx, const wf_xrpc_request *req,
                                  wf_xrpc_response *resp) {
     (void)req;
@@ -3661,9 +3724,15 @@ static wf_status register_identity_documents(metalbear_server *server) {
     if (status != WF_OK) return status;
     static const char robots[] =
         "User-agent: *\nAllow: /\n";
-    return wf_xrpc_server_register_static_get(
+    status = wf_xrpc_server_register_static_get(
         server->xrpc, "/robots.txt", "text/plain; charset=utf-8", robots,
         sizeof(robots) - 1);
+    if (status != WF_OK) return status;
+
+    status = wf_xrpc_server_register_http_route(server->xrpc, "GET",
+                                                "/tls-check",
+                                                tls_check_handler, server);
+    return status;
 }
 
 static bool valid_config(const metalbear_config *config) {
