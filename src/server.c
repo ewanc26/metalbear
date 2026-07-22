@@ -1596,7 +1596,7 @@ static char *mint_plc_did(metalbear_server *server, const char *handle) {
         goto fail;
 
     /* 7. Submit to the PLC directory; the response body is unused. */
-    if (wf_plc_submit_operation_raw(server->plc_url, signed_json) != WF_OK) {
+    if (wf_plc_submit_operation_raw(server->plc_url, plc_did, signed_json) != WF_OK) {
         free(plc_did);
         plc_did = NULL;
         goto fail;
