@@ -20,6 +20,7 @@
 
 #include "metalbear/blob_store.h"
 #include "wolfram/crypto.h"
+#include "wolfram/plc.h"
 #include "metalbear/repo_store.h"
 #include "wolfram/repo/cid.h"
 #include "wolfram/syntax.h"
@@ -1520,6 +1521,102 @@ static wf_status get_record(void *ctx, const wf_xrpc_request *request,
     return set_car_response(response, data, length);
 }
 
+/* ── PLC DID minting helper ───────────────────────────────────── */
+static char *mint_plc_did(metalbear_server *server, const char *handle) {
+    cJSON *root = NULL;
+    cJSON *verification = NULL;
+    char *unsigned_json = NULL;
+    char *signed_json = NULL;
+    char *account_didkey = NULL;
+    char *rotation_didkey = NULL;
+    wf_signing_key acct_key;
+    wf_signing_key rotation_key;
+    char *plc_did = NULL;
+
+    memset(&acct_key, 0, sizeof(acct_key));
+    memset(&rotation_key, 0, sizeof(rotation_key));
+
+    /* 1. Generate fresh secp256k1 signing key for the new account. */
+    if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &acct_key) != WF_OK ||
+        wf_signing_key_public_didkey(&acct_key, &account_didkey) != WF_OK)
+        goto fail;
+
+    /* 2. Load the PDS bootstrap rotation key to sign the genesis operation. */
+    if (metalbear_key_rotation_current_key(server->bootstrap->key_rotation,
+                                           &rotation_key) != WF_OK ||
+        wf_signing_key_public_didkey(&rotation_key, &rotation_didkey) != WF_OK)
+        goto fail;
+
+    /* 3. Build the unsigned plc_operation. */
+    const char *rotation_keys[] = { rotation_didkey };
+    char aka_buf[256];
+    char services_buf[512];
+    snprintf(aka_buf, sizeof(aka_buf), "at://%s", handle);
+    snprintf(services_buf, sizeof(services_buf),
+             "{\"atproto_pds\":{\"type\":\"AtprotoPersonalDataServer\","
+             "\"endpoint\":\"%s\"}}",
+             server->public_url ? server->public_url : "");
+
+    wf_plc_operation_update update = {
+        .rotation_keys = rotation_keys,
+        .rotation_keys_count = 1,
+        .verification_methods_json = NULL,
+        .services_json = services_buf,
+        .also_known_as = (const char *const[]){ aka_buf },
+        .also_known_as_count = 1,
+        .prev = NULL,
+    };
+
+    if (wf_plc_operation_build(&update, &unsigned_json) != WF_OK)
+        goto fail;
+
+    /* Inject the account did:key into verificationMethods. */
+    root = cJSON_Parse(unsigned_json);
+    if (!root) goto fail;
+    verification = cJSON_GetObjectItemCaseSensitive(root, "verificationMethods");
+    if (!cJSON_IsObject(verification)) goto fail;
+    {
+        cJSON *old = cJSON_DetachItemFromObjectCaseSensitive(verification, "atproto");
+        if (old) cJSON_Delete(old);
+    }
+    if (!cJSON_AddStringToObject(verification, "atproto", account_didkey))
+        goto fail;
+    char *unsigned_with_key = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    root = NULL;
+    if (!unsigned_with_key) goto fail;
+
+    /* 5. Sign the genesis operation with the rotation key. */
+    if (wf_plc_operation_sign(unsigned_with_key, &rotation_key,
+                              &signed_json) != WF_OK)
+        goto fail;
+
+    /* 6. Compute the deterministic DID from the unsigned operation. */
+    if (wf_plc_operation_compute_did(unsigned_with_key, &plc_did) != WF_OK)
+        goto fail;
+
+    /* 7. Submit to the PLC directory; the response body is unused. */
+    if (wf_plc_submit_operation_raw(server->plc_url, signed_json) != WF_OK) {
+        free(plc_did);
+        plc_did = NULL;
+        goto fail;
+    }
+
+    free(unsigned_json);
+    free(unsigned_with_key);
+    free(signed_json);
+    free(account_didkey);
+    free(rotation_didkey);
+    return plc_did;
+
+fail:
+    free(unsigned_json);
+    free(signed_json);
+    free(account_didkey);
+    free(rotation_didkey);
+    return NULL;
+}
+
 static wf_status create_account(void *ctx, const wf_xrpc_request *request,
                                 wf_xrpc_response *response) {
     metalbear_server *server = ctx;
@@ -1572,7 +1669,8 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
     }
 
     /* Resolve the new account's DID. A caller may supply one (e.g. a
-     * did:web or a did:plc minted out of band); otherwise we mint a fresh
+     * did:web or a did:plc minted out of band), or the PDS may mint a
+     * server-side did:plc via PLC when configured; otherwise we mint a fresh
      * did:key so every account is independently addressable and isolated. */
     char *account_did = NULL;
     if (cJSON_IsString(did) && did->valuestring[0]) {
@@ -1580,6 +1678,13 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
         if (!account_did) {
             wf_xrpc_response_set_error(response, 500, "InternalError",
                                        "Could not allocate account DID");
+            return WF_OK;
+        }
+    } else if (server->plc_url && server->plc_url[0]) {
+        account_did = mint_plc_did(server, handle->valuestring);
+        if (!account_did) {
+            wf_xrpc_response_set_error(response, 500, "InternalError",
+                                       "Could not mint PLC DID");
             return WF_OK;
         }
     } else {
