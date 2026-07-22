@@ -110,6 +110,9 @@ const char *metalbear_repo_store_did(const metalbear_repo_store *store);
 /** Repo handle (e.g. "example.com"). Borrowed; valid until store free. */
 const char *metalbear_repo_store_handle(const metalbear_repo_store *store);
 
+/** Signing key did:key (e.g. "did:key:z..."). Borrowed; valid until store free. */
+const char *metalbear_repo_store_signing_key_did(const metalbear_repo_store *store);
+
 wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store, const char *handle);
 
 wf_status metalbear_repo_store_get_stats(metalbear_repo_store *store,
