@@ -762,6 +762,11 @@ const char *metalbear_repo_store_handle(const metalbear_repo_store *store) {
     return store ? store->handle : NULL;
 }
 
+const char *metalbear_repo_store_signing_key_did(const metalbear_repo_store *store) {
+    if (!store) return NULL;
+    return store->signing_key_didkey;
+}
+
 wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store, const char *handle) {
     if (!store || !handle || !wf_syntax_handle_is_valid(handle))
         return WF_ERR_INVALID_ARG;
