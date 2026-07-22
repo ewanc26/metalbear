@@ -1635,6 +1635,8 @@ static char *mint_plc_did(metalbear_server *server, const char *handle) {
 
     /* 7. Submit to the PLC directory; the response body is unused. */
     LOG_INFO("submitting PLC operation to %s for DID %s", server->plc_url, plc_did);
+    LOG_INFO("unsigned operation: %s", unsigned_with_key);
+    LOG_INFO("signed operation: %s", signed_json);
     if (wf_plc_submit_operation_raw(server->plc_url, plc_did, signed_json) != WF_OK) {
         LOG_ERROR("failed to submit PLC operation to directory");
         free(plc_did);
