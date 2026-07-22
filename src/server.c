@@ -877,17 +877,28 @@ static cJSON *build_did_doc(metalbear_server *server,
     cJSON *context = cJSON_CreateArray();
     cJSON *services = cJSON_CreateArray();
     cJSON *service = cJSON_CreateObject();
-    if (!document || !context || !services || !service) {
+    cJSON *verification = cJSON_CreateObject();
+    if (!document || !context || !services || !service || !verification) {
         cJSON_Delete(document);
         cJSON_Delete(context);
         cJSON_Delete(services);
         cJSON_Delete(service);
+        cJSON_Delete(verification);
         return NULL;
     }
     cJSON_AddItemToArray(context,
                          cJSON_CreateString("https://www.w3.org/ns/did/v1"));
     cJSON_AddItemToObject(document, "@context", context);
     cJSON_AddStringToObject(document, "id", acct->did);
+    if (acct->repo) {
+        const char *signing_didkey = metalbear_repo_store_signing_key_did(acct->repo);
+        if (signing_didkey && signing_didkey[0])
+            cJSON_AddStringToObject(verification, "atproto", signing_didkey);
+    }
+    if (verification->child != NULL)
+        cJSON_AddItemToObject(document, "verificationMethods", verification);
+    else
+        cJSON_Delete(verification);
     cJSON_AddStringToObject(service, "id", "#atproto_pds");
     cJSON_AddStringToObject(service, "type", "AtprotoPersonalDataServer");
     cJSON_AddStringToObject(service, "serviceEndpoint", server->public_url);
@@ -924,8 +935,8 @@ static cJSON *session_json(metalbear_server *server,
     free(email);
     if (server->public_url) {
         cJSON *did_doc = build_did_doc(server, acct);
-        if (did_doc)
-            cJSON_AddItemToObject(root, "didDoc", did_doc);
+    if (did_doc)
+        cJSON_AddItemToObject(root, "didDoc", did_doc);
     }
     cJSON_AddBoolToObject(root, "emailAuthFactor", email_auth_factor);
     return root;
@@ -1537,15 +1548,25 @@ static char *mint_plc_did(metalbear_server *server, const char *handle) {
     memset(&rotation_key, 0, sizeof(rotation_key));
 
     /* 1. Generate fresh secp256k1 signing key for the new account. */
-    if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &acct_key) != WF_OK ||
-        wf_signing_key_public_didkey(&acct_key, &account_didkey) != WF_OK)
+    if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &acct_key) != WF_OK) {
+        LOG_ERROR("failed to generate account signing key");
         goto fail;
+    }
+    if (wf_signing_key_public_didkey(&acct_key, &account_didkey) != WF_OK) {
+        LOG_ERROR("failed to get account did:key");
+        goto fail;
+    }
 
     /* 2. Load the PDS bootstrap rotation key to sign the genesis operation. */
     if (metalbear_key_rotation_current_key(server->bootstrap->key_rotation,
-                                           &rotation_key) != WF_OK ||
-        wf_signing_key_public_didkey(&rotation_key, &rotation_didkey) != WF_OK)
+                                           &rotation_key) != WF_OK) {
+        LOG_ERROR("failed to get rotation key");
         goto fail;
+    }
+    if (wf_signing_key_public_didkey(&rotation_key, &rotation_didkey) != WF_OK) {
+        LOG_ERROR("failed to get rotation did:key");
+        goto fail;
+    }
 
     /* 3. Build the unsigned plc_operation. */
     const char *rotation_keys[] = { rotation_didkey };
@@ -1567,36 +1588,55 @@ static char *mint_plc_did(metalbear_server *server, const char *handle) {
         .prev = NULL,
     };
 
-    if (wf_plc_operation_build(&update, &unsigned_json) != WF_OK)
+    if (wf_plc_operation_build(&update, &unsigned_json) != WF_OK) {
+        LOG_ERROR("failed to build PLC operation");
         goto fail;
+    }
 
     /* Inject the account did:key into verificationMethods. */
     root = cJSON_Parse(unsigned_json);
-    if (!root) goto fail;
+    if (!root) {
+        LOG_ERROR("failed to parse unsigned operation JSON");
+        goto fail;
+    }
     verification = cJSON_GetObjectItemCaseSensitive(root, "verificationMethods");
-    if (!cJSON_IsObject(verification)) goto fail;
+    if (!cJSON_IsObject(verification)) {
+        LOG_ERROR("unsigned operation missing verificationMethods");
+        goto fail;
+    }
     {
         cJSON *old = cJSON_DetachItemFromObjectCaseSensitive(verification, "atproto");
         if (old) cJSON_Delete(old);
     }
-    if (!cJSON_AddStringToObject(verification, "atproto", account_didkey))
+    if (!cJSON_AddStringToObject(verification, "atproto", account_didkey)) {
+        LOG_ERROR("failed to add atproto verification method");
         goto fail;
+    }
     char *unsigned_with_key = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     root = NULL;
-    if (!unsigned_with_key) goto fail;
+    if (!unsigned_with_key) {
+        LOG_ERROR("failed to serialize unsigned operation with key");
+        goto fail;
+    }
 
     /* 5. Sign the genesis operation with the rotation key. */
     if (wf_plc_operation_sign(unsigned_with_key, &rotation_key,
-                              &signed_json) != WF_OK)
+                              &signed_json) != WF_OK) {
+        LOG_ERROR("failed to sign PLC operation");
         goto fail;
+    }
 
     /* 6. Compute the deterministic DID from the unsigned operation. */
-    if (wf_plc_operation_compute_did(unsigned_with_key, &plc_did) != WF_OK)
+    if (wf_plc_operation_compute_did(unsigned_with_key, &plc_did) != WF_OK) {
+        LOG_ERROR("failed to compute PLC DID");
         goto fail;
+    }
 
     /* 7. Submit to the PLC directory; the response body is unused. */
+    LOG_INFO("submitting PLC operation to %s for DID %s", server->plc_url, plc_did);
     if (wf_plc_submit_operation_raw(server->plc_url, plc_did, signed_json) != WF_OK) {
+        LOG_ERROR("failed to submit PLC operation to directory");
         free(plc_did);
         plc_did = NULL;
         goto fail;
@@ -1626,6 +1666,13 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
         ? cJSON_GetObjectItemCaseSensitive(request->params, "password") : NULL;
     cJSON *did = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
+    cJSON *email = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "email") : NULL;
+    if (!cJSON_IsString(email) || !email->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidEmail",
+                                   "email is required");
+        return WF_OK;
+    }
     if (!cJSON_IsString(handle) || !handle->valuestring[0]) {
         wf_xrpc_response_set_error(response, 400, "InvalidHandle",
                                    "handle is required");
@@ -1668,6 +1715,24 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
 
+    /* Ensure handle uses the configured user domain (matches refpds behavior). */
+    size_t handle_len = strlen(handle->valuestring);
+    size_t ud_len = server->user_domain ? strlen(server->user_domain) : 0;
+    if (ud_len == 0 || handle_len <= ud_len ||
+        strcmp(handle->valuestring + handle_len - ud_len,
+               server->user_domain) != 0) {
+        wf_xrpc_response_set_error(response, 400, "UnsupportedDomain",
+                                   "handle is not provided on this domain");
+        return WF_OK;
+    }
+    /* Enforce 3-18 character label before the domain. */
+    size_t label_len = handle_len - ud_len;
+    if (label_len < 3 || label_len > 18) {
+        wf_xrpc_response_set_error(response, 400, "InvalidHandle",
+                                   "handle too short or too long");
+        return WF_OK;
+    }
+ 
     /* Resolve the new account's DID. A caller may supply one (e.g. a
      * did:web or a did:plc minted out of band), or the PDS may mint a
      * server-side did:plc via PLC when configured; otherwise we mint a fresh
@@ -1723,6 +1788,15 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
 
+    if (metalbear_account_store_email(acct->account, email->valuestring) != WF_OK) {
+        metalbear_account_context_close(acct);
+        free(account_did);
+        free(data_dir);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not store account email");
+        return WF_OK;
+    }
+
     /* Record the account in the shared registry with its absolute data
      * directory so future requests can resolve and reopen it. */
     status = metalbear_account_registry_add(server->registry, account_did,
@@ -1748,6 +1822,10 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
     metalbear_session_tokens tokens = {0};
     wf_status session_status = metalbear_auth_create_scoped_session(
         acct->auth, METALBEAR_ACCESS_FULL, NULL, &tokens);
+    /* Build didDoc while the account context is still open. */
+    cJSON *did_doc = NULL;
+    if (server->public_url)
+        did_doc = build_did_doc(server, acct);
     metalbear_account_context_close(acct);
     free(data_dir);
     if (session_status != WF_OK) {
@@ -1767,6 +1845,8 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
     cJSON_AddStringToObject(root, "refreshJwt", tokens.refresh_jwt);
     cJSON_AddStringToObject(root, "handle", handle->valuestring);
     cJSON_AddStringToObject(root, "did", account_did);
+    if (did_doc)
+        cJSON_AddItemToObject(root, "didDoc", did_doc);
     metalbear_session_tokens_free(&tokens);
     free(account_did);
     return set_json(response, root);

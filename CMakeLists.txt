@@ -34,7 +34,7 @@ get_target_property(METALBEAR_CJSON_SOURCE_DIR cjson SOURCE_DIR)
 
 add_library(metalbear_core src/account.c src/account_registry.c src/account_context.c src/account_cache.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/key_rotation.c src/repo_store.c src/sequencer.c src/server.c src/report.c src/blob_store.c src/blob_store_server.c)
 target_include_directories(metalbear_core PUBLIC include
-    PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+    PUBLIC "${METALBEAR_CJSON_SOURCE_DIR}")
 target_link_libraries(metalbear_core PUBLIC wolfram cjson PRIVATE SQLite3::SQLite3 Threads::Threads)
 target_compile_definitions(metalbear_core PRIVATE
     METALBEAR_VERSION="${PROJECT_VERSION}")

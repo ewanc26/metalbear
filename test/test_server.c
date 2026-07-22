@@ -179,7 +179,7 @@ int main(void) {
     /* Test createAccount: register a second account in the registry */
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
         "{\"handle\":\"bob.example.com\",\"password\":\"bobsecret\","
-        "\"did\":\"did:plc:bob\"}",
+        "\"did\":\"did:plc:bob\",\"email\":\"bob@example.com\"}",
         &response) == WF_OK);
     CHECK(response.status == 200);
     cJSON *create_json = json_response(&response);
@@ -193,9 +193,20 @@ int main(void) {
     cJSON_Delete(create_json);
     wf_response_free(&response);
 
+    /* Missing email should return InvalidEmail */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
+        "{\"handle\":\"x.example.com\",\"password\":\"test\",\"did\":\"did:plc:x\"}",
+        &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    create_json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(create_json, "error")->valuestring,
+                 "InvalidEmail") == 0);
+    cJSON_Delete(create_json);
+    wf_response_free(&response);
+
     /* Missing handle should return InvalidHandle */
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
-        "{\"password\":\"test\",\"did\":\"did:plc:x\"}",
+        "{\"email\":\"x@example.com\",\"password\":\"test\",\"did\":\"did:plc:x\"}",
         &response) == WF_ERR_HTTP);
     CHECK(response.status == 400);
     create_json = json_response(&response);
@@ -207,7 +218,7 @@ int main(void) {
     /* Duplicate handle should return HandleNotAvailable */
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
         "{\"handle\":\"bob.example.com\",\"password\":\"other\","
-        "\"did\":\"did:plc:bob2\"}",
+        "\"did\":\"did:plc:bob2\",\"email\":\"other@example.com\"}",
         &response) == WF_ERR_HTTP);
     CHECK(response.status == 400);
     create_json = json_response(&response);
@@ -238,7 +249,7 @@ int main(void) {
     /* A second, distinct account gets its own separate directory. */
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
         "{\"handle\":\"dave.example.com\",\"password\":\"davesecret\","
-        "\"did\":\"did:plc:dave\"}",
+        "\"did\":\"did:plc:dave\",\"email\":\"dave@example.com\"}",
         &response) == WF_OK);
     CHECK(response.status == 200);
     cJSON *dave_json = json_response(&response);
@@ -681,7 +692,7 @@ int main(void) {
         /* Create a throwaway account to delete. */
         CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
             "{\"handle\":\"charlie.example.com\",\"password\":\"charliepw\","
-            "\"did\":\"did:plc:charlie\"}",
+            "\"did\":\"did:plc:charlie\",\"email\":\"charlie@example.com\"}",
             &response) == WF_OK);
         CHECK(response.status == 200);
         cJSON_Delete(json_response(&response));

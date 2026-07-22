@@ -66,8 +66,8 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
                             const char *did, const char *password) {
     char body[512];
     snprintf(body, sizeof(body),
-             "{\"handle\":\"%s\",\"password\":\"%s\",\"did\":\"%s\"}",
-             handle, password, did);
+             "{\"handle\":\"%s\",\"password\":\"%s\",\"did\":\"%s\",\"email\":\"%s@example.com\"}",
+             handle, password, did, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
                           &response) != WF_OK || response.status != 200) {
