@@ -3087,6 +3087,57 @@ static wf_status create_report(void *ctx,
     return WF_OK;
 }
 
+/* ---- com.atproto.sync.getHead (query) ----
+ * DEPRECATED: returns the repo head CID. Thin wrapper around the same
+ * head-reader used by getLatestCommit. */
+static wf_status get_head(void *ctx,
+                          const wf_xrpc_request *request,
+                          wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
+    if (!cJSON_IsString(did)) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "did is required");
+        return WF_OK;
+    }
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 400, "HeadNotFound",
+                                   "repository is empty or unavailable");
+        return WF_OK;
+    }
+    char *rev = NULL, *cid = NULL;
+    wf_status st = metalbear_repo_store_get_head(acct->repo, &rev, &cid);
+    if (st == WF_ERR_NOT_FOUND) {
+        wf_xrpc_response_set_error(response, 400, "HeadNotFound",
+                                   "repository is empty");
+        return WF_OK;
+    } else if (st != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "failed to read head");
+        return WF_OK;
+    }
+    cJSON *out = cJSON_CreateObject();
+    if (!out) { free(rev); free(cid); return WF_ERR_ALLOC; }
+    cJSON_AddStringToObject(out, "root", cid ? cid : "");
+    char *js = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    free(rev); free(cid);
+    if (!js) return WF_ERR_ALLOC;
+    wf_xrpc_response_set_body(response, js, strlen(js));
+    free(js);
+    return WF_OK;
+}
+
+/* ---- com.atproto.sync.getCheckout (query) ----
+ * DEPRECATED: returns a CAR stream of the repo. Reuses getRepo's CAR export. */
+static wf_status get_checkout(void *ctx,
+                              const wf_xrpc_request *request,
+                              wf_xrpc_response *response) {
+    return get_repo(ctx, request, response);
+}
+
 /* ---- com.atproto.temp.checkSignupQueue (query) ----
  * Temporary unspecced route. MetalBear has no entryway, so always
  * returns { activated: true }. */
