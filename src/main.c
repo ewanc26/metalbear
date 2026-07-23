@@ -281,6 +281,8 @@ int main(void) {
         .admin_password = getenv("METALBEAR_ADMIN_PASSWORD"),
         .crawlers = getenv("METALBEAR_CRAWLERS"),
         .plc_url = getenv("METALBEAR_PLC_URL"),
+        .appview_url = getenv("METALBEAR_APPVIEW_URL"),
+        .appview_did = getenv("METALBEAR_APPVIEW_DID"),
         .invite_required = false,
         .blob_upload_limit = 0,
     };

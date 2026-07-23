@@ -41,6 +41,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <ftw.h>
+#include <curl/curl.h>
 
 typedef enum metalbear_log_level {
     METALBEAR_LOG_DEBUG = 0,
@@ -127,6 +128,8 @@ struct metalbear_server {
     bool invite_required;
     int64_t blob_upload_limit; /* 0 => unlimited */
     char *plc_url;            /* PLC directory URL or NULL */
+    char *appview_url;        /* Upstream AppView URL or NULL */
+    char *appview_did;        /* Upstream AppView DID for service-auth or NULL */
     metalbear_account_cache *account_cache;
     metalbear_report_store *reports;
 };
@@ -1657,6 +1660,223 @@ static wf_status get_service_auth(void *ctx,
     cJSON_AddStringToObject(root, "token", token);
     free(token);
     return set_json(response, root);
+}
+
+/* ------------------------------------------------------------------ */
+/* AppView proxy fallback                                               */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    char *data;
+    size_t len;
+    size_t cap;
+} proxy_buf_t;
+
+static size_t proxy_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
+    proxy_buf_t *buf = (proxy_buf_t *)userdata;
+    size_t total = size * nmemb;
+    if (buf->len + total + 1 > buf->cap) {
+        size_t newcap = (buf->cap + total) * 2;
+        char *grown = realloc(buf->data, newcap);
+        if (!grown) return 0;
+        buf->data = grown;
+        buf->cap = newcap;
+    }
+    memcpy(buf->data + buf->len, ptr, total);
+    buf->len += total;
+    buf->data[buf->len] = '\0';
+    return total;
+}
+
+static size_t proxy_header_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
+    char **content_type = (char **)userdata;
+    size_t total = size * nmemb;
+    if (total >= 14 && strncmp(ptr, "Content-Type:", 13) == 0) {
+        const char *val = ptr + 13;
+        while (*val == ' ' || *val == '\t') val++;
+        free(*content_type);
+        *content_type = strndup(val, total - 13);
+    }
+    return total;
+}
+
+static char *resolve_did_web_service(const char *did, const char *service_id) {
+    if (strncmp(did, "did:web:", 9) != 0) return NULL;
+    const char *host = did + 9;
+    if (!host || !host[0]) return NULL;
+    char url[512];
+    int n = snprintf(url, sizeof(url), "https://%s/.well-known/did.json", host);
+    if (n < 0 || (size_t)n >= sizeof(url)) return NULL;
+
+    CURL *curl = curl_easy_init();
+    if (!curl) return NULL;
+    proxy_buf_t body = {0};
+    char *ct = NULL;
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, proxy_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, proxy_header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ct);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    CURLcode rc = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    if (rc != CURLE_OK || !body.data) {
+        free(body.data);
+        free(ct);
+        return NULL;
+    }
+
+    cJSON *doc = cJSON_Parse(body.data);
+    free(body.data);
+    if (!doc) {
+        free(ct);
+        return NULL;
+    }
+
+    cJSON *services = cJSON_GetObjectItemCaseSensitive(doc, "service");
+    char *endpoint = NULL;
+    if (cJSON_IsArray(services)) {
+        size_t count = cJSON_GetArraySize(services);
+        for (size_t i = 0; i < count; i++) {
+            cJSON *svc = cJSON_GetArrayItem(services, i);
+            if (!cJSON_IsObject(svc)) continue;
+            cJSON *id = cJSON_GetObjectItemCaseSensitive(svc, "id");
+            cJSON *type = cJSON_GetObjectItemCaseSensitive(svc, "type");
+            if (cJSON_IsString(id) && cJSON_IsString(type)) {
+                 bool match = (service_id && service_id[0])
+                     ? (strcmp(id->valuestring, service_id) == 0 ||
+                        (id->valuestring[0] == '#' &&
+                         strcmp(id->valuestring + 1, service_id) == 0))
+                     : (strcmp(type->valuestring, "HttpUrl") == 0 ||
+                        strcmp(type->valuestring, "WebSocket") == 0);
+                if (match) {
+                    cJSON *ep = cJSON_GetObjectItemCaseSensitive(svc, "serviceEndpoint");
+                    if (cJSON_IsString(ep) && ep->valuestring[0]) {
+                        endpoint = strdup(ep->valuestring);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    cJSON_Delete(doc);
+    free(ct);
+    return endpoint;
+}
+
+static wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
+                                wf_xrpc_response *resp) {
+    metalbear_server *server = ctx;
+    if (!server->appview_url || !server->appview_url[0]) {
+        wf_xrpc_response_set_error(resp, 501, "MethodNotImplemented",
+                                   "No AppView configured");
+        return WF_OK;
+    }
+
+    char *upstream = NULL;
+    const char *proxy_header = req->atproto_proxy;
+    if (proxy_header && proxy_header[0]) {
+        const char *hash = strrchr(proxy_header, '#');
+        const char *svc_id = hash ? hash + 1 : NULL;
+        upstream = resolve_did_web_service(proxy_header, svc_id);
+        if (!upstream) {
+            wf_xrpc_response_set_error(resp, 502, "BadGateway",
+                                       "Could not resolve atproto-proxy target");
+            return WF_OK;
+        }
+    } else {
+        upstream = strdup(server->appview_url);
+    }
+    if (!upstream) {
+        wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                   "Out of memory");
+        return WF_OK;
+    }
+
+    char target[1024];
+    int n = snprintf(target, sizeof(target), "%s/xrpc/%s%s%s",
+                     upstream, req->nsid ? req->nsid : "",
+                     req->raw_query && req->raw_query[0] ? "?" : "",
+                     req->raw_query ? req->raw_query : "");
+    free(upstream);
+    if (n < 0 || (size_t)n >= sizeof(target)) {
+        wf_xrpc_response_set_error(resp, 414, "UriTooLong",
+                                   "Proxied URI exceeds limit");
+        return WF_OK;
+    }
+
+    char *service_token = NULL;
+    if (server->bootstrap && server->bootstrap->repo && server->appview_did) {
+        metalbear_repo_store_create_service_auth(server->bootstrap->repo,
+            server->appview_did, 60, req->nsid, &service_token);
+    }
+
+    struct curl_slist *hdrs = NULL;
+    if (req->content_type && req->content_type[0]) {
+        char ct[256];
+        snprintf(ct, sizeof(ct), "Content-Type: %s", req->content_type);
+        hdrs = curl_slist_append(hdrs, ct);
+    }
+    if (service_token) {
+        char auth[512];
+        snprintf(auth, sizeof(auth), "Authorization: Bearer %s", service_token);
+        hdrs = curl_slist_append(hdrs, auth);
+    }
+    if (req->host_header && req->host_header[0]) {
+        char host[256];
+        snprintf(host, sizeof(host), "Host: %s", req->host_header);
+        hdrs = curl_slist_append(hdrs, host);
+    }
+
+    proxy_buf_t body = {0};
+    char *ct_out = NULL;
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        free(service_token);
+        curl_slist_free_all(hdrs);
+        wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                   "Could not initialise HTTP client");
+        return WF_OK;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, target);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, req->method ? req->method : "GET");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, proxy_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, proxy_header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ct_out);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    if (req->body && req->body_len > 0) {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, req->body);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)req->body_len);
+    }
+    CURLcode rc = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(curl);
+    curl_slist_free_all(hdrs);
+    free(service_token);
+
+    if (rc != CURLE_OK) {
+        free(body.data);
+        free(ct_out);
+        wf_xrpc_response_set_error(resp, 502, "BadGateway",
+                                   "Upstream request failed");
+        return WF_OK;
+    }
+
+    resp->http_status = status;
+    if (ct_out) {
+        wf_xrpc_response_set_content_type(resp, ct_out);
+        free(ct_out);
+    }
+    if (body.data && body.len > 0) {
+        wf_xrpc_response_set_body(resp, body.data, body.len);
+    }
+    free(body.data);
+    return WF_OK;
 }
 
 static wf_status set_car_response(wf_xrpc_response *response,
@@ -4107,6 +4327,10 @@ static bool copy_config(metalbear_server *server,
     server->blob_upload_limit = config->blob_upload_limit;
     if (config->plc_url && config->plc_url[0])
         server->plc_url = strdup(config->plc_url);
+    if (config->appview_url && config->appview_url[0])
+        server->appview_url = strdup(config->appview_url);
+    if (config->appview_did && config->appview_did[0])
+        server->appview_did = strdup(config->appview_did);
     return server->service_did && (!config->public_url || server->public_url) &&
            server->user_domain && server->data_directory;
 }
@@ -4797,6 +5021,10 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
 
+    if (server->appview_url && server->appview_url[0]) {
+        wf_xrpc_server_set_fallback(server->xrpc, proxy_fallback, server);
+    }
+
     wf_xrpc_server_set_auth_callback(server->xrpc, authenticate, server);
 
     /* Register OAuth HTTP routes (bypass XRPC auth) */
@@ -4983,5 +5211,7 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->admin_password);
     free(server->crawlers);
     free(server->plc_url);
+    free(server->appview_url);
+    free(server->appview_did);
     free(server);
 }
