@@ -4347,6 +4347,10 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "com.atproto.sync.listRepos", list_repos, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.sync.getRecord", get_record, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.sync.getHead", get_head, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.sync.getCheckout", get_checkout, server) != WF_OK ||
         metalbear_sequencer_register(server->bootstrap->sequencer,
                                      server->xrpc) != WF_OK) {
         LOG_ERROR("cannot register sync export routes");
