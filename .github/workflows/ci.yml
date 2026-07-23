@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  default:
+    name: default build + ctest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            pkg-config \
+            libsqlite3-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libsecp256k1-dev \
+            libmicrohttpd-dev \
+            libzstd-dev \
+            libc-ares-dev \
+            libidn2-dev \
+            python3
+
+      - name: Configure
+        run: |
+          if [ ! -d "${{ github.workspace }}/../wolfram" ]; then
+            git clone https://github.com/ewanc26/wolfram "${{ github.workspace }}/../wolfram"
+          fi
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DWOLFRAM_SOURCE_DIR="${{ github.workspace }}/../wolfram"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -j"$(nproc)"
