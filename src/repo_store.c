@@ -1828,6 +1828,32 @@ wf_status metalbear_repo_store_list_records(metalbear_repo_store *s, const char 
     return WF_OK;
 }
 
+/* ── record streaming (com.atproto.repo.listMissingBlobs support) ────── */
+
+wf_status metalbear_repo_store_foreach_record(
+    metalbear_repo_store *s,
+    wf_status (*visit)(const char *collection, const char *rkey,
+                       const char *value_json, void *ctx),
+    void *ctx) {
+    if (!s || !visit) return WF_ERR_INVALID_ARG;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db,
+            "SELECT collection, rkey, value FROM records "
+            "ORDER BY collection ASC, rkey ASC;",
+            -1, &stmt, NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    wf_status status = WF_OK;
+    while (status == WF_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *collection = (const char *)sqlite3_column_text(stmt, 0);
+        const char *rkey = (const char *)sqlite3_column_text(stmt, 1);
+        const char *value = (const char *)sqlite3_column_text(stmt, 2);
+        status = visit(collection ? collection : "", rkey ? rkey : "",
+                       value ? value : "{}", ctx);
+    }
+    sqlite3_finalize(stmt);
+    return status;
+}
+
 /* ── getLatestCommit (com.atproto.sync.getLatestCommit) ───────────────── */
 
 wf_status metalbear_repo_store_get_head(metalbear_repo_store *s, char **out_rev,
