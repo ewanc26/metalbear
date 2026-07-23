@@ -199,7 +199,7 @@ static int mint_bootstrap_did(const metalbear_config *config) {
     }
 
     char *plc_did = NULL;
-    if (wf_plc_operation_compute_did(unsigned_with_key, &plc_did) != WF_OK) {
+    if (wf_plc_operation_compute_did(signed_json, &plc_did) != WF_OK) {
         fprintf(stderr, "MetalBear [ERROR] failed to compute PLC DID\n");
         free(signed_json);
         free(unsigned_with_key);
