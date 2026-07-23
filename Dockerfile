@@ -39,7 +39,7 @@ COPY MetalBear ./MetalBear
 COPY wolfram ./wolfram
 
 RUN cmake -S MetalBear -B build \
-        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_BUILD_TYPE=Debug \
         -DMETALBEAR_BUILD_TESTS=OFF \
         -DWOLFRAM_SOURCE_DIR=/src/wolfram \
     && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)"
