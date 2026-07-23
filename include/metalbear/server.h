@@ -52,6 +52,11 @@ typedef struct metalbear_config {
     /* PLC directory URL for did:plc account creation. NULL/empty => accounts
      * default to did:key instead of did:plc. */
     const char *plc_url;
+    /* Upstream AppView URL and DID for app.bsky.* proxying. When set, unmatched
+     * app.bsky.* XRPC NSIDs are forwarded to the AppView with a short-lived
+     * service-auth JWT minted from the PDS's repo key. */
+    const char *appview_url;
+    const char *appview_did;
 } metalbear_config;
 
 /* Start a single-account AT Protocol PDS. All strings are copied. */

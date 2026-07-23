@@ -1823,6 +1823,12 @@ int main(void) {
         free(lmb_token);
         wf_xrpc_client_set_auth(client, NULL);
 
+        /* Unknown app.bsky.* NSIDs return 501 when no AppView is configured. */
+        CHECK(wf_xrpc_query(client, "app.bsky.feed.getFeedSkeleton",
+                            NULL, &response) == WF_ERR_HTTP);
+        CHECK(response.status == 501);
+        wf_response_free(&response);
+
         wf_xrpc_client_free(client);
         metalbear_server_free(server);
     }
