@@ -271,6 +271,23 @@ wf_status metalbear_repo_store_list_records(metalbear_repo_store *store,
                                      char **out_json);
 
 /**
+ * Stream every record in the repository (all collections) to a callback,
+ * ordered by (collection, rkey). Used by com.atproto.repo.listMissingBlobs
+ * to scan record values for blob references without materialising the whole
+ * repo in memory.
+ *
+ * `value_json` is the record's JSON encoding (borrowed; valid only for the
+ * duration of the call). Return WF_OK from `visit` to continue iteration;
+ * any other status aborts the walk and is propagated to the caller, letting
+ * the consumer stop early (e.g. once a page is full).
+ */
+wf_status metalbear_repo_store_foreach_record(
+    metalbear_repo_store *store,
+    wf_status (*visit)(const char *collection, const char *rkey,
+                       const char *value_json, void *ctx),
+    void *ctx);
+
+/**
  * Return the current head commit's rev + CID
  * (com.atproto.sync.getLatestCommit). Returns WF_ERR_NOT_FOUND when the
  * repository is empty (no head commit yet). On WF_OK, *out_rev and
