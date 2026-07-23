@@ -140,6 +140,9 @@ static bool is_public_route(const char *nsid) {
         "com.atproto.server.requestPasswordReset",
         "com.atproto.server.reserveSigningKey",
         "com.atproto.identity.resolveHandle",
+        "com.atproto.identity.resolveDid",
+        "com.atproto.identity.resolveIdentity",
+        "com.atproto.identity.refreshIdentity",
         "com.atproto.repo.getRecord",
         "com.atproto.repo.describeRepo",
         "com.atproto.repo.listRecords",
@@ -592,6 +595,261 @@ static wf_status resolve_handle(void *ctx, const wf_xrpc_request *request,
     if (!root) return WF_ERR_ALLOC;
     cJSON_AddStringToObject(root, "did", acct->did);
     return set_json(response, root);
+}
+
+/* ---- shared identity resolution helpers ----
+ * Used by com.atproto.identity.resolveDid / resolveIdentity / refreshIdentity.
+ * Local accounts are answered from the registry; everything else resolves
+ * over the network (PLC directory for did:plc, well-known for did:web,
+ * DNS TXT + well-known for handles), matching rsky-pds' behavior. */
+
+/* Defined further below alongside the session serializers. */
+static cJSON *build_did_doc(metalbear_server *server,
+                            metalbear_account_context *acct);
+
+/* Fetch a remote DID document's raw JSON. did:plc goes through the
+ * configured PLC directory; did:web through its well-known URL. On WF_OK
+ * *out_json is heap-allocated and must be freed by the caller. */
+static wf_status fetch_remote_did_doc(metalbear_server *server,
+                                      const char *did, char **out_json) {
+    *out_json = NULL;
+    char url[1024];
+    if (strncmp(did, "did:plc:", 8) == 0) {
+        if (!server->plc_url) return WF_ERR_NOT_FOUND;
+        int n = snprintf(url, sizeof(url), "%s/%s", server->plc_url, did);
+        if (n < 0 || (size_t)n >= sizeof(url)) return WF_ERR_INVALID_ARG;
+    } else if (strncmp(did, "did:web:", 8) == 0) {
+        /* did:web:example.com[:path:segments] -> percent-decoded URL;
+         * a plain host uses /.well-known/did.json. */
+        char host_path[768];
+        size_t j = 0;
+        for (const char *p = did + 8; *p && j + 1 < sizeof(host_path); p++) {
+            host_path[j++] = (*p == ':') ? '/' : *p;
+        }
+        host_path[j] = '\0';
+        int n;
+        if (strchr(host_path, '/'))
+            n = snprintf(url, sizeof(url), "https://%s/did.json", host_path);
+        else
+            n = snprintf(url, sizeof(url), "https://%s/.well-known/did.json",
+                         host_path);
+        if (n < 0 || (size_t)n >= sizeof(url)) return WF_ERR_INVALID_ARG;
+    } else {
+        return WF_ERR_INVALID_ARG;
+    }
+    wf_xrpc_client *client = wf_xrpc_client_new("https://localhost");
+    if (!client) return WF_ERR_ALLOC;
+    wf_response upstream = {0};
+    wf_status status = wf_http_get(client, url, &upstream);
+    wf_xrpc_client_free(client);
+    if (status != WF_OK || upstream.status < 200 || upstream.status >= 300 ||
+        !upstream.body) {
+        wf_response_free(&upstream);
+        return WF_ERR_NOT_FOUND;
+    }
+    *out_json = strndup(upstream.body, upstream.body_len);
+    wf_response_free(&upstream);
+    return *out_json ? WF_OK : WF_ERR_ALLOC;
+}
+
+/* Build (local) or fetch (remote) the DID document for `did` as a cJSON
+ * tree. Caller must cJSON_Delete the result. Sets *deactivated when the
+ * local account exists but is deactivated. */
+static cJSON *did_doc_for_did(metalbear_server *server, const char *did,
+                              bool *deactivated) {
+    *deactivated = false;
+    metalbear_account_context *acct = context_for_did(server, did);
+    if (acct) {
+        if (!metalbear_account_is_active(acct->account)) {
+            *deactivated = true;
+            return NULL;
+        }
+        return build_did_doc(server, acct);
+    }
+    char *json = NULL;
+    if (fetch_remote_did_doc(server, did, &json) != WF_OK || !json)
+        return NULL;
+    cJSON *doc = cJSON_Parse(json);
+    free(json);
+    return doc;
+}
+
+/* Extract the first at:// handle claimed by a DID document's alsoKnownAs.
+ * Heap-allocated; caller frees. NULL when the doc claims no handle. */
+static char *did_doc_claimed_handle(const cJSON *did_doc) {
+    const cJSON *aka = cJSON_GetObjectItemCaseSensitive(did_doc, "alsoKnownAs");
+    const cJSON *entry = NULL;
+    cJSON_ArrayForEach(entry, aka) {
+        if (!cJSON_IsString(entry) || !entry->valuestring) continue;
+        if (strncmp(entry->valuestring, "at://", 5) == 0)
+            return strdup(entry->valuestring + 5);
+    }
+    return NULL;
+}
+
+/* Resolve a handle to a DID: local registry first, then DNS TXT /
+ * well-known over the network. Heap-allocated; caller frees. */
+static char *resolve_handle_to_did(metalbear_server *server,
+                                   const char *handle) {
+    metalbear_account_entry *entry = NULL;
+    if (metalbear_account_registry_find_by_handle(server->registry, handle,
+                                                  &entry) == WF_OK && entry) {
+        char *did = strdup(entry->did);
+        metalbear_account_entry_free(entry);
+        return did;
+    }
+    wf_xrpc_client *client = wf_xrpc_client_new("https://localhost");
+    if (!client) return NULL;
+    char *did = NULL;
+    if (wf_handle_resolve(client, handle, &did) != WF_OK) did = NULL;
+    wf_xrpc_client_free(client);
+    return did;
+}
+
+/* Shared core of resolveIdentity (query) and refreshIdentity (procedure):
+ * resolve `identifier` (handle or DID) to {did, handle, didDoc} with
+ * bi-directional handle verification ('handle.invalid' on mismatch). */
+static wf_status identity_info_response(metalbear_server *server,
+                                        const char *identifier,
+                                        wf_xrpc_response *response) {
+    char *did = NULL;
+    char *input_handle = NULL;
+    if (strncmp(identifier, "did:", 4) == 0) {
+        if (!wf_syntax_did_is_valid(identifier)) {
+            wf_xrpc_response_set_error(response, 400, "DidNotFound",
+                                       "could not resolve DID");
+            return WF_OK;
+        }
+        did = strdup(identifier);
+    } else {
+        if (!wf_syntax_handle_is_valid(identifier)) {
+            wf_xrpc_response_set_error(response, 400, "HandleNotFound",
+                                       "unable to resolve handle");
+            return WF_OK;
+        }
+        input_handle = strdup(identifier);
+        did = resolve_handle_to_did(server, identifier);
+        if (!did) {
+            free(input_handle);
+            wf_xrpc_response_set_error(response, 400, "HandleNotFound",
+                                       "unable to resolve handle");
+            return WF_OK;
+        }
+    }
+    if (!did) {
+        free(input_handle);
+        return WF_ERR_ALLOC;
+    }
+    bool deactivated = false;
+    cJSON *did_doc = did_doc_for_did(server, did, &deactivated);
+    if (!did_doc) {
+        free(did);
+        free(input_handle);
+        if (deactivated)
+            wf_xrpc_response_set_error(response, 400, "DidDeactivated",
+                                       "DID has been deactivated");
+        else
+            wf_xrpc_response_set_error(response, 400, "DidNotFound",
+                                       "could not resolve DID");
+        return WF_OK;
+    }
+    /* Bi-directional verification of the handle. */
+    char *doc_handle = did_doc_claimed_handle(did_doc);
+    const char *verified = "handle.invalid";
+    if (input_handle) {
+        /* The input handle resolved to this DID; validated when the DID
+         * document claims the same handle back (case-insensitive). */
+        if (doc_handle && strcasecmp(doc_handle, input_handle) == 0)
+            verified = doc_handle;
+    } else if (doc_handle) {
+        /* DID input: verify the claimed handle resolves back to this DID. */
+        char *resolved = resolve_handle_to_did(server, doc_handle);
+        if (resolved && strcmp(resolved, did) == 0)
+            verified = doc_handle;
+        free(resolved);
+    }
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        free(did);
+        free(input_handle);
+        free(doc_handle);
+        cJSON_Delete(did_doc);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddStringToObject(root, "did", did);
+    cJSON_AddStringToObject(root, "handle", verified);
+    cJSON_AddItemToObject(root, "didDoc", did_doc);
+    free(did);
+    free(input_handle);
+    free(doc_handle);
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.identity.resolveDid (query) ----
+ * Resolves a DID to its complete DID document. Does not bi-directionally
+ * verify the handle. Public route. */
+static wf_status resolve_did_identity(void *ctx,
+                                      const wf_xrpc_request *request,
+                                      wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
+    if (!cJSON_IsString(did) || !wf_syntax_did_is_valid(did->valuestring)) {
+        wf_xrpc_response_set_error(response, 400, "DidNotFound",
+                                   "could not resolve DID");
+        return WF_OK;
+    }
+    bool deactivated = false;
+    cJSON *did_doc = did_doc_for_did(server, did->valuestring, &deactivated);
+    if (!did_doc) {
+        if (deactivated)
+            wf_xrpc_response_set_error(response, 400, "DidDeactivated",
+                                       "DID has been deactivated");
+        else
+            wf_xrpc_response_set_error(response, 400, "DidNotFound",
+                                       "could not resolve DID");
+        return WF_OK;
+    }
+    cJSON *root = cJSON_CreateObject();
+    if (!root) { cJSON_Delete(did_doc); return WF_ERR_ALLOC; }
+    cJSON_AddItemToObject(root, "didDoc", did_doc);
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.identity.resolveIdentity (query) ----
+ * Resolves a handle or DID to a full identity (DID document and verified
+ * handle). Public route. */
+static wf_status resolve_identity(void *ctx,
+                                  const wf_xrpc_request *request,
+                                  wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *identifier = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "identifier") : NULL;
+    if (!cJSON_IsString(identifier) || !identifier->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "HandleNotFound",
+                                   "unable to resolve handle");
+        return WF_OK;
+    }
+    return identity_info_response(server, identifier->valuestring, response);
+}
+
+/* ---- com.atproto.identity.refreshIdentity (procedure) ----
+ * Request that the server re-resolve an identity. MetalBear keeps no DID
+ * cache, so every resolution is already fresh; the semantics are identical
+ * to resolveIdentity. Public route (the lexicon permits the server to
+ * ignore or require auth; rsky-pds treats it as public). */
+static wf_status refresh_identity(void *ctx,
+                                  const wf_xrpc_request *request,
+                                  wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *identifier = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "identifier") : NULL;
+    if (!cJSON_IsString(identifier) || !identifier->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "identifier is required");
+        return WF_OK;
+    }
+    return identity_info_response(server, identifier->valuestring, response);
 }
 
 /* ---- com.atproto.identity.getRecommendedDidCredentials (query) ---- */
@@ -4285,6 +4543,15 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "com.atproto.server.createAccount", create_account, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.identity.resolveHandle", resolve_handle, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.identity.resolveDid",
+            resolve_did_identity, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.identity.resolveIdentity",
+            resolve_identity, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "com.atproto.identity.refreshIdentity",
+            refresh_identity, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.identity.getRecommendedDidCredentials",
             get_recommended_did_credentials, server) != WF_OK ||
