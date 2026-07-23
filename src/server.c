@@ -461,6 +461,7 @@ static wf_status set_json(wf_xrpc_response *response, cJSON *root) {
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!json) return WF_ERR_ALLOC;
+    wf_xrpc_response_set_content_type(response, "application/json");
     wf_xrpc_response_set_body(response, json, strlen(json));
     free(json);
     return WF_OK;
