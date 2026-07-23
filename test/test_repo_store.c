@@ -316,7 +316,7 @@ static int run_server(void) {
     }
     uint16_t port = wf_xrpc_server_port(server);
     WF_CHECK(port != 0);
-    WF_CHECK(metalbear_xrpc_server_register_pds_repo(server, store) == WF_OK);
+    WF_CHECK(metalbear_xrpc_server_register_pds_repo(server, store, NULL, NULL) == WF_OK);
 
     char base[64];
     snprintf(base, sizeof(base), "http://127.0.0.1:%u", (unsigned)port);

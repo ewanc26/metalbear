@@ -336,7 +336,9 @@ wf_status metalbear_repo_store_create_service_auth(metalbear_repo_store *store,
  * lifetime and free it after wf_xrpc_server_free.
  */
 wf_status metalbear_xrpc_server_register_pds_repo(wf_xrpc_server *server,
-                                            metalbear_repo_store *store);
+                                             metalbear_repo_store *store,
+                                             const char *service_did,
+                                             const char *public_url);
 
 /*
  * Per-request resolver for multi-tenant PDS deployments. Given the
@@ -368,7 +370,8 @@ typedef wf_status (*metalbear_xrpc_repo_resolver)(void *ctx,
  * allocates and frees it on wf_xrpc_server_free.
  */
 wf_status metalbear_xrpc_server_register_pds_repo_resolver(
-    wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx);
+    wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
+    const char *service_did, const char *public_url);
 
 #ifdef __cplusplus
 }

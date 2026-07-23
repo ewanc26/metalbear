@@ -50,16 +50,47 @@ typedef enum metalbear_log_level {
 } metalbear_log_level;
 
 static metalbear_log_level log_level = METALBEAR_LOG_INFO;
+static FILE *log_file = NULL;
+
+static metalbear_log_level metalbear_log_level_from_env(void) {
+    const char *level = getenv("METALBEAR_LOG_LEVEL");
+    if (!level || !level[0]) return METALBEAR_LOG_INFO;
+    if (strcmp(level, "debug") == 0 || strcmp(level, "DEBUG") == 0) return METALBEAR_LOG_DEBUG;
+    if (strcmp(level, "info") == 0 || strcmp(level, "INFO") == 0) return METALBEAR_LOG_INFO;
+    if (strcmp(level, "warn") == 0 || strcmp(level, "WARN") == 0) return METALBEAR_LOG_WARN;
+    if (strcmp(level, "error") == 0 || strcmp(level, "ERROR") == 0) return METALBEAR_LOG_ERROR;
+    char *end = NULL;
+    long v = strtol(level, &end, 10);
+    if (end && *end == '\0' && v >= 0 && v <= 3) return (int)v;
+    return METALBEAR_LOG_INFO;
+}
+
+static FILE *metalbear_log_file_from_env(void) {
+    const char *path = getenv("METALBEAR_LOG_FILE");
+    if (!path || !path[0]) return NULL;
+    return fopen(path, "a");
+}
 
 static void metalbear_log(metalbear_log_level level, const char *fmt, ...) {
     if (level < log_level) return;
     static const char *level_names[] = {"DEBUG", "INFO", "WARN", "ERROR"};
     va_list args;
-    fprintf(stderr, "MetalBear [%s] ", level_names[level]);
+    FILE *out = log_file ? log_file : stderr;
+    time_t now = time(NULL);
+    struct tm tm;
+#if defined(__APPLE__)
+    localtime_r(&now, &tm);
+#else
+    localtime_r(&now, &tm);
+#endif
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    fprintf(out, "MetalBear [%s] [%s] ", level_names[level], ts);
     va_start(args, fmt);
-    vfprintf(stderr, fmt, args);
+    vfprintf(out, fmt, args);
     va_end(args);
-    fprintf(stderr, "\n");
+    fprintf(out, "\n");
+    if (log_file) fflush(log_file);
 }
 
 #define LOG_DEBUG(...) metalbear_log(METALBEAR_LOG_DEBUG, __VA_ARGS__)
@@ -259,8 +290,11 @@ static metalbear_account_context *context_for_did(metalbear_server *server,
     if (!did) return NULL;
     if (server->bootstrap && strcmp(did, server->bootstrap->did) == 0)
         return server->bootstrap;
-    return metalbear_account_cache_get(server->account_cache, server->registry,
-                                       did);
+    metalbear_account_context *acct = metalbear_account_cache_get(server->account_cache, server->registry,
+                                                                  did);
+    if (!acct)
+        LOG_WARN("context_for_did: unknown did=%s", did);
+    return acct;
 }
 
 static metalbear_account_context *context_for_identifier(
@@ -320,6 +354,11 @@ static bool full_access_route(const char *nsid) {
 
 static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
     metalbear_server *server = ctx;
+    LOG_DEBUG("authenticate: nsid=%s method=%s host=%s auth=%s",
+              req->nsid ? req->nsid : "-",
+              req->method ? req->method : "-",
+              req->host_header ? req->host_header : "-",
+              req->auth_header ? "yes" : "no");
     /* Admin endpoints (refpds PDS_ADMIN_PASSWORD) are gated by HTTP Basic
      * `admin:<password>`, not bearer tokens. Reject honestly when no
      * password is configured or the credential is missing/wrong. */
@@ -352,16 +391,29 @@ static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
     }
 
     const char *provided = bearer_token(req->auth_header);
-    if (!provided) return WF_ERR_PERMISSION;
+    if (!provided) {
+        LOG_DEBUG("authenticate: no bearer token for nsid=%s host=%s",
+                  req->nsid ? req->nsid : "-",
+                  req->host_header ? req->host_header : "-");
+        return WF_ERR_PERMISSION;
+    }
 
     /* Route to the account named by the token's `sub` claim, then verify the
      * token against THAT account's auth store. The signature is server-wide,
      * so verification proves the token is genuine and `sub` is the identity
      * we bind the request to (never the bootstrap account). */
     char *sub = jwt_subject(provided);
-    if (!sub) return WF_ERR_PERMISSION;
+    if (!sub) {
+        LOG_DEBUG("authenticate: invalid JWT for nsid=%s host=%s",
+                  req->nsid ? req->nsid : "-",
+                  req->host_header ? req->host_header : "-");
+        return WF_ERR_PERMISSION;
+    }
     metalbear_account_context *acct = context_for_did(server, sub);
     if (!acct) {
+        LOG_WARN("authenticate: unknown did=%s for nsid=%s host=%s",
+                 sub, req->nsid ? req->nsid : "-",
+                 req->host_header ? req->host_header : "-");
         free(sub);
         return WF_ERR_PERMISSION;
     }
@@ -375,19 +427,29 @@ static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
         ? WF_OK
         : metalbear_auth_verify_access_scope(acct->auth, provided, &scope);
     if (status != WF_OK) {
+        LOG_WARN("authenticate: token verify failed for did=%s nsid=%s status=%d",
+                 sub, req->nsid ? req->nsid : "-", status);
         free(sub);
         return status;
     }
     if (!refresh_route && full_access_route(req->nsid) &&
         scope != METALBEAR_ACCESS_FULL) {
+        LOG_WARN("authenticate: insufficient scope for did=%s nsid=%s scope=%d",
+                 sub, req->nsid ? req->nsid : "-", scope);
         free(sub);
         return WF_ERR_PERMISSION;
     }
     if (!metalbear_account_is_active(acct->account) &&
         !inactive_route_allowed(req->nsid)) {
+        LOG_WARN("authenticate: deactivated account did=%s nsid=%s", sub,
+                 req->nsid ? req->nsid : "-");
         free(sub);
         return WF_ERR_CONFLICT;
     }
+
+    LOG_DEBUG("authenticate: granted did=%s nsid=%s scope=%d host=%s", sub,
+              req->nsid ? req->nsid : "-", scope,
+              req->host_header ? req->host_header : "-");
 
     req->authed_subject = sub;
     req->authed_principal_kind = WF_XRPC_PRINCIPAL_USER;
@@ -568,7 +630,7 @@ static wf_status get_recommended_did_credentials(void *ctx,
     cJSON *atproto_pds = cJSON_CreateObject();
     if (!atproto_pds) { cJSON_Delete(root); free(didkey); return WF_ERR_ALLOC; }
     cJSON_AddStringToObject(atproto_pds, "type", "AtprotoPersonalDataServer");
-    cJSON_AddStringToObject(atproto_pds, "endpoint",
+    cJSON_AddStringToObject(atproto_pds, "serviceEndpoint",
                             server->public_url ? server->public_url : "");
     cJSON_AddItemToObject(services, "atproto_pds", atproto_pds);
     cJSON_AddItemToObject(root, "services", services);
@@ -878,18 +940,26 @@ static cJSON *build_did_doc(metalbear_server *server,
     cJSON *services = cJSON_CreateArray();
     cJSON *service = cJSON_CreateObject();
     cJSON *verification = cJSON_CreateObject();
-    if (!document || !context || !services || !service || !verification) {
+    cJSON *also_known_as = cJSON_CreateArray();
+    if (!document || !context || !services || !service || !verification || !also_known_as) {
         cJSON_Delete(document);
         cJSON_Delete(context);
         cJSON_Delete(services);
         cJSON_Delete(service);
         cJSON_Delete(verification);
+        cJSON_Delete(also_known_as);
         return NULL;
     }
     cJSON_AddItemToArray(context,
                          cJSON_CreateString("https://www.w3.org/ns/did/v1"));
     cJSON_AddItemToObject(document, "@context", context);
     cJSON_AddStringToObject(document, "id", acct->did);
+    if (acct->handle && acct->handle[0]) {
+        char aka[256];
+        snprintf(aka, sizeof(aka), "at://%s", acct->handle);
+        cJSON_AddItemToArray(also_known_as, cJSON_CreateString(aka));
+    }
+    cJSON_AddItemToObject(document, "alsoKnownAs", also_known_as);
     if (acct->repo) {
         const char *signing_didkey = metalbear_repo_store_signing_key_did(acct->repo);
         if (signing_didkey && signing_didkey[0])
@@ -950,6 +1020,8 @@ static wf_status create_session(void *ctx, const wf_xrpc_request *request,
     metalbear_credential_kind credential = valid_login(
         server, request->params, &acct, &app_password_name);
     if (credential == METALBEAR_CREDENTIAL_INVALID || !acct) {
+        LOG_WARN("create_session: invalid credentials for host=%s",
+                 request->host_header ? request->host_header : "(unknown)");
         wf_xrpc_response_set_error(response, 401, "AuthenticationRequired",
                                    "Invalid identifier or password");
         return WF_OK;
@@ -963,11 +1035,13 @@ static wf_status create_session(void *ctx, const wf_xrpc_request *request,
     if (metalbear_auth_create_scoped_session(acct->auth, scope,
             app_password_name, &tokens) != WF_OK) {
         free(app_password_name);
+        LOG_ERROR("create_session: failed to create session for did=%s", acct->did);
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not create session");
         return WF_OK;
     }
     free(app_password_name);
+    LOG_INFO("create_session: issued session for did=%s scope=%d", acct->did, scope);
     wf_status status = set_json(response, session_json(server, acct, &tokens));
     metalbear_session_tokens_free(&tokens);
     return status;
@@ -1319,6 +1393,8 @@ static wf_status get_repo(void *ctx, const wf_xrpc_request *request,
         ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
     cJSON *since = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "since") : NULL;
+    LOG_DEBUG("get_repo: did=%s since=%s", cJSON_IsString(did) ? did->valuestring : "-",
+              cJSON_IsString(since) ? since->valuestring : "-");
     if (!cJSON_IsString(did)) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
                                    "did is required");
@@ -1483,7 +1559,9 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
 }
 
 /* ---- com.atproto.sync.getRecord (query, public) ----
- * Return a single record as a CAR file rooted at the current commit. */
+ * Return a single record as a CAR file rooted at the current commit.
+ * When ?as=bytes is requested, the raw CAR bytes are returned as
+ * application/octet-stream; otherwise the standard CAR media type is used. */
 static wf_status get_record(void *ctx, const wf_xrpc_request *request,
                             wf_xrpc_response *response) {
     metalbear_server *server = ctx;
@@ -1493,6 +1571,8 @@ static wf_status get_record(void *ctx, const wf_xrpc_request *request,
         ? cJSON_GetObjectItemCaseSensitive(request->params, "collection") : NULL;
     cJSON *rkey = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "rkey") : NULL;
+    cJSON *as_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "as") : NULL;
     if (!cJSON_IsString(did) || !did->valuestring[0]) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
                                    "did is required");
@@ -1529,7 +1609,13 @@ static wf_status get_record(void *ctx, const wf_xrpc_request *request,
                                    "Could not export record");
         return WF_OK;
     }
-    return set_car_response(response, data, length);
+    const char *content_type = "application/vnd.ipld.car";
+    if (cJSON_IsString(as_param) && strcmp(as_param->valuestring, "bytes") == 0)
+        content_type = "application/octet-stream";
+    wf_xrpc_response_set_body(response, (const char *)data, length);
+    wf_xrpc_response_set_content_type(response, content_type);
+    free(data);
+    return WF_OK;
 }
 
 /* ── PLC DID minting helper ───────────────────────────────────── */
@@ -1627,8 +1713,9 @@ static char *mint_plc_did(metalbear_server *server, const char *handle) {
         goto fail;
     }
 
-    /* 6. Compute the deterministic DID from the unsigned operation. */
-    if (wf_plc_operation_compute_did(unsigned_with_key, &plc_did) != WF_OK) {
+    /* 6. Compute the deterministic DID from the signed operation (including
+     *    the sig field, matching the @did-plc/lib reference implementation). */
+    if (wf_plc_operation_compute_did(signed_json, &plc_did) != WF_OK) {
         LOG_ERROR("failed to compute PLC DID");
         goto fail;
     }
@@ -1685,6 +1772,10 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
                                     "password is required");
         return WF_OK;
     }
+    LOG_DEBUG("create_account: attempt handle=%s email=%s did=%s",
+              handle->valuestring,
+              email->valuestring,
+              cJSON_IsString(did) && did->valuestring[0] ? did->valuestring : "(auto)");
     /* Invite-gated signups (refpds PDS_INVITE_REQUIRED): when enabled,
      * reject account creation unless a non-empty invite code is supplied
      * and the code has remaining uses. */
@@ -1736,9 +1827,9 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
     }
  
     /* Resolve the new account's DID. A caller may supply one (e.g. a
-     * did:web or a did:plc minted out of band), or the PDS may mint a
-     * server-side did:plc via PLC when configured; otherwise we mint a fresh
-     * did:key so every account is independently addressable and isolated. */
+      * did:web or a did:plc minted out of band), or the PDS may mint a
+      * server-side did:plc via PLC when configured; otherwise we mint a fresh
+      * did:key so every account is independently addressable and isolated. */
     char *account_did = NULL;
     if (cJSON_IsString(did) && did->valuestring[0]) {
         account_did = strdup(did->valuestring);
@@ -1747,13 +1838,18 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
                                        "Could not allocate account DID");
             return WF_OK;
         }
+        LOG_INFO("create_account: using provided DID=%s for handle=%s",
+                 account_did, handle->valuestring);
     } else if (server->plc_url && server->plc_url[0]) {
+        LOG_DEBUG("create_account: minting PLC DID for handle=%s", handle->valuestring);
         account_did = mint_plc_did(server, handle->valuestring);
         if (!account_did) {
             wf_xrpc_response_set_error(response, 500, "InternalError",
                                        "Could not mint PLC DID");
             return WF_OK;
         }
+        LOG_INFO("create_account: minted PLC DID=%s for handle=%s",
+                 account_did, handle->valuestring);
     } else {
         wf_signing_key key;
         if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &key) != WF_OK ||
@@ -1762,6 +1858,8 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
                                        "Could not generate account DID");
             return WF_OK;
         }
+        LOG_INFO("create_account: generated did:key=%s for handle=%s",
+                 account_did, handle->valuestring);
     }
 
     /* Provision a dedicated, filesystem-isolated data directory for the
@@ -1828,14 +1926,22 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
     cJSON *did_doc = NULL;
     if (server->public_url)
         did_doc = build_did_doc(server, acct);
+    /* Capture email confirmation state before closing the context. */
+    int confirmed = 0;
+    metalbear_account_get_email(acct->account, NULL, &confirmed);
     metalbear_account_context_close(acct);
     free(data_dir);
     if (session_status != WF_OK) {
+        LOG_ERROR("create_account: failed to create session for handle=%s did=%s",
+                  handle->valuestring, account_did);
         free(account_did);
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not create session");
         return WF_OK;
     }
+
+    LOG_INFO("create_account: created handle=%s did=%s email=%s",
+             handle->valuestring, account_did, email->valuestring);
 
     cJSON *root = cJSON_CreateObject();
     if (!root) {
@@ -1847,6 +1953,10 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
     cJSON_AddStringToObject(root, "refreshJwt", tokens.refresh_jwt);
     cJSON_AddStringToObject(root, "handle", handle->valuestring);
     cJSON_AddStringToObject(root, "did", account_did);
+    if (confirmed)
+        cJSON_AddBoolToObject(root, "emailAuthFactor", true);
+    else
+        cJSON_AddBoolToObject(root, "emailAuthFactor", false);
     if (did_doc)
         cJSON_AddItemToObject(root, "didDoc", did_doc);
     metalbear_session_tokens_free(&tokens);
@@ -3349,6 +3459,10 @@ static wf_status check_signup_queue(void *ctx,
 static wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
                             wf_xrpc_response *response) {
     metalbear_server *server = ctx;
+    LOG_DEBUG("upload_blob: did=%s content_type=%s len=%zu",
+              request->authed_subject ? request->authed_subject : "-",
+              request->content_type ? request->content_type : "-",
+              (size_t)request->body_len);
     if (request->body_len == 0) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
                                     "blob body is empty");
@@ -3415,10 +3529,13 @@ static wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
 
 /* ---- com.atproto.sync.getBlob (query) ---- */
 static wf_status get_blob(void *ctx, const wf_xrpc_request *request,
-                         wf_xrpc_response *response) {
+                          wf_xrpc_response *response) {
     metalbear_server *server = ctx;
     cJSON *cid = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "cid") : NULL;
+    LOG_DEBUG("get_blob: did=%s cid=%s",
+              request->authed_subject ? request->authed_subject : "-",
+              cJSON_IsString(cid) ? cid->valuestring : "-");
     if (!cJSON_IsString(cid) || !cid->valuestring[0]) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
                                     "missing or invalid 'cid' parameter");
@@ -3454,8 +3571,26 @@ static wf_status get_blob(void *ctx, const wf_xrpc_request *request,
 
 static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
                             wf_xrpc_response *response) {
-    (void)request;
     metalbear_server *server = ctx;
+    LOG_DEBUG("list_repos: listed all hosted repos");
+    cJSON *limit_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "limit") : NULL;
+    int limit = 500;
+    if (cJSON_IsNumber(limit_param)) {
+        limit = (int)limit_param->valuedouble;
+        if (limit < 1) limit = 1;
+        if (limit > 1000) limit = 1000;
+    }
+    cJSON *cursor_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor") : NULL;
+    size_t offset = 0;
+    if (cJSON_IsString(cursor_param) && cursor_param->valuestring[0]) {
+        char *end = NULL;
+        long parsed = strtol(cursor_param->valuestring, &end, 10);
+        if (*cursor_param->valuestring && *end == '\0' && parsed >= 0)
+            offset = (size_t)parsed;
+    }
+
     cJSON *root = cJSON_CreateObject();
     cJSON *repos = cJSON_CreateArray();
     if (!root || !repos) {
@@ -3463,9 +3598,6 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
         cJSON_Delete(repos);
         return WF_ERR_ALLOC;
     }
-    /* Enumerate every account hosted on this PDS, not just the bootstrap
-     * account: open each account's context (via the shared cache) and report
-     * its repository head. */
     metalbear_account_entry *entries = NULL;
     size_t count = 0;
     if (metalbear_account_registry_list(server->registry, &entries,
@@ -3473,7 +3605,9 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
         entries = NULL;
         count = 0;
     }
-    for (size_t i = 0; i < count; i++) {
+    if (offset > count) offset = count;
+    size_t taken = 0;
+    for (size_t i = offset; i < count && taken < (size_t)limit; i++, taken++) {
         metalbear_account_context *acct = context_for_did(server,
                                                           entries[i].did);
         if (!acct) continue;
@@ -3505,6 +3639,12 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
     }
     metalbear_account_entries_free(entries, count);
     cJSON_AddItemToObject(root, "repos", repos);
+    size_t next = offset + taken;
+    if (next < count) {
+        char cursor_buf[32];
+        snprintf(cursor_buf, sizeof(cursor_buf), "%zu", next);
+        cJSON_AddStringToObject(root, "cursor", cursor_buf);
+    }
     return set_json(response, root);
 }
 
@@ -3763,44 +3903,166 @@ static wf_status landing_handler(void *ctx, const wf_xrpc_request *req,
     return WF_OK;
 }
 
+static char *extract_hostname(const char *host_header) {
+    if (!host_header || !host_header[0]) return NULL;
+    const char *colon = strchr(host_header, ':');
+    size_t len = colon ? (size_t)(colon - host_header) : strlen(host_header);
+    if (len == 0 || len > 253) return NULL;
+    char *hostname = malloc(len + 1);
+    if (!hostname) return NULL;
+    memcpy(hostname, host_header, len);
+    hostname[len] = '\0';
+    return hostname;
+}
+
+static metalbear_account_entry *resolve_hostname_to_account(metalbear_server *server,
+                                                            const char *hostname) {
+    if (!server || !hostname || !hostname[0]) return NULL;
+    metalbear_account_entry *entry = NULL;
+    wf_status status = metalbear_account_registry_find_by_handle(
+        server->registry, hostname, &entry);
+    if (status == WF_OK && entry) return entry;
+    metalbear_account_entry_free(entry);
+    entry = NULL;
+    size_t ud_len = server->user_domain ? strlen(server->user_domain) : 0;
+    size_t dn_len = strlen(hostname);
+    if (ud_len > 0 && dn_len > ud_len &&
+        strcmp(hostname + dn_len - ud_len, server->user_domain) == 0) {
+        status = metalbear_account_registry_find_by_handle(
+            server->registry, hostname, &entry);
+    }
+    if (status == WF_OK && entry) return entry;
+    metalbear_account_entry_free(entry);
+    if (server->bootstrap && server->bootstrap->handle) {
+        status = metalbear_account_registry_find_by_handle(
+            server->registry, server->bootstrap->handle, &entry);
+    }
+    if (status == WF_OK && entry) return entry;
+    metalbear_account_entry_free(entry);
+    return NULL;
+}
+
+/* ---- /.well-known/atproto-did (query, dynamic per-hostname) ---- */
+static wf_status handle_atproto_did(void *ctx, const wf_xrpc_request *request,
+                                    wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    char *hostname = extract_hostname(request->host_header);
+    if (!hostname) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "missing or invalid Host header");
+        return WF_OK;
+    }
+    metalbear_account_entry *entry = resolve_hostname_to_account(server, hostname);
+    free(hostname);
+    if (!entry) {
+        wf_xrpc_response_set_error(response, 404, "HandleNotFound",
+                                   "Unable to resolve handle");
+        return WF_OK;
+    }
+    wf_xrpc_response_set_body(response, entry->did, strlen(entry->did));
+    wf_xrpc_response_set_content_type(response, "text/plain; charset=utf-8");
+    metalbear_account_entry_free(entry);
+    return WF_OK;
+}
+
+/* ---- /.well-known/did.json (query, dynamic per-hostname) ---- */
+static wf_status handle_well_known_did(void *ctx, const wf_xrpc_request *request,
+                                       wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    char *hostname = extract_hostname(request->host_header);
+    if (!hostname) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "missing or invalid Host header");
+        return WF_OK;
+    }
+
+    /* If the service DID is did:web and this hostname matches it, serve the
+     * service's own DID document (the PDS identity, not an account). */
+    if (server->service_did &&
+        strncmp(server->service_did, "did:web:", 8) == 0) {
+        const char *service_host = server->service_did + 8;
+        if (strcmp(hostname, service_host) == 0) {
+            free(hostname);
+            cJSON *doc = cJSON_CreateObject();
+            if (!doc) {
+                wf_xrpc_response_set_error(response, 500, "InternalError",
+                                           "Could not allocate DID document");
+                return WF_OK;
+            }
+            cJSON *context = cJSON_CreateArray();
+            cJSON_AddItemToArray(context,
+                cJSON_CreateString("https://www.w3.org/ns/did/v1"));
+            cJSON_AddItemToObject(doc, "@context", context);
+            cJSON_AddStringToObject(doc, "id", server->service_did);
+            cJSON *services = cJSON_CreateArray();
+            cJSON *service = cJSON_CreateObject();
+            cJSON_AddStringToObject(service, "id", "#atproto_pds");
+            cJSON_AddStringToObject(service, "type",
+                                     "AtprotoPersonalDataServer");
+            cJSON_AddStringToObject(service, "serviceEndpoint",
+                                    server->public_url ?
+                                        server->public_url : "");
+            cJSON_AddItemToArray(services, service);
+            cJSON_AddItemToObject(doc, "service", services);
+            char *json = cJSON_PrintUnformatted(doc);
+            cJSON_Delete(doc);
+            if (!json) {
+                wf_xrpc_response_set_error(response, 500, "InternalError",
+                                           "Could not serialize DID document");
+                return WF_OK;
+            }
+            wf_xrpc_response_set_body(response, json, strlen(json));
+            wf_xrpc_response_set_content_type(response,
+                "application/did+ld+json");
+            free(json);
+            return WF_OK;
+        }
+    }
+
+    /* Otherwise, resolve the hostname to an account and serve its DID doc. */
+    metalbear_account_entry *entry = resolve_hostname_to_account(server, hostname);
+    free(hostname);
+    if (!entry) {
+        wf_xrpc_response_set_error(response, 404, "HandleNotFound",
+                                   "Unable to resolve handle");
+        return WF_OK;
+    }
+    metalbear_account_context *acct = context_for_did(server, entry->did);
+    metalbear_account_entry_free(entry);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not open account context");
+        return WF_OK;
+    }
+    cJSON *did_doc = build_did_doc(server, acct);
+    if (!did_doc) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not build DID document");
+        return WF_OK;
+    }
+    char *json = cJSON_PrintUnformatted(did_doc);
+    cJSON_Delete(did_doc);
+    if (!json) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not serialize DID document");
+        return WF_OK;
+    }
+    wf_xrpc_response_set_body(response, json, strlen(json));
+    wf_xrpc_response_set_content_type(response, "application/did+ld+json");
+    free(json);
+    return WF_OK;
+}
+
 static wf_status register_identity_documents(metalbear_server *server) {
     if (!server->public_url)
         server->public_url = public_url_from_service_did(server->service_did);
     if (!server->public_url) return WF_ERR_INVALID_ARG;
-    cJSON *document = cJSON_CreateObject();
-    cJSON *context = cJSON_CreateArray();
-    cJSON *services = cJSON_CreateArray();
-    cJSON *service = cJSON_CreateObject();
-    if (!document || !context || !services || !service) {
-        cJSON_Delete(document);
-        cJSON_Delete(context);
-        cJSON_Delete(services);
-        cJSON_Delete(service);
-        return WF_ERR_ALLOC;
-    }
-    cJSON_AddItemToArray(context,
-                         cJSON_CreateString("https://www.w3.org/ns/did/v1"));
-    cJSON_AddItemToObject(document, "@context", context);
-    cJSON_AddStringToObject(document, "id", server->service_did);
-    cJSON_AddStringToObject(service, "id", "#atproto_pds");
-    cJSON_AddStringToObject(service, "type", "AtprotoPersonalDataServer");
-    cJSON_AddStringToObject(service, "serviceEndpoint", server->public_url);
-    cJSON_AddItemToArray(services, service);
-    cJSON_AddItemToObject(document, "service", services);
-    char *json = cJSON_PrintUnformatted(document);
-    cJSON_Delete(document);
-    if (!json) return WF_ERR_ALLOC;
-    wf_status status = wf_xrpc_server_register_static_get(server->xrpc,
-        "/.well-known/did.json", "application/did+ld+json", json,
-        strlen(json));
-    free(json);
+    wf_status status = wf_xrpc_server_register_http_route(server->xrpc, "GET",
+        "/.well-known/did.json", handle_well_known_did, server);
     if (status != WF_OK) return status;
-    status = wf_xrpc_server_register_static_get(server->xrpc,
-        "/.well-known/atproto-did", "text/plain; charset=utf-8",
-        server->bootstrap->did, strlen(server->bootstrap->did));
+    status = wf_xrpc_server_register_http_route(server->xrpc, "GET",
+        "/.well-known/atproto-did", handle_atproto_did, server);
     if (status != WF_OK) return status;
-    /* The landing page is served by a dynamic handler so it always reflects
-     * the accounts currently hosted on this PDS. */
     status = wf_xrpc_server_register_http_route(server->xrpc, "GET", "/",
                                                 landing_handler, server);
     if (status != WF_OK) return status;
@@ -3825,6 +4087,8 @@ static bool valid_config(const metalbear_config *config) {
 }
 
 metalbear_server *metalbear_server_start(const metalbear_config *config) {
+    log_level = metalbear_log_level_from_env();
+    log_file = metalbear_log_file_from_env();
     if (!valid_config(config)) {
         LOG_ERROR("invalid server configuration");
         return NULL;
@@ -3988,7 +4252,8 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "com.atproto.server.getServiceAuth", get_service_auth,
             server) != WF_OK ||
         metalbear_xrpc_server_register_pds_repo_resolver(server->xrpc,
-            metalbear_repo_resolver, server) != WF_OK ||
+            metalbear_repo_resolver, server,
+            server->service_did, server->public_url) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.repo.uploadBlob", upload_blob, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
@@ -4182,6 +4447,10 @@ void metalbear_server_free(metalbear_server *server) {
     metalbear_email_free(server->email);
     metalbear_report_store_free(server->reports);
     wf_rate_limiter_free(server->rate_limiter);
+    if (log_file) {
+        fclose(log_file);
+        log_file = NULL;
+    }
     free(server->service_did);
     free(server->public_url);
     free(server->user_domain);

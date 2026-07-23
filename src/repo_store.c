@@ -1363,6 +1363,8 @@ typedef struct metalbear_pds_repo_bundle {
     void *resolver_ctx;
     metalbear_repo_store *fallback_repo;
     metalbear_blob_store *fallback_blobs;
+    char *service_did;
+    char *public_url;
 } metalbear_pds_repo_bundle;
 
 /*
@@ -1631,6 +1633,73 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
     return WF_OK;
 }
 
+static wf_status h_query_labels(void *ctx, const wf_xrpc_request *req,
+                                wf_xrpc_response *resp) {
+    (void)req;
+    metalbear_pds_repo_bundle *b = ctx;
+    metalbear_repo_store *s = b ? b->fallback_repo : NULL;
+    cJSON *root = cJSON_CreateObject();
+    cJSON *labels = cJSON_CreateArray();
+    if (!root || !labels) {
+        cJSON_Delete(root);
+        cJSON_Delete(labels);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddItemToObject(root, "labels", labels);
+    char *js = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!js) return WF_ERR_ALLOC;
+    wf_xrpc_response_set_body(resp, js, strlen(js));
+    return WF_OK;
+}
+
+static cJSON *build_describe_diddoc(const char *did, const char *handle,
+                                    const char *signing_key_didkey,
+                                    const char *public_url) {
+    cJSON *document = cJSON_CreateObject();
+    cJSON *context = cJSON_CreateArray();
+    cJSON *services = cJSON_CreateArray();
+    cJSON *service = cJSON_CreateObject();
+    cJSON *verification = cJSON_CreateObject();
+    cJSON *also_known_as = cJSON_CreateArray();
+    if (!document || !context || !services || !service || !verification || !also_known_as) {
+        cJSON_Delete(document);
+        cJSON_Delete(context);
+        cJSON_Delete(services);
+        cJSON_Delete(service);
+        cJSON_Delete(verification);
+        cJSON_Delete(also_known_as);
+        return NULL;
+    }
+    cJSON_AddItemToArray(context,
+                         cJSON_CreateString("https://www.w3.org/ns/did/v1"));
+    cJSON_AddItemToObject(document, "@context", context);
+    cJSON_AddStringToObject(document, "id", did ? did : "");
+    if (handle && handle[0]) {
+        char aka[256];
+        snprintf(aka, sizeof(aka), "at://%s", handle);
+        cJSON_AddItemToArray(also_known_as, cJSON_CreateString(aka));
+    }
+    cJSON_AddItemToObject(document, "alsoKnownAs", also_known_as);
+    if (signing_key_didkey && signing_key_didkey[0])
+        cJSON_AddStringToObject(verification, "atproto", signing_key_didkey);
+    if (verification->child != NULL)
+        cJSON_AddItemToObject(document, "verificationMethods", verification);
+    else
+        cJSON_Delete(verification);
+    if (public_url && public_url[0]) {
+        cJSON_AddStringToObject(service, "id", "#atproto_pds");
+        cJSON_AddStringToObject(service, "type", "AtprotoPersonalDataServer");
+        cJSON_AddStringToObject(service, "serviceEndpoint", public_url);
+        cJSON_AddItemToArray(services, service);
+        cJSON_AddItemToObject(document, "service", services);
+    } else {
+        cJSON_Delete(services);
+        cJSON_Delete(service);
+    }
+    return document;
+}
+
 static wf_status h_describe_repo(void *ctx, const wf_xrpc_request *req,
                                   wf_xrpc_response *resp) {
     metalbear_repo_store *s = resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
@@ -1641,6 +1710,35 @@ static wf_status h_describe_repo(void *ctx, const wf_xrpc_request *req,
         wf_xrpc_response_set_error(resp, 500, "InternalError",
                                    "describeRepo failed");
         return WF_OK;
+    }
+    metalbear_pds_repo_bundle *bundle = (metalbear_pds_repo_bundle *)ctx;
+    if (bundle->public_url) {
+        cJSON *root = cJSON_Parse(json);
+        free(json);
+        if (!root) {
+            wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                       "describeRepo JSON parse failed");
+            return WF_OK;
+        }
+        cJSON *did_doc = build_describe_diddoc(
+            metalbear_repo_store_did(s),
+            metalbear_repo_store_handle(s),
+            metalbear_repo_store_signing_key_did(s),
+            bundle->public_url);
+        if (did_doc) {
+            cJSON_AddItemToObject(root, "didDoc", did_doc);
+            char *updated = cJSON_PrintUnformatted(root);
+            cJSON_Delete(root);
+            if (!updated) {
+                wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                           "describeRepo JSON serialize failed");
+                return WF_OK;
+            }
+            wf_xrpc_response_set_body(resp, updated, strlen(updated));
+            free(updated);
+            return WF_OK;
+        }
+        cJSON_Delete(root);
     }
     wf_xrpc_response_set_body(resp, json, strlen(json));
     free(json);
@@ -2050,20 +2148,29 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
     return WF_OK;
 }
 
+static void free_pds_repo_bundle(void *ptr) {
+    metalbear_pds_repo_bundle *b = ptr;
+    if (!b) return;
+    free(b->service_did);
+    free(b->public_url);
+    free(b);
+}
+
 static wf_status register_pds_repo_handlers(wf_xrpc_server *server,
                                             metalbear_pds_repo_bundle *b);
 
 wf_status metalbear_xrpc_server_register_pds_repo(wf_xrpc_server *server,
-                                            metalbear_repo_store *store) {
+                                             metalbear_repo_store *store,
+                                             const char *service_did,
+                                             const char *public_url) {
     if (!server || !store) return WF_ERR_INVALID_ARG;
-    /* Single-store path: build a resolver-less bundle that always serves
-     * `store`. The server owns the bundle and frees it on
-     * wf_xrpc_server_free, preserving the caller-owned `store` contract. */
     metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
     if (!b) return WF_ERR_ALLOC;
     *b = (metalbear_pds_repo_bundle){0};
     b->fallback_repo = store;
-    wf_xrpc_server_own_ctx(server, b, free);
+    if (service_did) b->service_did = strdup(service_did);
+    if (public_url) b->public_url = strdup(public_url);
+    wf_xrpc_server_own_ctx(server, b, free_pds_repo_bundle);
     return register_pds_repo_handlers(server, b);
 }
 
@@ -2092,6 +2199,9 @@ static wf_status register_pds_repo_handlers(wf_xrpc_server *server,
     s = wf_xrpc_server_register_query(server, "com.atproto.repo.listRecords",
             h_list_records, b);
     if (s != WF_OK) return s;
+    s = wf_xrpc_server_register_query(server, "com.atproto.label.queryLabels",
+            h_query_labels, b);
+    if (s != WF_OK) return s;
     s = wf_xrpc_server_register_query(server, "com.atproto.sync.getLatestCommit",
             h_get_latest_commit, b);
     if (s != WF_OK) return s;
@@ -2104,13 +2214,16 @@ static wf_status register_pds_repo_handlers(wf_xrpc_server *server,
 }
 
 wf_status metalbear_xrpc_server_register_pds_repo_resolver(
-    wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx) {
+    wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
+    const char *service_did, const char *public_url) {
     if (!server) return WF_ERR_INVALID_ARG;
     metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
     if (!b) return WF_ERR_ALLOC;
     *b = (metalbear_pds_repo_bundle){0};
     b->resolver = resolver;
     b->resolver_ctx = ctx;
+    if (service_did) b->service_did = strdup(service_did);
+    if (public_url) b->public_url = strdup(public_url);
     wf_xrpc_server_own_ctx(server, b, free);
     return register_pds_repo_handlers(server, b);
 }
