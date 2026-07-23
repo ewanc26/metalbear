@@ -1832,6 +1832,175 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
     return set_json(response, root);
 }
 
+/* ---- com.atproto.repo.listMissingBlobs (query) ----
+ * Returns the blob CIDs referenced by records but absent from the blob
+ * store (account-migration flow). Walks every record's JSON value for blob
+ * references, then matches rsky-pds' contract: deduped by CID, emitted in
+ * ascending CID order, cursor selects CIDs strictly greater than it, and
+ * the next cursor is the CID of the last emitted entry when the result was
+ * truncated to `limit`. (cocoon shares the CID cursor but walks in record
+ * order, which makes its cursored pages inconsistent; rsky's ORDER BY is
+ * the self-consistent variant.) */
+
+/* Recursively find blob references in a record's JSON value. A modern blob
+ * is {"$type":"blob","ref":{"$link":"<cid>"},...}; a legacy blob is
+ * {"cid":"<cid>","mimeType":...} with no $type member. */
+static void json_walk_blob_refs(const cJSON *node,
+                                void (*cb)(const char *cid, void *ctx),
+                                void *ctx) {
+    if (!node) return;
+    if (cJSON_IsObject(node)) {
+        const cJSON *type = cJSON_GetObjectItemCaseSensitive(node, "$type");
+        if (cJSON_IsString(type) && type->valuestring &&
+            strcmp(type->valuestring, "blob") == 0) {
+            const cJSON *ref = cJSON_GetObjectItemCaseSensitive(node, "ref");
+            const cJSON *link = cJSON_IsObject(ref)
+                ? cJSON_GetObjectItemCaseSensitive(ref, "$link") : NULL;
+            if (cJSON_IsString(link) && link->valuestring)
+                cb(link->valuestring, ctx);
+            return; /* blob objects carry no nested records */
+        }
+        if (!cJSON_IsString(type)) {
+            const cJSON *cid = cJSON_GetObjectItemCaseSensitive(node, "cid");
+            const cJSON *mime = cJSON_GetObjectItemCaseSensitive(node,
+                                                                 "mimeType");
+            if (cJSON_IsString(cid) && cid->valuestring &&
+                cJSON_IsString(mime)) {
+                cb(cid->valuestring, ctx);
+                return;
+            }
+        }
+        const cJSON *child = NULL;
+        cJSON_ArrayForEach(child, node) json_walk_blob_refs(child, cb, ctx);
+    } else if (cJSON_IsArray(node)) {
+        const cJSON *child = NULL;
+        cJSON_ArrayForEach(child, node) json_walk_blob_refs(child, cb, ctx);
+    }
+}
+
+typedef struct missing_blob_ref {
+    char *cid;
+    char *record_uri;
+} missing_blob_ref;
+
+typedef struct missing_blobs_scan {
+    metalbear_blob_store *blobs_store;
+    const char *cursor;      /* keep only CIDs > cursor */
+    missing_blob_ref *refs;  /* deduped missing refs, unsorted */
+    size_t count;
+    const char *did;
+    const char *collection;  /* current record's collection */
+    const char *rkey;        /* current record's rkey */
+} missing_blobs_scan;
+
+static void missing_blob_candidate(const char *cid, void *opaque) {
+    missing_blobs_scan *scan = opaque;
+    if (scan->cursor && strcmp(cid, scan->cursor) <= 0) return;
+    for (size_t i = 0; i < scan->count; i++)
+        if (strcmp(scan->refs[i].cid, cid) == 0) return;
+    if (metalbear_blob_store_exists(scan->blobs_store, cid) == WF_OK) return;
+    /* Missing and not seen yet: record it (first record URI wins, matching
+     * rsky's GROUP BY which keeps one row per CID). */
+    missing_blob_ref *grown = realloc(scan->refs,
+        (scan->count + 1) * sizeof(*scan->refs));
+    if (!grown) return;
+    scan->refs = grown;
+    size_t uri_len = strlen(scan->did) + strlen(scan->collection) +
+                     strlen(scan->rkey) + 10;
+    scan->refs[scan->count].cid = strdup(cid);
+    scan->refs[scan->count].record_uri = malloc(uri_len);
+    if (!scan->refs[scan->count].cid || !scan->refs[scan->count].record_uri) {
+        free(scan->refs[scan->count].cid);
+        free(scan->refs[scan->count].record_uri);
+        return;
+    }
+    snprintf(scan->refs[scan->count].record_uri, uri_len, "at://%s/%s/%s",
+             scan->did, scan->collection, scan->rkey);
+    scan->count++;
+}
+
+static wf_status missing_blobs_visit(const char *collection, const char *rkey,
+                                     const char *value_json, void *ctx) {
+    missing_blobs_scan *scan = ctx;
+    cJSON *value = cJSON_Parse(value_json);
+    if (!value) return WF_OK;
+    scan->collection = collection;
+    scan->rkey = rkey;
+    json_walk_blob_refs(value, missing_blob_candidate, scan);
+    cJSON_Delete(value);
+    return WF_OK;
+}
+
+static int missing_blob_ref_cmp(const void *a, const void *b) {
+    return strcmp(((const missing_blob_ref *)a)->cid,
+                  ((const missing_blob_ref *)b)->cid);
+}
+
+static wf_status list_missing_blobs(void *ctx,
+                                    const wf_xrpc_request *request,
+                                    wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
+    int limit = query_param_int(request->params, "limit", 500, 1, 1000);
+    cJSON *cursor_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor") : NULL;
+
+    missing_blobs_scan scan = {0};
+    scan.blobs_store = acct->blobs;
+    scan.cursor = cJSON_IsString(cursor_param) &&
+        cursor_param->valuestring[0] ? cursor_param->valuestring : NULL;
+    scan.did = acct->did;
+    wf_status walk = metalbear_repo_store_foreach_record(
+        acct->repo, missing_blobs_visit, &scan);
+    if (walk != WF_OK) {
+        for (size_t i = 0; i < scan.count; i++) {
+            free(scan.refs[i].cid);
+            free(scan.refs[i].record_uri);
+        }
+        free(scan.refs);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not enumerate records");
+        return WF_OK;
+    }
+    qsort(scan.refs, scan.count, sizeof(*scan.refs), missing_blob_ref_cmp);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *blobs = cJSON_CreateArray();
+    if (!root || !blobs) {
+        cJSON_Delete(root);
+        cJSON_Delete(blobs);
+        for (size_t i = 0; i < scan.count; i++) {
+            free(scan.refs[i].cid);
+            free(scan.refs[i].record_uri);
+        }
+        free(scan.refs);
+        return WF_ERR_ALLOC;
+    }
+    size_t emitted = 0;
+    for (; emitted < scan.count && emitted < (size_t)limit; emitted++) {
+        cJSON *item = cJSON_CreateObject();
+        if (!item) break;
+        cJSON_AddStringToObject(item, "cid", scan.refs[emitted].cid);
+        cJSON_AddStringToObject(item, "recordUri",
+                                scan.refs[emitted].record_uri);
+        cJSON_AddItemToArray(blobs, item);
+    }
+    if (scan.count > (size_t)limit && emitted > 0)
+        cJSON_AddStringToObject(root, "cursor", scan.refs[emitted - 1].cid);
+    cJSON_AddItemToObject(root, "blobs", blobs);
+    for (size_t i = 0; i < scan.count; i++) {
+        free(scan.refs[i].cid);
+        free(scan.refs[i].record_uri);
+    }
+    free(scan.refs);
+    return set_json(response, root);
+}
+
 /* ---- com.atproto.sync.getRecord (query, public) ----
  * Return a single record as a CAR file rooted at the current commit.
  * When ?as=bytes is requested, the raw CAR bytes are returned as
@@ -4598,6 +4767,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             server->service_did, server->public_url) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.repo.uploadBlob", upload_blob, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.repo.listMissingBlobs",
+            list_missing_blobs, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.sync.getBlob", get_blob, server) != WF_OK) {
         LOG_ERROR("cannot register XRPC routes");
