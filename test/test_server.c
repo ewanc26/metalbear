@@ -1507,10 +1507,323 @@ int main(void) {
 
             free(final_access);
             free(final_delete_token);
-
             wf_xrpc_client_set_auth(client, NULL);
-            wf_xrpc_client_free(client);
         }
+
+        /* Test app.bsky.actor.getPreferences and putPreferences */
+        CHECK(wf_xrpc_query(client, "app.bsky.actor.getPreferences",
+                            NULL, &response) == WF_ERR_HTTP);
+        CHECK(response.status == 401);
+        wf_response_free(&response);
+
+        /* Create a session for preference tests (alice was deleted above;
+         * use bob, whose account persists). */
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.createSession",
+            "{\"identifier\":\"bob.example.com\","
+            "\"password\":\"bobsecret\"}",
+            &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        cJSON *pref_access = cJSON_GetObjectItemCaseSensitive(json, "accessJwt");
+        char *pref_token = cJSON_IsString(pref_access)
+            ? strdup(pref_access->valuestring) : NULL;
+        cJSON_Delete(json);
+        wf_response_free(&response);
+        wf_xrpc_client_set_auth(client, pref_token);
+
+        /* getPreferences returns empty array initially */
+        CHECK(wf_xrpc_query(client, "app.bsky.actor.getPreferences",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        cJSON *prefs = cJSON_GetObjectItemCaseSensitive(json, "preferences");
+        CHECK(prefs != NULL);
+        CHECK(cJSON_IsArray(prefs));
+        CHECK(cJSON_GetArraySize(prefs) == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* putPreferences with invalid body returns error */
+        CHECK(wf_xrpc_procedure(client, "app.bsky.actor.putPreferences",
+            "not-json", &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        wf_response_free(&response);
+
+        /* putPreferences with valid preferences stores them */
+        CHECK(wf_xrpc_procedure(client, "app.bsky.actor.putPreferences",
+            "{\"preferences\":[{\"$type\":\"app.bsky.actor.defs#preferences\","
+            "\"feedViewPref\":{\"itemsPerPage\":25}}]}",
+            &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+
+        /* getPreferences returns the stored preferences */
+        CHECK(wf_xrpc_query(client, "app.bsky.actor.getPreferences",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        prefs = cJSON_GetObjectItemCaseSensitive(json, "preferences");
+        CHECK(prefs != NULL);
+        CHECK(cJSON_IsArray(prefs));
+        CHECK(cJSON_GetArraySize(prefs) == 1);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        free(pref_token);
+        wf_xrpc_client_set_auth(client, NULL);
+
+        /* Test com.atproto.identity.resolveDid (public) */
+        wf_xrpc_param did_params[] = {{"did", "did:plc:bob"}};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.identity.resolveDid",
+                                   did_params, 1, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        cJSON *did_doc = cJSON_GetObjectItemCaseSensitive(json, "didDoc");
+        CHECK(did_doc != NULL);
+        cJSON *doc_id = cJSON_GetObjectItemCaseSensitive(did_doc, "id");
+        CHECK(cJSON_IsString(doc_id));
+        CHECK(strcmp(doc_id->valuestring, "did:plc:bob") == 0);
+        cJSON *doc_service = cJSON_GetObjectItemCaseSensitive(did_doc, "service");
+        CHECK(cJSON_IsArray(doc_service));
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* resolveDid with a malformed DID returns DidNotFound */
+        wf_xrpc_param bad_did_params[] = {{"did", "not-a-did"}};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.identity.resolveDid",
+                                   bad_did_params, 1, &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        json = json_response(&response);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                     "DidNotFound") == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* resolveDid with an unknown DID returns DidNotFound (no plc_url
+         * configured, so no network access happens). */
+        wf_xrpc_param unknown_did_params[] = {
+            {"did", "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"}};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.identity.resolveDid",
+                                   unknown_did_params, 1,
+                                   &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        wf_response_free(&response);
+
+        /* Test com.atproto.identity.resolveIdentity by handle (public):
+         * local account, bi-directionally verified. */
+        wf_xrpc_param id_handle_params[] = {{"identifier", "bob.example.com"}};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.identity.resolveIdentity",
+                                   id_handle_params, 1, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "did")->valuestring,
+                     "did:plc:bob") == 0);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "handle")->valuestring,
+                     "bob.example.com") == 0);
+        CHECK(cJSON_GetObjectItemCaseSensitive(json, "didDoc") != NULL);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* resolveIdentity by DID: the claimed handle resolves back through
+         * the local registry, so it verifies. */
+        wf_xrpc_param id_did_params[] = {{"identifier", "did:plc:bob"}};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.identity.resolveIdentity",
+                                   id_did_params, 1, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "handle")->valuestring,
+                     "bob.example.com") == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* resolveIdentity with an unknown handle returns HandleNotFound
+         * (.invalid is reserved and fails DNS resolution fast). */
+        wf_xrpc_param id_unknown_params[] = {
+            {"identifier", "nobody.invalid"}};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.identity.resolveIdentity",
+                                   id_unknown_params, 1,
+                                   &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        json = json_response(&response);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                     "HandleNotFound") == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* Test com.atproto.identity.refreshIdentity (public procedure):
+         * same shape as resolveIdentity. */
+        CHECK(wf_xrpc_procedure(client, "com.atproto.identity.refreshIdentity",
+            "{\"identifier\":\"bob.example.com\"}", &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "did")->valuestring,
+                     "did:plc:bob") == 0);
+        CHECK(cJSON_GetObjectItemCaseSensitive(json, "didDoc") != NULL);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* refreshIdentity requires an identifier */
+        CHECK(wf_xrpc_procedure(client, "com.atproto.identity.refreshIdentity",
+            "{}", &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        wf_response_free(&response);
+
+        /* Test com.atproto.repo.listMissingBlobs (authed) */
+        CHECK(wf_xrpc_query(client, "com.atproto.repo.listMissingBlobs",
+                            NULL, &response) == WF_ERR_HTTP);
+        CHECK(response.status == 401);
+        wf_response_free(&response);
+
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.createSession",
+            "{\"identifier\":\"bob.example.com\",\"password\":\"bobsecret\"}",
+            &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        cJSON *lmb_access = cJSON_GetObjectItemCaseSensitive(json, "accessJwt");
+        char *lmb_token = cJSON_IsString(lmb_access)
+            ? strdup(lmb_access->valuestring) : NULL;
+        cJSON_Delete(json);
+        wf_response_free(&response);
+        wf_xrpc_client_set_auth(client, lmb_token);
+
+        /* No records yet: empty list, no cursor */
+        CHECK(wf_xrpc_query(client, "com.atproto.repo.listMissingBlobs",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        cJSON *missing = cJSON_GetObjectItemCaseSensitive(json, "blobs");
+        CHECK(cJSON_IsArray(missing));
+        CHECK(cJSON_GetArraySize(missing) == 0);
+        CHECK(cJSON_GetObjectItemCaseSensitive(json, "cursor") == NULL);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* Two posts referencing missing blobs. cid_low sorts before
+         * cid_high, so ascending-CID order must return cid_low first even
+         * though img_high's record was created first. */
+        const char *cid_high =
+            "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku";
+        const char *cid_low =
+            "bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        char lmb_body[1024];
+        snprintf(lmb_body, sizeof(lmb_body),
+            "{\"repo\":\"did:plc:bob\",\"collection\":\"app.bsky.feed.post\","
+            "\"rkey\":\"img_high\",\"record\":{\"$type\":\"app.bsky.feed.post\","
+            "\"text\":\"pic\",\"embed\":{\"$type\":\"app.bsky.embed.images\","
+            "\"images\":[{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
+            "\"ref\":{\"$link\":\"%s\"},\"mimeType\":\"image/png\",\"size\":4}}]},"
+            "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}", cid_high);
+        CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                                lmb_body, &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+        snprintf(lmb_body, sizeof(lmb_body),
+            "{\"repo\":\"did:plc:bob\",\"collection\":\"app.bsky.feed.post\","
+            "\"rkey\":\"img_low\",\"record\":{\"$type\":\"app.bsky.feed.post\","
+            "\"text\":\"pic\",\"embed\":{\"$type\":\"app.bsky.embed.images\","
+            "\"images\":[{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
+            "\"ref\":{\"$link\":\"%s\"},\"mimeType\":\"image/png\",\"size\":4}}]},"
+            "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}", cid_low);
+        CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                                lmb_body, &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+
+        /* Both missing CIDs, ascending order, correct recordUris */
+        CHECK(wf_xrpc_query(client, "com.atproto.repo.listMissingBlobs",
+                            NULL, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        missing = cJSON_GetObjectItemCaseSensitive(json, "blobs");
+        CHECK(cJSON_IsArray(missing));
+        CHECK(cJSON_GetArraySize(missing) == 2);
+        cJSON *first_blob = cJSON_GetArrayItem(missing, 0);
+        cJSON *second_blob = cJSON_GetArrayItem(missing, 1);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(first_blob,
+                     "cid")->valuestring, cid_low) == 0);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(second_blob,
+                     "cid")->valuestring, cid_high) == 0);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(first_blob,
+                     "recordUri")->valuestring,
+                     "at://did:plc:bob/app.bsky.feed.post/img_low") == 0);
+        CHECK(cJSON_GetObjectItemCaseSensitive(json, "cursor") == NULL);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* limit=1 truncates and returns a cursor; the cursored page returns
+         * the remaining CID and no further cursor. */
+        wf_xrpc_param limit_one[] = {{"limit", "1"}};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.repo.listMissingBlobs",
+                                   limit_one, 1, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        missing = cJSON_GetObjectItemCaseSensitive(json, "blobs");
+        CHECK(cJSON_GetArraySize(missing) == 1);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(
+                     cJSON_GetArrayItem(missing, 0), "cid")->valuestring,
+                     cid_low) == 0);
+        cJSON *lmb_cursor = cJSON_GetObjectItemCaseSensitive(json, "cursor");
+        CHECK(cJSON_IsString(lmb_cursor));
+        char *lmb_cursor_copy = cJSON_IsString(lmb_cursor)
+            ? strdup(lmb_cursor->valuestring) : NULL;
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        wf_xrpc_param page_two[] = {{"limit", "1"},
+                                    {"cursor", lmb_cursor_copy}};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.repo.listMissingBlobs",
+                                   page_two, 2, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        missing = cJSON_GetObjectItemCaseSensitive(json, "blobs");
+        CHECK(cJSON_GetArraySize(missing) == 1);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(
+                     cJSON_GetArrayItem(missing, 0), "cid")->valuestring,
+                     cid_high) == 0);
+        CHECK(cJSON_GetObjectItemCaseSensitive(json, "cursor") == NULL);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+        free(lmb_cursor_copy);
+
+        /* A record referencing an uploaded (present) blob is not missing */
+        wf_status lmb_upload = wf_xrpc_upload_blob(
+            client, "com.atproto.repo.uploadBlob", blob_data,
+            sizeof(blob_data), "image/png", &response);
+        CHECK(lmb_upload == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        cJSON *up_blob = cJSON_GetObjectItemCaseSensitive(json, "blob");
+        cJSON *up_ref = cJSON_GetObjectItemCaseSensitive(up_blob, "ref");
+        cJSON *up_link = cJSON_GetObjectItemCaseSensitive(up_ref, "$link");
+        char *present_cid = cJSON_IsString(up_link)
+            ? strdup(up_link->valuestring) : NULL;
+        cJSON_Delete(json);
+        wf_response_free(&response);
+        CHECK(present_cid != NULL);
+        snprintf(lmb_body, sizeof(lmb_body),
+            "{\"repo\":\"did:plc:bob\",\"collection\":\"app.bsky.feed.post\","
+            "\"rkey\":\"img_present\",\"record\":{\"$type\":\"app.bsky.feed.post\","
+            "\"text\":\"pic\",\"embed\":{\"$type\":\"app.bsky.embed.images\","
+            "\"images\":[{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
+            "\"ref\":{\"$link\":\"%s\"},\"mimeType\":\"image/png\",\"size\":4}}]},"
+            "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}", present_cid);
+        free(present_cid);
+        CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                                lmb_body, &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+        CHECK(wf_xrpc_query(client, "com.atproto.repo.listMissingBlobs",
+                            NULL, &response) == WF_OK);
+        json = json_response(&response);
+        missing = cJSON_GetObjectItemCaseSensitive(json, "blobs");
+        CHECK(cJSON_GetArraySize(missing) == 2);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        free(lmb_token);
+        wf_xrpc_client_set_auth(client, NULL);
+
+        wf_xrpc_client_free(client);
         metalbear_server_free(server);
     }
 
