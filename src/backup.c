@@ -132,7 +132,7 @@ wf_status metalbear_backup_create(const char *data_directory,
         return WF_ERR_INTERNAL;
     }
     backup_header header = {0};
-    strncpy(header.magic, BACKUP_MAGIC, sizeof(header.magic) - 1);
+    strncpy(header.magic, BACKUP_MAGIC, sizeof(header.magic));
     header.file_count = (uint32_t)file_count;
     if (fwrite(&header, sizeof(header), 1, backup_file) != 1) {
         fclose(backup_file);
@@ -195,8 +195,13 @@ wf_status metalbear_backup_restore(const char *input_path,
             return WF_ERR_INVALID_ARG;
         }
         char full_path[MAX_PATH_LENGTH];
-        snprintf(full_path, sizeof(full_path), "%s/%s", data_directory,
-                 entry.path);
+        int path_len = snprintf(full_path, sizeof(full_path), "%s/%s",
+                                data_directory, entry.path);
+        if (path_len < 0 || (size_t)path_len >= sizeof(full_path)) {
+            free(data);
+            fclose(backup_file);
+            return WF_ERR_INTERNAL;
+        }
         char dir_part[MAX_PATH_LENGTH];
         strncpy(dir_part, full_path, sizeof(dir_part) - 1);
         dir_part[sizeof(dir_part) - 1] = '\0';
