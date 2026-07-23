@@ -277,7 +277,7 @@ static int run(void) {
     if (!server) goto cleanup;
     wf_xrpc_server_set_auth_callback(server, auth_cb, NULL);
     WF_CHECK(metalbear_xrpc_server_register_pds_repo_resolver(
-                 server, resolver, &reg) == WF_OK);
+                 server, resolver, &reg, NULL, NULL) == WF_OK);
     WF_CHECK(metalbear_xrpc_server_register_blob_store_resolver(
                   server, blob_resolver, &reg) == WF_OK);
 

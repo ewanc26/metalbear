@@ -323,7 +323,8 @@ int main(void) {
     cJSON *did_endpoint = cJSON_GetObjectItemCaseSensitive(did_service,
                                                             "serviceEndpoint");
     CHECK(cJSON_IsString(did_id) &&
-          strcmp(did_id->valuestring, "did:web:pds.example.com") == 0);
+          strcmp(cJSON_IsString(did_id) ? did_id->valuestring : "",
+                 "did:plc:metalbeartest") == 0);
     CHECK(cJSON_IsString(did_endpoint) &&
           strcmp(did_endpoint->valuestring, "https://pds.example.com") == 0);
     cJSON_Delete(did_document);
