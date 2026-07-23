@@ -1640,7 +1640,7 @@ static wf_status h_query_labels(void *ctx, const wf_xrpc_request *req,
                                 wf_xrpc_response *resp) {
     (void)req;
     metalbear_pds_repo_bundle *b = ctx;
-    metalbear_repo_store *s = b ? b->fallback_repo : NULL;
+    (void)b;
     cJSON *root = cJSON_CreateObject();
     cJSON *labels = cJSON_CreateArray();
     if (!root || !labels) {
