@@ -136,8 +136,11 @@ static wf_cbor_item *cbor_from_json(const cJSON *j) {
                     if (!v) return NULL;
                     v->type = WF_CBOR_LINK;
                     v->bytes.len = cid.len;
-                    if (cid.len)
+                    if (cid.len) {
+                        v->bytes.data = malloc(cid.len);
+                        if (!v->bytes.data) { free(v); return NULL; }
                         memcpy(v->bytes.data, cid.bytes, cid.len);
+                    }
                     return v;
                 }
             } else if (only->string && strcmp(only->string, "$bytes") == 0 &&
