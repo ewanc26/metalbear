@@ -4054,6 +4054,79 @@ static wf_status handle_well_known_did(void *ctx, const wf_xrpc_request *request
     return WF_OK;
 }
 
+static wf_status get_actor_preferences(void *ctx, const wf_xrpc_request *request,
+                                       wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
+    char *prefs_json = NULL;
+    if (metalbear_account_store_prefs_get(acct->account, &prefs_json) != WF_OK ||
+        !prefs_json) {
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddItemToObject(root, "preferences", cJSON_CreateArray());
+        return set_json(response, root);
+    }
+    cJSON *root = cJSON_Parse(prefs_json);
+    free(prefs_json);
+    if (!root) {
+        cJSON *empty = cJSON_CreateObject();
+        cJSON_AddItemToObject(empty, "preferences", cJSON_CreateArray());
+        return set_json(response, empty);
+    }
+    return set_json(response, root);
+}
+
+static wf_status put_actor_preferences(void *ctx, const wf_xrpc_request *request,
+                                       wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
+    if (!request->body || request->body_len == 0) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "empty body");
+        return WF_OK;
+    }
+    cJSON *parsed = cJSON_ParseWithLength((const char *)request->body,
+                                          request->body_len);
+    if (!parsed) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "invalid JSON");
+        return WF_OK;
+    }
+    cJSON *prefs = cJSON_GetObjectItemCaseSensitive(parsed, "preferences");
+    if (!cJSON_IsArray(prefs)) {
+        cJSON_Delete(parsed);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "preferences must be an array");
+        return WF_OK;
+    }
+    cJSON_Delete(parsed);
+    char *body_copy = malloc(request->body_len + 1);
+    if (!body_copy) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "allocation failed");
+        return WF_OK;
+    }
+    memcpy(body_copy, request->body, request->body_len);
+    body_copy[request->body_len] = '\0';
+    if (metalbear_account_store_prefs_put(acct->account, body_copy) != WF_OK) {
+        free(body_copy);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "failed to store preferences");
+        return WF_OK;
+    }
+    free(body_copy);
+    return WF_OK;
+}
+
 static wf_status register_identity_documents(metalbear_server *server) {
     if (!server->public_url)
         server->public_url = public_url_from_service_did(server->service_did);
@@ -4336,6 +4409,12 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.server.createInviteCodes",
             create_invite_codes, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.actor.getPreferences",
+            get_actor_preferences, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "app.bsky.actor.putPreferences",
+            put_actor_preferences, server) != WF_OK ||
         /* Admin endpoints (refpds PDS_ADMIN_PASSWORD, Basic auth) */
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.admin.getAccountInfo",
