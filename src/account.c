@@ -55,9 +55,12 @@ wf_status metalbear_account_store_open(const char *path,
             "name TEXT PRIMARY KEY,salt BLOB NOT NULL,password_hash BLOB NOT NULL,"
             "created_at TEXT NOT NULL,privileged INTEGER NOT NULL DEFAULT 0 "
             "CHECK(privileged IN(0,1)));"
-            "CREATE TABLE IF NOT EXISTS email_token("
-            "token TEXT PRIMARY KEY,kind TEXT NOT NULL,"
-            "created_at TEXT NOT NULL,expires_at INTEGER NOT NULL);",
+             "CREATE TABLE IF NOT EXISTS email_token("
+             "token TEXT PRIMARY KEY,kind TEXT NOT NULL,"
+             "created_at TEXT NOT NULL,expires_at INTEGER NOT NULL);"
+             "CREATE TABLE IF NOT EXISTS preferences("
+             "id INTEGER PRIMARY KEY CHECK(id=0),"
+             "data TEXT NOT NULL);",
             NULL, NULL, NULL) != SQLITE_OK) {
         metalbear_account_store_free(store);
         return WF_ERR_INTERNAL;
@@ -548,4 +551,41 @@ char *metalbear_account_hash_password(const char *password) {
     result[96] = '\0';
     OPENSSL_cleanse(hash, sizeof(hash));
     return result;
+}
+
+wf_status metalbear_account_store_prefs_get(metalbear_account_store *store,
+                                           char **out_json) {
+    if (!store || !out_json) return WF_ERR_INVALID_ARG;
+    *out_json = NULL;
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+            "SELECT data FROM preferences WHERE id=0;", -1, &stmt, NULL) !=
+            SQLITE_OK || sqlite3_step(stmt) != SQLITE_ROW) {
+        *out_json = strdup("{\"preferences\":[]}");
+        pthread_mutex_unlock(&store->mutex);
+        return *out_json ? WF_OK : WF_ERR_ALLOC;
+    }
+    const char *data = (const char *)sqlite3_column_text(stmt, 0);
+    *out_json = data ? strdup(data) : strdup("{\"preferences\":[]}");
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return *out_json ? WF_OK : WF_ERR_ALLOC;
+}
+
+wf_status metalbear_account_store_prefs_put(metalbear_account_store *store,
+                                           const char *json) {
+    if (!store || !json) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db,
+            "REPLACE INTO preferences(id, data) VALUES(0, ?);",
+            -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, json, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_DONE) status = WF_OK;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
 }
