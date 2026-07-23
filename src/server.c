@@ -470,6 +470,28 @@ static wf_status set_json(wf_xrpc_response *response, cJSON *root) {
     return WF_OK;
 }
 
+/* Parse an integer query parameter. XRPC query params always arrive as
+ * strings (wf_server_qs_iter), so cJSON_IsNumber checks silently drop
+ * them; accept both string and number forms. Returns `fallback` when
+ * absent or unparsable, clamped to [min, max]. */
+static int query_param_int(const cJSON *params, const char *name,
+                           int fallback, int min, int max) {
+    const cJSON *p = params
+        ? cJSON_GetObjectItemCaseSensitive(params, name) : NULL;
+    long v = fallback;
+    if (cJSON_IsNumber(p)) {
+        v = (long)p->valuedouble;
+    } else if (cJSON_IsString(p) && p->valuestring[0]) {
+        char *end = NULL;
+        long parsed = strtol(p->valuestring, &end, 10);
+        if (*end != '\0') return fallback;
+        v = parsed;
+    }
+    if (v < min) v = min;
+    if (v > max) v = max;
+    return (int)v;
+}
+
 static wf_status request_account_delete(void *ctx,
                                         const wf_xrpc_request *request,
                                         wf_xrpc_response *response) {
@@ -1768,14 +1790,7 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
     }
     /* 'since' is accepted for lexicon compatibility; MetalBear's blob store
      * does not track per-blob revisions, so all available blobs are listed. */
-    cJSON *limit_param = request->params
-        ? cJSON_GetObjectItemCaseSensitive(request->params, "limit") : NULL;
-    int limit = 500;
-    if (cJSON_IsNumber(limit_param)) {
-        limit = (int)limit_param->valuedouble;
-        if (limit < 1) limit = 1;
-        if (limit > 1000) limit = 1000;
-    }
+    int limit = query_param_int(request->params, "limit", 500, 1, 1000);
     cJSON *cursor_param = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor") : NULL;
     size_t offset = 0;
@@ -3261,14 +3276,7 @@ static wf_status admin_get_invite_codes(void *ctx,
                                          const wf_xrpc_request *request,
                                          wf_xrpc_response *response) {
     metalbear_server *server = ctx;
-    cJSON *limit_param = request->params
-        ? cJSON_GetObjectItemCaseSensitive(request->params, "limit") : NULL;
-    int limit = 100;
-    if (cJSON_IsNumber(limit_param)) {
-        limit = (int)limit_param->valuedouble;
-        if (limit < 1) limit = 1;
-        if (limit > 500) limit = 500;
-    }
+    int limit = query_param_int(request->params, "limit", 100, 1, 500);
     /* Enumerate all accounts and collect their invite codes. */
     metalbear_account_entry *entries = NULL;
     size_t count = 0;
@@ -3832,14 +3840,7 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
                             wf_xrpc_response *response) {
     metalbear_server *server = ctx;
     LOG_DEBUG("list_repos: listed all hosted repos");
-    cJSON *limit_param = request->params
-        ? cJSON_GetObjectItemCaseSensitive(request->params, "limit") : NULL;
-    int limit = 500;
-    if (cJSON_IsNumber(limit_param)) {
-        limit = (int)limit_param->valuedouble;
-        if (limit < 1) limit = 1;
-        if (limit > 1000) limit = 1000;
-    }
+    int limit = query_param_int(request->params, "limit", 500, 1, 1000);
     cJSON *cursor_param = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor") : NULL;
     size_t offset = 0;
