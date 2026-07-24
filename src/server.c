@@ -1830,7 +1830,8 @@ static wf_status proxy_http_request(const char *target, const char *method,
 static wf_status proxy_appview(metalbear_server *server,
                                const char *requester_did,
                                const wf_xrpc_request *req,
-                               wf_xrpc_response *resp) {
+                               wf_xrpc_response *resp,
+                               bool send_auth) {
     if (!server->appview_url || !server->appview_url[0] ||
         !server->appview_did || !server->appview_did[0]) {
         wf_xrpc_response_set_error(resp, 501, "MethodNotImplemented",
@@ -1850,7 +1851,7 @@ static wf_status proxy_appview(metalbear_server *server,
     }
 
     char *service_token = NULL;
-    if (requester_did && requester_did[0]) {
+    if (send_auth && requester_did && requester_did[0]) {
         metalbear_account_context *acct = context_for_did(server, requester_did);
         if (acct && acct->repo) {
             metalbear_repo_store_create_service_auth(acct->repo,
@@ -4260,157 +4261,172 @@ static wf_status check_signup_queue(void *ctx,
  */
 
 static wf_status appview_proxy(void *ctx, const wf_xrpc_request *req,
-                               wf_xrpc_response *resp) {
+                               wf_xrpc_response *resp, bool send_auth) {
     metalbear_server *server = ctx;
     const char *requester_did = req->authed_subject;
-    return proxy_appview(server, requester_did, req, resp);
+    return proxy_appview(server, requester_did, req, resp, send_auth);
 }
 
-/* Feed endpoints */
+/* Public read endpoints — proxy without service-auth so the public
+ * AppView (api.bsky.app) serves public content. A local AppView that
+ * trusts the PDS can be configured later by re-enabling auth. */
+static wf_status appview_public(void *ctx, const wf_xrpc_request *req,
+                                wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp, false);
+}
+
+/* User-specific endpoints — send service-auth JWT so a trusted AppView
+ * can return per-user data. The public AppView will reject these. */
+static wf_status appview_private(void *ctx, const wf_xrpc_request *req,
+                                 wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp, true);
+}
+
+/* Feed endpoints — public reads */
 static wf_status appview_get_feed(void *ctx, const wf_xrpc_request *req,
                                   wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_feed_skeleton(void *ctx,
                                           const wf_xrpc_request *req,
                                           wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_author_feed(void *ctx,
                                          const wf_xrpc_request *req,
                                          wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_actor_feeds(void *ctx,
                                          const wf_xrpc_request *req,
                                          wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_feed_generators(void *ctx,
                                              const wf_xrpc_request *req,
                                              wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_feed_generator(void *ctx,
                                             const wf_xrpc_request *req,
                                             wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_posts(void *ctx, const wf_xrpc_request *req,
                                    wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 
-/* Actor endpoints */
+/* Actor endpoints — public reads */
 static wf_status appview_get_profile(void *ctx, const wf_xrpc_request *req,
                                      wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_profiles(void *ctx, const wf_xrpc_request *req,
                                       wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_actor_likes(void *ctx,
                                          const wf_xrpc_request *req,
                                          wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_actor_statistics(void *ctx,
                                               const wf_xrpc_request *req,
                                               wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_actor_rankings(void *ctx,
                                             const wf_xrpc_request *req,
                                             wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 
-/* Graph endpoints */
+/* Graph endpoints — public reads */
 static wf_status appview_get_follows(void *ctx, const wf_xrpc_request *req,
                                      wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_followers(void *ctx, const wf_xrpc_request *req,
                                        wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_blocks(void *ctx, const wf_xrpc_request *req,
                                     wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_private(ctx, req, resp);
 }
 static wf_status appview_get_list(void *ctx, const wf_xrpc_request *req,
                                   wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_lists(void *ctx, const wf_xrpc_request *req,
                                    wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_list_items(void *ctx,
                                         const wf_xrpc_request *req,
                                         wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_starter_pack(void *ctx,
                                           const wf_xrpc_request *req,
                                           wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_starter_packs(void *ctx,
                                            const wf_xrpc_request *req,
                                            wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 
-/* Notification endpoints */
+/* Notification endpoints — user-specific */
 static wf_status appview_get_unread_notifications(void *ctx,
                                                   const wf_xrpc_request *req,
                                                   wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_private(ctx, req, resp);
 }
 static wf_status appview_get_notifications(void *ctx,
                                            const wf_xrpc_request *req,
                                            wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_private(ctx, req, resp);
 }
 
-/* Chat/Convo endpoints */
+/* Chat/Convo endpoints — user-specific */
 static wf_status appview_get_convo(void *ctx, const wf_xrpc_request *req,
                                    wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_private(ctx, req, resp);
 }
 static wf_status appview_get_convos(void *ctx, const wf_xrpc_request *req,
                                     wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_private(ctx, req, resp);
 }
 static wf_status appview_get_messages(void *ctx, const wf_xrpc_request *req,
                                       wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_private(ctx, req, resp);
 }
 
-/* Labeler endpoints */
+/* Labeler endpoints — public reads */
 static wf_status appview_get_labeler_info(void *ctx,
                                           const wf_xrpc_request *req,
                                           wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 
-/* Unsafe/unspecced endpoints the app uses */
+/* Unsafe/unspecced endpoints — public reads */
 static wf_status appview_unspecced_get_age_assurance_state(void *ctx,
                                                            const wf_xrpc_request *req,
                                                            wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_unspecced_get_age_assurance_config(void *ctx,
                                                             const wf_xrpc_request *req,
                                                             wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 static wf_status appview_unspecced_get_age_assurance(void *ctx,
                                                      const wf_xrpc_request *req,
                                                      wf_xrpc_response *resp) {
-    return appview_proxy(ctx, req, resp);
+    return appview_public(ctx, req, resp);
 }
 
 /* ---- com.atproto.repo.uploadBlob (procedure) ----
