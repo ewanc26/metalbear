@@ -4320,6 +4320,33 @@ static wf_status appview_get_posts(void *ctx, const wf_xrpc_request *req,
 /* Actor endpoints — public reads */
 static wf_status appview_get_profile(void *ctx, const wf_xrpc_request *req,
                                      wf_xrpc_response *resp) {
+    metalbear_server *server = ctx;
+
+    // Check for local profile parameter (did=...
+    if (req->params && cJSON_IsObject(req->params)) {
+        cJSON *did_param = cJSON_GetObjectItemCaseSensitive(req->params, "did");
+        if (cJSON_IsString(did_param) && did_param->valuestring[0]) {
+            const char *provided_did = did_param->valuestring;
+            metalbear_account_context *acct = context_for_did(server, provided_did);
+            if (acct && metalbear_account_is_active(acct->account)) {
+                LOG_DEBUG("Handling local profile for did:%s", provided_did);
+
+            cJSON *root = cJSON_CreateObject();
+            if (!root) {
+                wf_xrpc_response_set_error(resp, 500, "InternalError", "Failed to create local profile");
+                return WF_OK;
+            }
+
+                cJSON_AddStringToObject(root, "did", provided_did);
+                cJSON_AddStringToObject(root, "handle", acct->handle ? acct->handle : "unknown");
+                // Add other local profile fields as needed
+
+                return set_json(resp, root);
+            }
+        }
+    }
+
+    // Fallback to public proxy for external profiles
     return appview_public(ctx, req, resp);
 }
 static wf_status appview_get_profiles(void *ctx, const wf_xrpc_request *req,
@@ -4381,9 +4408,16 @@ static wf_status appview_get_starter_packs(void *ctx,
 
 /* Notification endpoints — user-specific */
 static wf_status appview_get_unread_notifications(void *ctx,
-                                                  const wf_xrpc_request *req,
-                                                  wf_xrpc_response *resp) {
-    return appview_private(ctx, req, resp);
+                                                const wf_xrpc_request *req,
+                                                wf_xrpc_response *resp) {
+    // Return empty unread count for public AppView; local AppView can be implemented later
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        wf_xrpc_response_set_error(resp, 500, "InternalError", "Failed to create response");
+        return WF_OK;
+    }
+    cJSON_AddNumberToObject(root, "count", 0);
+    return set_json(resp, root);
 }
 static wf_status appview_get_notifications(void *ctx,
                                            const wf_xrpc_request *req,
