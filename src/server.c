@@ -1765,6 +1765,164 @@ static char *resolve_did_web_service(const char *did, const char *service_id) {
     return endpoint;
 }
 
+/* Low-level HTTP proxy: forwards request to `target` and copies status/body. */
+static wf_status proxy_http_request(const char *target, const char *method,
+                                    const char *content_type,
+                                    const unsigned char *body, size_t body_len,
+                                    wf_xrpc_response *resp) {
+    struct curl_slist *hdrs = NULL;
+    if (content_type && content_type[0]) {
+        char ct[256];
+        snprintf(ct, sizeof(ct), "Content-Type: %s", content_type);
+        hdrs = curl_slist_append(hdrs, ct);
+    }
+    proxy_buf_t body_out = {0};
+    char *ct_out = NULL;
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        curl_slist_free_all(hdrs);
+        wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                   "Could not initialise HTTP client");
+        return WF_OK;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, target);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method ? method : "GET");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, proxy_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body_out);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, proxy_header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ct_out);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    if (body && body_len > 0) {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body_len);
+    }
+    CURLcode rc = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(curl);
+    curl_slist_free_all(hdrs);
+
+    if (rc != CURLE_OK) {
+        free(body_out.data);
+        free(ct_out);
+        wf_xrpc_response_set_error(resp, 502, "BadGateway",
+                                   "Upstream request failed");
+        return WF_OK;
+    }
+
+    resp->http_status = status;
+    if (ct_out) {
+        wf_xrpc_response_set_content_type(resp, ct_out);
+        free(ct_out);
+    }
+    if (body_out.data && body_out.len > 0) {
+        wf_xrpc_response_set_body(resp, body_out.data, body_out.len);
+    }
+    free(body_out.data);
+    return WF_OK;
+}
+
+/* Proxy an app.bsky.* request to the AppView, minting service-auth from the
+ * requester's own account (iss=requester DID, aud=AppView DID). Returns 502
+ * on network failure, otherwise mirrors the upstream status/body. */
+static wf_status proxy_appview(metalbear_server *server,
+                               const char *requester_did,
+                               const wf_xrpc_request *req,
+                               wf_xrpc_response *resp) {
+    if (!server->appview_url || !server->appview_url[0] ||
+        !server->appview_did || !server->appview_did[0]) {
+        wf_xrpc_response_set_error(resp, 501, "MethodNotImplemented",
+                                   "No AppView configured");
+        return WF_OK;
+    }
+
+    char target[1024];
+    int n = snprintf(target, sizeof(target), "%s/xrpc/%s%s%s",
+                     server->appview_url, req->nsid ? req->nsid : "",
+                     req->raw_query && req->raw_query[0] ? "?" : "",
+                     req->raw_query ? req->raw_query : "");
+    if (n < 0 || (size_t)n >= sizeof(target)) {
+        wf_xrpc_response_set_error(resp, 414, "UriTooLong",
+                                   "Proxied URI exceeds limit");
+        return WF_OK;
+    }
+
+    char *service_token = NULL;
+    if (requester_did && requester_did[0]) {
+        metalbear_account_context *acct = context_for_did(server, requester_did);
+        if (acct && acct->repo) {
+            metalbear_repo_store_create_service_auth(acct->repo,
+                server->appview_did, (int64_t)time(NULL) + 300,
+                req->nsid, &service_token);
+        }
+    }
+
+    struct curl_slist *hdrs = NULL;
+    if (req->content_type && req->content_type[0]) {
+        char ct[256];
+        snprintf(ct, sizeof(ct), "Content-Type: %s", req->content_type);
+        hdrs = curl_slist_append(hdrs, ct);
+    }
+    if (service_token) {
+        char auth[512];
+        snprintf(auth, sizeof(auth), "Authorization: Bearer %s", service_token);
+        hdrs = curl_slist_append(hdrs, auth);
+    }
+
+    proxy_buf_t body_out = {0};
+    char *ct_out = NULL;
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        free(service_token);
+        curl_slist_free_all(hdrs);
+        wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                   "Could not initialise HTTP client");
+        return WF_OK;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, target);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, req->method ? req->method : "GET");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, proxy_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body_out);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, proxy_header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ct_out);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    if (req->body && req->body_len > 0) {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, req->body);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)req->body_len);
+    }
+    CURLcode rc = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(curl);
+    curl_slist_free_all(hdrs);
+    free(service_token);
+
+    if (rc != CURLE_OK) {
+        free(body_out.data);
+        free(ct_out);
+        wf_xrpc_response_set_error(resp, 502, "BadGateway",
+                                   "Upstream request failed");
+        return WF_OK;
+    }
+
+    resp->http_status = status;
+    if (ct_out) {
+        wf_xrpc_response_set_content_type(resp, ct_out);
+        free(ct_out);
+    }
+    if (body_out.data && body_out.len > 0) {
+        wf_xrpc_response_set_body(resp, body_out.data, body_out.len);
+    }
+    free(body_out.data);
+    return WF_OK;
+}
+
+/* Generic fallback for unmatched NSIDs (runs before auth). Uses bootstrap
+ * account's service-auth; public AppViews may reject unknown DIDs. */
 static wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
                                 wf_xrpc_response *resp) {
     metalbear_server *server = ctx;
@@ -1806,34 +1964,20 @@ static wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
-    char *service_token = NULL;
-    if (server->bootstrap && server->bootstrap->repo && server->appview_did) {
-        metalbear_repo_store_create_service_auth(server->bootstrap->repo,
-            server->appview_did, 60, req->nsid, &service_token);
-    }
-
     struct curl_slist *hdrs = NULL;
     if (req->content_type && req->content_type[0]) {
         char ct[256];
         snprintf(ct, sizeof(ct), "Content-Type: %s", req->content_type);
         hdrs = curl_slist_append(hdrs, ct);
     }
-    if (service_token) {
-        char auth[512];
-        snprintf(auth, sizeof(auth), "Authorization: Bearer %s", service_token);
-        hdrs = curl_slist_append(hdrs, auth);
-    }
-    if (req->host_header && req->host_header[0]) {
-        char host[256];
-        snprintf(host, sizeof(host), "Host: %s", req->host_header);
-        hdrs = curl_slist_append(hdrs, host);
-    }
+    /* libcurl sets Host from the target URL; do not override it with the
+     * original request's Host or Cloudflare-style frontends will reject the
+     * proxied connection. */
 
-    proxy_buf_t body = {0};
+    proxy_buf_t body_out = {0};
     char *ct_out = NULL;
     CURL *curl = curl_easy_init();
     if (!curl) {
-        free(service_token);
         curl_slist_free_all(hdrs);
         wf_xrpc_response_set_error(resp, 500, "InternalError",
                                    "Could not initialise HTTP client");
@@ -1843,7 +1987,7 @@ static wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, req->method ? req->method : "GET");
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, proxy_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body_out);
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, proxy_header_cb);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ct_out);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -1857,10 +2001,9 @@ static wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     curl_easy_cleanup(curl);
     curl_slist_free_all(hdrs);
-    free(service_token);
 
     if (rc != CURLE_OK) {
-        free(body.data);
+        free(body_out.data);
         free(ct_out);
         wf_xrpc_response_set_error(resp, 502, "BadGateway",
                                    "Upstream request failed");
@@ -1872,10 +2015,10 @@ static wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
         wf_xrpc_response_set_content_type(resp, ct_out);
         free(ct_out);
     }
-    if (body.data && body.len > 0) {
-        wf_xrpc_response_set_body(resp, body.data, body.len);
+    if (body_out.data && body_out.len > 0) {
+        wf_xrpc_response_set_body(resp, body_out.data, body_out.len);
     }
-    free(body.data);
+    free(body_out.data);
     return WF_OK;
 }
 
@@ -4108,6 +4251,168 @@ static wf_status check_signup_queue(void *ctx,
     return set_json(response, root);
 }
 
+/* ---- app.bsky.* AppView proxy handlers ----------------------------------
+ *
+ * Other PDS implementations (rsky-pds, ref-pds) implement these endpoints
+ * as first-class handlers and proxy them to an AppView with service-auth
+ * minted from the requester's account. The auth callback runs first, so
+ * req->authed_subject contains the requester DID.
+ */
+
+static wf_status appview_proxy(void *ctx, const wf_xrpc_request *req,
+                               wf_xrpc_response *resp) {
+    metalbear_server *server = ctx;
+    const char *requester_did = req->authed_subject;
+    return proxy_appview(server, requester_did, req, resp);
+}
+
+/* Feed endpoints */
+static wf_status appview_get_feed(void *ctx, const wf_xrpc_request *req,
+                                  wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_feed_skeleton(void *ctx,
+                                          const wf_xrpc_request *req,
+                                          wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_author_feed(void *ctx,
+                                         const wf_xrpc_request *req,
+                                         wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_actor_feeds(void *ctx,
+                                         const wf_xrpc_request *req,
+                                         wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_feed_generators(void *ctx,
+                                             const wf_xrpc_request *req,
+                                             wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_feed_generator(void *ctx,
+                                            const wf_xrpc_request *req,
+                                            wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_posts(void *ctx, const wf_xrpc_request *req,
+                                   wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+
+/* Actor endpoints */
+static wf_status appview_get_profile(void *ctx, const wf_xrpc_request *req,
+                                     wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_profiles(void *ctx, const wf_xrpc_request *req,
+                                      wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_actor_likes(void *ctx,
+                                         const wf_xrpc_request *req,
+                                         wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_actor_statistics(void *ctx,
+                                              const wf_xrpc_request *req,
+                                              wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_actor_rankings(void *ctx,
+                                            const wf_xrpc_request *req,
+                                            wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+
+/* Graph endpoints */
+static wf_status appview_get_follows(void *ctx, const wf_xrpc_request *req,
+                                     wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_followers(void *ctx, const wf_xrpc_request *req,
+                                       wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_blocks(void *ctx, const wf_xrpc_request *req,
+                                    wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_list(void *ctx, const wf_xrpc_request *req,
+                                  wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_lists(void *ctx, const wf_xrpc_request *req,
+                                   wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_list_items(void *ctx,
+                                        const wf_xrpc_request *req,
+                                        wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_starter_pack(void *ctx,
+                                          const wf_xrpc_request *req,
+                                          wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_starter_packs(void *ctx,
+                                           const wf_xrpc_request *req,
+                                           wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+
+/* Notification endpoints */
+static wf_status appview_get_unread_notifications(void *ctx,
+                                                  const wf_xrpc_request *req,
+                                                  wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_notifications(void *ctx,
+                                           const wf_xrpc_request *req,
+                                           wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+
+/* Chat/Convo endpoints */
+static wf_status appview_get_convo(void *ctx, const wf_xrpc_request *req,
+                                   wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_convos(void *ctx, const wf_xrpc_request *req,
+                                    wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_get_messages(void *ctx, const wf_xrpc_request *req,
+                                      wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+
+/* Labeler endpoints */
+static wf_status appview_get_labeler_info(void *ctx,
+                                          const wf_xrpc_request *req,
+                                          wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+
+/* Unsafe/unspecced endpoints the app uses */
+static wf_status appview_unspecced_get_age_assurance_state(void *ctx,
+                                                           const wf_xrpc_request *req,
+                                                           wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_unspecced_get_age_assurance_config(void *ctx,
+                                                            const wf_xrpc_request *req,
+                                                            wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+static wf_status appview_unspecced_get_age_assurance(void *ctx,
+                                                     const wf_xrpc_request *req,
+                                                     wf_xrpc_response *resp) {
+    return appview_proxy(ctx, req, resp);
+}
+
 /* ---- com.atproto.repo.uploadBlob (procedure) ----
  * Mirrors wolfram's blob upload handler but enforces
  * METALBEAR_BLOB_UPLOAD_LIMIT before storing. Output shape matches
@@ -5087,6 +5392,89 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_procedure(server->xrpc,
             "app.bsky.actor.putPreferences",
             put_actor_preferences, server) != WF_OK ||
+        /* AppView-proxied app.bsky.* endpoints (rsky-pds/ref-pds pattern).
+         * Auth runs first, so handlers see req->authed_subject and can mint
+         * requester-scoped service-auth JWTs for the upstream AppView. */
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.feed.getFeed", appview_get_feed, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.feed.getFeedSkeleton",
+            appview_get_feed_skeleton, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.feed.getAuthorFeed",
+            appview_get_author_feed, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.feed.getActorFeeds",
+            appview_get_actor_feeds, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.feed.getFeedGenerators",
+            appview_get_feed_generators, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.feed.getFeedGenerator",
+            appview_get_feed_generator, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.feed.getPosts", appview_get_posts, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.actor.getProfile", appview_get_profile, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.actor.getProfiles",
+            appview_get_profiles, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.actor.getActorLikes",
+            appview_get_actor_likes, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.actor.getActorStatistics",
+            appview_get_actor_statistics, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.actor.getActorRankings",
+            appview_get_actor_rankings, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.graph.getFollows", appview_get_follows, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.graph.getFollowers",
+            appview_get_followers, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.graph.getBlocks", appview_get_blocks, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.graph.getList", appview_get_list, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.graph.getLists", appview_get_lists, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.graph.getListItems",
+            appview_get_list_items, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.graph.getStarterPack",
+            appview_get_starter_pack, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.graph.getStarterPacks",
+            appview_get_starter_packs, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.notification.getUnreadCount",
+            appview_get_unread_notifications, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.notification.listNotifications",
+            appview_get_notifications, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.chat.bsky.convo.getConvo",
+            appview_get_convo, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.chat.bsky.convo.getConvos",
+            appview_get_convos, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.chat.bsky.convo.getMessages",
+            appview_get_messages, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.labeler.getServices",
+            appview_get_labeler_info, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.unspecced.getAgeAssuranceState",
+            appview_unspecced_get_age_assurance_state, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.unspecced.getAgeAssuranceConfig",
+            appview_unspecced_get_age_assurance_config, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.unspecced.getAgeAssurance",
+            appview_unspecced_get_age_assurance, server) != WF_OK ||
         /* Admin endpoints (refpds PDS_ADMIN_PASSWORD, Basic auth) */
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.admin.getAccountInfo",
