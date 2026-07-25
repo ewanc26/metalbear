@@ -96,6 +96,80 @@ static int run_adopted_key(void) {
     return failures;
 }
 
+/*
+ * Record validation against the lexicon corpus, matching the reference PDS's
+ * prepareWrite: a collection with no schema is reported "unknown" rather than
+ * rejected, a schema that is satisfied is "valid", and a schema that is
+ * violated is an error — the record must not be stored.
+ */
+static int run_record_validation(void) {
+    int failures = 0;
+    wf_lexicon_registry *lex = wf_lexicon_registry_new();
+    WF_CHECK(lex != NULL);
+    if (!lex) return failures + 1;
+    if (wf_lexicon_registry_load_dir(lex, METALBEAR_TEST_LEXICON_DIR) != WF_OK) {
+        fprintf(stderr, "SKIP: no lexicon corpus at %s\n",
+                METALBEAR_TEST_LEXICON_DIR);
+        wf_lexicon_registry_free(lex);
+        return failures;
+    }
+
+    metalbear_validation_status status = METALBEAR_VALIDATION_VALID;
+    char *message = NULL;
+
+    /* A well-formed post validates. */
+    const char *good = "{\"$type\":\"app.bsky.feed.post\",\"text\":\"hi\","
+                       "\"createdAt\":\"2026-07-25T00:00:00Z\"}";
+    WF_CHECK(metalbear_validate_record(lex, "app.bsky.feed.post", good, false,
+                                       &status, &message) == WF_OK);
+    WF_CHECK(status == METALBEAR_VALIDATION_VALID);
+    WF_CHECK(message == NULL);
+
+    /* A post missing its required `text` must be rejected, with a message. */
+    const char *missing = "{\"$type\":\"app.bsky.feed.post\","
+                          "\"createdAt\":\"2026-07-25T00:00:00Z\"}";
+    status = METALBEAR_VALIDATION_VALID;
+    WF_CHECK(metalbear_validate_record(lex, "app.bsky.feed.post", missing,
+                                       false, &status, &message) ==
+             WF_ERR_VALIDATION);
+    WF_CHECK(message != NULL);
+    free(message);
+    message = NULL;
+
+    /* Wrong field type is likewise rejected. */
+    const char *wrong = "{\"$type\":\"app.bsky.feed.post\",\"text\":123,"
+                        "\"createdAt\":\"2026-07-25T00:00:00Z\"}";
+    WF_CHECK(metalbear_validate_record(lex, "app.bsky.feed.post", wrong, false,
+                                       &status, &message) == WF_ERR_VALIDATION);
+    free(message);
+    message = NULL;
+
+    /* A collection with no schema is "unknown", not an error — the PDS still
+     * hosts collections whose lexicons it does not carry. */
+    const char *custom = "{\"$type\":\"click.croft.devtest\",\"x\":1}";
+    status = METALBEAR_VALIDATION_VALID;
+    WF_CHECK(metalbear_validate_record(lex, "click.croft.devtest", custom,
+                                       false, &status, &message) == WF_OK);
+    WF_CHECK(status == METALBEAR_VALIDATION_UNKNOWN);
+    WF_CHECK(message == NULL);
+
+    /* ...unless the caller demanded validation, which cannot be given. */
+    WF_CHECK(metalbear_validate_record(lex, "click.croft.devtest", custom, true,
+                                       &status, &message) == WF_ERR_NOT_FOUND);
+    free(message);
+    message = NULL;
+
+    /* With no registry at all, everything is honestly "unknown". */
+    status = METALBEAR_VALIDATION_VALID;
+    WF_CHECK(metalbear_validate_record(NULL, "app.bsky.feed.post", missing,
+                                       false, &status, &message) == WF_OK);
+    WF_CHECK(status == METALBEAR_VALIDATION_UNKNOWN);
+    free(message);
+
+    wf_lexicon_registry_free(lex);
+    return failures;
+}
+
 /* ── Phase 1 + 2: unit tests (no server) ──────────────────────────── */
 
 static int run_unit(void) {
@@ -767,6 +841,7 @@ static int run_server(void) {
 
 int main(void) {
     run_unit();
+    run_record_validation();
     run_adopted_key();
     run_did_immutability();
     run_server();

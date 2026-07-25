@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(metalbear VERSION 0.2.7 LANGUAGES C)
+project(metalbear VERSION 0.3.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -85,6 +85,8 @@ if(METALBEAR_BUILD_TESTS)
     target_link_libraries(test_metalbear_repo_store PRIVATE metalbear_core)
     target_include_directories(test_metalbear_repo_store PRIVATE
         "${METALBEAR_CJSON_SOURCE_DIR}" "${WOLFRAM_SOURCE_DIR}/test")
+    target_compile_definitions(test_metalbear_repo_store PRIVATE
+        METALBEAR_TEST_LEXICON_DIR="${WOLFRAM_SOURCE_DIR}/lexicons")
     add_test(NAME metalbear_repo_store COMMAND test_metalbear_repo_store)
 
     add_executable(test_metalbear_repo_store_resolver

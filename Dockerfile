@@ -68,6 +68,10 @@ COPY --from=build /src/build/_deps/cjson-build/libcjson.so* /usr/local/lib/
 COPY --from=build /src/build/_deps/libcbor-build/src/libcbor.so* /usr/local/lib/
 RUN ldconfig
 
+# The lexicon corpus records are validated against on write. Without it every
+# write is stored unchecked and reported as validationStatus "unknown".
+COPY --from=build /src/wolfram/lexicons /usr/local/share/metalbear/lexicons
+
 # Materialise /data in the image itself. It is normally a bind mount, but
 # without it in the image `docker exec` cannot even start a process (it chdirs
 # to WORKDIR first), which is exactly when you need a shell to diagnose a
