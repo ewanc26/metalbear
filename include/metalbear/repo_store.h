@@ -61,11 +61,24 @@ typedef enum metalbear_repo_store_event_kind {
     METALBEAR_REPO_STORE_EVENT_SYNC,
 } metalbear_repo_store_event_kind;
 
+/** One mutation within a commit event, mirroring subscribeRepos #repoOp. */
+typedef struct metalbear_repo_store_op {
+    const char *action;            /* create / update / delete */
+    const char *collection;
+    const char *rkey;
+    wf_cid cid;                    /* new record CID; unset for delete */
+    int has_cid;
+    wf_cid prev;                   /* previous record CID, when known */
+    int has_prev;
+} metalbear_repo_store_op;
+
 /**
  * A repository event emitted after durable persistence. All pointers and CAR
  * bytes are borrowed and remain valid only for the callback invocation.
- * Commit events currently describe one actual stored commit/op; applyWrites
- * therefore emits one event for each commit it creates.
+ *
+ * One event describes one stored commit, which may carry several ops: a
+ * batched applyWrites is a single commit and must reach the firehose as a
+ * single #commit event listing every op it applied.
  */
 typedef struct metalbear_repo_store_event {
     metalbear_repo_store_event_kind kind;
@@ -75,13 +88,8 @@ typedef struct metalbear_repo_store_event {
     const char *since;             /* NULL for a genesis commit */
     wf_cid prev_data;
     int has_prev_data;
-    const char *action;            /* create/update/delete; commit only */
-    const char *collection;        /* commit only */
-    const char *rkey;              /* commit only */
-    wf_cid cid;
-    int has_cid;
-    wf_cid prev;
-    int has_prev;
+    const metalbear_repo_store_op *ops;  /* commit only */
+    size_t ops_count;
     const unsigned char *blocks;   /* incremental CAR, full CAR for sync */
     size_t blocks_len;
 } metalbear_repo_store_event;

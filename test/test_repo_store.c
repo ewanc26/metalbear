@@ -358,6 +358,114 @@ static int run_unit(void) {
     s = metalbear_repo_store_verify_head(store, &verified2, NULL);
     WF_CHECK(s == WF_OK && verified2 == 1);
 
+    /* applyWrites is atomic and lands as exactly ONE commit. Capture the head
+     * first: if the batch produced a commit per write, the new commit's `prev`
+     * would point at an intermediate commit rather than the head we saw. */
+    int pre_verified = 0;
+    wf_commit pre_commit;
+    WF_CHECK(metalbear_repo_store_verify_head(store, &pre_verified, &pre_commit) ==
+             WF_OK && pre_verified == 1);
+    wf_cid head_before = pre_commit.cid;
+
+    const char *batch_writes =
+        "["
+        "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+        "\"collection\":\"com.example.batch\",\"rkey\":\"batchaaa\","
+        "\"value\":{\"$type\":\"com.example.batch\",\"n\":1}},"
+        "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+        "\"collection\":\"com.example.batch\",\"rkey\":\"batchbbb\","
+        "\"value\":{\"$type\":\"com.example.batch\",\"n\":2}},"
+        "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+        "\"collection\":\"com.example.batch\",\"rkey\":\"batchccc\","
+        "\"value\":{\"$type\":\"com.example.batch\",\"n\":3}}"
+        "]";
+    char *bcid = NULL, *brev = NULL, *bres = NULL;
+    s = metalbear_repo_store_apply_writes(store, batch_writes, NULL, &bcid, &brev,
+                                          &bres);
+    WF_CHECK(s == WF_OK && bcid && brev && bres);
+    int post_verified = 0;
+    wf_commit post_commit;
+    WF_CHECK(metalbear_repo_store_verify_head(store, &post_verified,
+                                              &post_commit) == WF_OK &&
+             post_verified == 1);
+    /* Exactly one commit: the new head chains directly off the old one. */
+    WF_CHECK(post_commit.has_prev &&
+             post_commit.prev.len == head_before.len &&
+             memcmp(post_commit.prev.bytes, head_before.bytes,
+                    head_before.len) == 0);
+    /* All three records landed. */
+    for (int i = 0; i < 3; i++) {
+        static const char *const bkeys[] = {"batchaaa", "batchbbb", "batchccc"};
+        char *br = NULL, *brc = NULL;
+        WF_CHECK(metalbear_repo_store_get_record(store, "com.example.batch",
+                                                 bkeys[i], &br, &brc) == WF_OK);
+        free(br);
+        free(brc);
+    }
+    free(bcid); free(brev); free(bres);
+
+    /* A batch that fails part-way must leave the repo untouched: the valid
+     * first write must not survive, and the head must not move. */
+    int mid_verified = 0;
+    wf_commit mid_commit;
+    WF_CHECK(metalbear_repo_store_verify_head(store, &mid_verified, &mid_commit) ==
+             WF_OK && mid_verified == 1);
+    const char *bad_writes =
+        "["
+        "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+        "\"collection\":\"com.example.batch\",\"rkey\":\"batchddd\","
+        "\"value\":{\"$type\":\"com.example.batch\",\"n\":4}},"
+        "{\"$type\":\"com.atproto.repo.applyWrites#delete\","
+        "\"collection\":\"com.example.batch\",\"rkey\":\"neverexisted\"}"
+        "]";
+    char *xcid = NULL, *xrev = NULL, *xres = NULL;
+    s = metalbear_repo_store_apply_writes(store, bad_writes, NULL, &xcid, &xrev,
+                                          &xres);
+    WF_CHECK(s != WF_OK);
+    free(xcid); free(xrev); free(xres);
+    char *rolled = NULL, *rolledc = NULL;
+    WF_CHECK(metalbear_repo_store_get_record(store, "com.example.batch",
+                                             "batchddd", &rolled,
+                                             &rolledc) == WF_ERR_NOT_FOUND);
+    free(rolled); free(rolledc);
+    int after_verified = 0;
+    wf_commit after_commit;
+    WF_CHECK(metalbear_repo_store_verify_head(store, &after_verified,
+                                              &after_commit) == WF_OK &&
+             after_verified == 1);
+    WF_CHECK(after_commit.cid.len == mid_commit.cid.len &&
+             memcmp(after_commit.cid.bytes, mid_commit.cid.bytes,
+                    mid_commit.cid.len) == 0);
+
+    /* Two records with byte-identical content hash to the same block CID.
+     * The repo is content-addressed, so the block is stored once, but each
+     * record must still get its own MST entry — otherwise the second create
+     * silently succeeds while writing nothing. */
+    const char *dup_json = "{\"$type\":\"com.example.dup\",\"text\":\"same\"}";
+    char *dup_uri1 = NULL, *dup_cid1 = NULL, *dup_uri2 = NULL, *dup_cid2 = NULL;
+    s = metalbear_repo_store_create_record(store, "com.example.dup", "dupkeyone",
+                                           dup_json, NULL, &dup_uri1, &dup_cid1);
+    WF_CHECK(s == WF_OK && dup_uri1 && dup_cid1);
+    s = metalbear_repo_store_create_record(store, "com.example.dup", "dupkeytwo",
+                                           dup_json, NULL, &dup_uri2, &dup_cid2);
+    WF_CHECK(s == WF_OK && dup_uri2 && dup_cid2);
+    /* Same content, so the same record CID — but both must be readable. */
+    if (dup_cid1 && dup_cid2) WF_CHECK(strcmp(dup_cid1, dup_cid2) == 0);
+    char *dupr = NULL, *duprc = NULL;
+    s = metalbear_repo_store_get_record(store, "com.example.dup", "dupkeyone",
+                                        &dupr, &duprc);
+    WF_CHECK(s == WF_OK);
+    free(dupr); free(duprc); dupr = duprc = NULL;
+    s = metalbear_repo_store_get_record(store, "com.example.dup", "dupkeytwo",
+                                        &dupr, &duprc);
+    WF_CHECK(s == WF_OK);
+    free(dupr); free(duprc);
+    /* The head must still verify after both writes. */
+    int dup_verified = 0;
+    WF_CHECK(metalbear_repo_store_verify_head(store, &dup_verified, NULL) == WF_OK &&
+             dup_verified == 1);
+    free(dup_uri1); free(dup_cid1); free(dup_uri2); free(dup_cid2);
+
     /* listRecords ordering + pagination. Five records with sortable rkeys:
      * the default order is newest-rkey-first (descending), `reverse` flips
      * it, and paging with the returned cursor must visit every record
