@@ -1,10 +1,10 @@
 # MetalBear
 
 MetalBear is an AT Protocol Personal Data Server written in C and built on
-[Wolfram](../wolfram). It provides a runnable PDS foundation with multi-account
+[Wolfram](https://github.com/ewanc26/wolfram). It provides a runnable PDS foundation with multi-account
 hosting, admin tooling, and a dynamic landing page.
 
-**Version:** 0.2.0
+**Version:** 0.3.0
 
 ## Core Features
 
