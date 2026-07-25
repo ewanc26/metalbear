@@ -681,6 +681,38 @@ wf_status metalbear_repo_store_open(const char *path, const char *did,
         const void *kb = sqlite3_column_blob(stmt, 3);
         int kbl = sqlite3_column_bytes(stmt, 3);
 
+        /*
+         * The account registry is the authority on which DID this repo
+         * belongs to, not the repo's own meta row. Historically the stored
+         * value was loaded and the caller's `did` ignored outright, so a repo
+         * created under a placeholder DID (e.g. before a real did:plc was
+         * minted) kept that DID forever: every AT-URI it returned pointed at a
+         * DID that resolves nowhere, and every commit was signed claiming an
+         * identity whose DID document does not list this repo's signing key.
+         * Nothing surfaced the divergence.
+         *
+         * A repo's DID is immutable in atproto — the commit objects already
+         * written embed it in signed CBOR, so it cannot be corrected by
+         * rewriting this row. Refuse to open instead of silently producing
+         * unfederatable data; recovery means re-creating the repo under the
+         * correct DID.
+         *
+         * The reference implementation avoids the whole failure mode by never
+         * treating the store as the authority: its actor store is constructed
+         * with the DID from the account lookup and threads it through.
+         */
+        if (did && *did && d && *d && strcmp(did, d) != 0) {
+            sqlite3_finalize(stmt);
+            fprintf(stderr,
+                    "metalbear: repo at %s belongs to %s but was opened for "
+                    "%s; refusing to serve it. A repo's DID is immutable "
+                    "(already-signed commits embed it), so this repo must be "
+                    "re-created under the correct DID.\n",
+                    path, d, did);
+            free_store(s);
+            return WF_ERR_INVALID_ARG;
+        }
+
         s->did = strdup(d ? d : "");
         s->handle = strdup(h ? h : "");
         s->key.type = (wf_key_type)kt;
