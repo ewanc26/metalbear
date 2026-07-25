@@ -867,10 +867,12 @@ static int parse_commit_at(metalbear_repo_store *s, const wf_cid *cid,
     return block && wf_commit_parse(block->data, block->data_len, out) == WF_OK;
 }
 
-static void emit_commit_event(metalbear_repo_store *s, const wf_cid *old_head,
-                              const char *action, const char *collection,
-                              const char *rkey, const wf_cid *cid,
-                              const wf_cid *prev) {
+/* Emit one #commit event describing `ops_count` mutations landed by a single
+ * signed commit. */
+static void emit_commit_event_ops(metalbear_repo_store *s,
+                                  const wf_cid *old_head,
+                                  const metalbear_repo_store_op *ops,
+                                  size_t ops_count) {
     if (!s || !s->event_cb) return;
     wf_commit current = {0}, previous = {0};
     if (!parse_commit_at(s, &s->head, &current)) return;
@@ -888,6 +890,20 @@ static void emit_commit_event(metalbear_repo_store *s, const wf_cid *old_head,
         .since = has_previous ? previous.rev : NULL,
         .prev_data = previous.data,
         .has_prev_data = has_previous,
+        .ops = ops,
+        .ops_count = ops_count,
+        .blocks = blocks,
+        .blocks_len = blocks_len,
+    };
+    s->event_cb(&event, s->event_ctx);
+    free(blocks);
+}
+
+static void emit_commit_event(metalbear_repo_store *s, const wf_cid *old_head,
+                              const char *action, const char *collection,
+                              const char *rkey, const wf_cid *cid,
+                              const wf_cid *prev) {
+    metalbear_repo_store_op op = {
         .action = action,
         .collection = collection,
         .rkey = rkey,
@@ -895,11 +911,8 @@ static void emit_commit_event(metalbear_repo_store *s, const wf_cid *old_head,
         .has_cid = cid != NULL,
         .prev = prev ? *prev : (wf_cid){{0}, 0},
         .has_prev = prev != NULL,
-        .blocks = blocks,
-        .blocks_len = blocks_len,
     };
-    s->event_cb(&event, s->event_ctx);
-    free(blocks);
+    emit_commit_event_ops(s, old_head, &op, 1);
 }
 
 static void emit_sync_event(metalbear_repo_store *s) {
@@ -1180,87 +1193,162 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
     cJSON *results = cJSON_CreateArray();
     if (!results) { cJSON_Delete(root); return WF_ERR_ALLOC; }
 
+    /* Stage every write, then land the whole batch as ONE signed commit.
+     * applyWrites is specified as atomic: the reference PDS runs the batch in
+     * a single transaction and sequences a single #commit event carrying all
+     * ops. Applying the writes one at a time would emit one commit (and one
+     * firehose event) per write, and would leave earlier writes committed when
+     * a later one fails. */
+    size_t write_count = (size_t)cJSON_GetArraySize(root);
+    wf_repo_write *batch = write_count ? calloc(write_count, sizeof(*batch)) : NULL;
+    /* Parallel bookkeeping: the CBOR bodies and any rkeys we generate must
+     * outlive the loop, since `batch` only borrows them. */
+    unsigned char **bodies = write_count ? calloc(write_count, sizeof(*bodies)) : NULL;
+    char **rkeys = write_count ? calloc(write_count, sizeof(*rkeys)) : NULL;
+    char **collections = write_count ? calloc(write_count, sizeof(*collections)) : NULL;
+    char **values = write_count ? calloc(write_count, sizeof(*values)) : NULL;
+    if (write_count && (!batch || !bodies || !rkeys || !collections || !values)) {
+        st = WF_ERR_ALLOC;
+        goto done;
+    }
+
     st = WF_OK;
+    size_t staged = 0;
     const cJSON *op;
     cJSON_ArrayForEach(op, root) {
-        if (!cJSON_IsObject(op)) { st = WF_ERR_INVALID_ARG; break; }
+        if (!cJSON_IsObject(op)) { st = WF_ERR_INVALID_ARG; goto done; }
         cJSON *type = cJSON_GetObjectItemCaseSensitive(op, "$type");
-        if (!type || !cJSON_IsString(type)) { st = WF_ERR_INVALID_ARG; break; }
+        if (!type || !cJSON_IsString(type)) { st = WF_ERR_INVALID_ARG; goto done; }
         const char *t = type->valuestring;
 
         cJSON *coll = cJSON_GetObjectItemCaseSensitive(op, "collection");
         cJSON *val = cJSON_GetObjectItemCaseSensitive(op, "value");
         cJSON *rk = cJSON_GetObjectItemCaseSensitive(op, "rkey");
+        if (!coll || !cJSON_IsString(coll) || !coll->valuestring[0]) {
+            st = WF_ERR_INVALID_ARG;
+            goto done;
+        }
 
-        if (strcmp(t, "com.atproto.repo.applyWrites#create") == 0 ||
-            strcmp(t, "com.atproto.repo.applyWrites#update") == 0) {
-            if (!coll || !cJSON_IsString(coll) || !val) {
-                st = WF_ERR_INVALID_ARG;
-                break;
+        bool is_create = strcmp(t, "com.atproto.repo.applyWrites#create") == 0;
+        bool is_update = strcmp(t, "com.atproto.repo.applyWrites#update") == 0;
+        bool is_delete = strcmp(t, "com.atproto.repo.applyWrites#delete") == 0;
+        if (!is_create && !is_update && !is_delete) {
+            st = WF_ERR_INVALID_ARG;
+            goto done;
+        }
+
+        /* create may omit rkey (the PDS mints a TID); update/delete may not. */
+        const char *rkey = (rk && cJSON_IsString(rk) && rk->valuestring[0])
+                               ? rk->valuestring : NULL;
+        if (!rkey) {
+            if (!is_create) { st = WF_ERR_INVALID_ARG; goto done; }
+            char tid[16];
+            if (wf_tid_now(tid) != WF_OK) { st = WF_ERR_INTERNAL; goto done; }
+            rkeys[staged] = strdup(tid);
+        } else {
+            if (!wf_syntax_record_key_is_valid(rkey)) {
+                st = WF_ERR_INVALID_ARG; /* TODO: atproto InvalidRecordKey */
+                goto done;
             }
-            /* (c) record-key validation when a caller-supplied rkey given. */
-            const char *rkey = (rk && cJSON_IsString(rk) && rk->valuestring[0])
-                                  ? rk->valuestring : NULL;
-            if (rkey && !wf_syntax_record_key_is_valid(rkey)) {
-                st = WF_ERR_INVALID_ARG; /* TODO: InvalidRecordKey */
-                break;
-            }
+            rkeys[staged] = strdup(rkey);
+        }
+        collections[staged] = strdup(coll->valuestring);
+        if (!rkeys[staged] || !collections[staged]) { st = WF_ERR_ALLOC; goto done; }
+
+        batch[staged].collection = collections[staged];
+        batch[staged].rkey = rkeys[staged];
+        if (is_delete) {
+            batch[staged].action = WF_REPO_WRITE_DELETE;
+        } else {
+            if (!val) { st = WF_ERR_INVALID_ARG; goto done; }
             char *rec_json = cJSON_PrintUnformatted(val);
-            if (!rec_json) { st = WF_ERR_ALLOC; break; }
-            char *uri = NULL, *cid = NULL;
-            if (strcmp(t, "com.atproto.repo.applyWrites#create") == 0) {
-                st = metalbear_repo_store_create_record(s, coll->valuestring, rkey,
-                                                 rec_json, NULL, &uri, &cid);
-            } else {
-                if (!rkey) {
-                    st = WF_ERR_INVALID_ARG;
-                } else {
-                    st = metalbear_repo_store_put_record(s, coll->valuestring, rkey,
-                                                   rec_json, NULL, NULL, &uri,
-                                                   &cid);
-                }
+            if (!rec_json) { st = WF_ERR_ALLOC; goto done; }
+            if (!record_type_matches(rec_json, collections[staged])) {
+                free(rec_json);
+                st = WF_ERR_INVALID_ARG; /* TODO: atproto InvalidRecord */
+                goto done;
             }
-            free(rec_json);
-            if (st != WF_OK) { free(uri); free(cid); break; }
-            cJSON *r = cJSON_CreateObject();
-            /* `results` is a CLOSED union in the lexicon, so each entry must
-             * carry the $type that discriminates it; without one a strict
-             * client rejects the whole response. */
-            cJSON_AddStringToObject(r, "$type",
-                strcmp(t, "com.atproto.repo.applyWrites#create") == 0
-                    ? "com.atproto.repo.applyWrites#createResult"
-                    : "com.atproto.repo.applyWrites#updateResult");
-            cJSON_AddStringToObject(r, "uri", uri ? uri : "");
-            cJSON_AddStringToObject(r, "cid", cid ? cid : "");
-            /* (d)/(g) per-op validationStatus; wolfram does no lexicon
-             * validation, so it reports "unknown" (matching atproto's
-             * behaviour for an unrecognised $type). */
-            cJSON_AddStringToObject(r, "validationStatus", "unknown");
-            cJSON_AddItemToArray(results, r);
-            free(uri);
-            free(cid);
-        } else if (strcmp(t, "com.atproto.repo.applyWrites#delete") == 0) {
-            if (!coll || !cJSON_IsString(coll) || !rk ||
-                !cJSON_IsString(rk) || !rk->valuestring[0]) {
-                st = WF_ERR_INVALID_ARG;
-                break;
-            }
-            if (!wf_syntax_record_key_is_valid(rk->valuestring)) {
-                st = WF_ERR_INVALID_ARG; /* TODO: InvalidRecordKey */
-                break;
-            }
-            st = metalbear_repo_store_delete_record(s, coll->valuestring,
-                                             rk->valuestring, NULL, NULL);
-            if (st != WF_OK) break;
-            cJSON *r = cJSON_CreateObject();
+            values[staged] = rec_json;
+            size_t body_len = 0;
+            st = encode_record_json(rec_json, &bodies[staged], &body_len);
+            if (st != WF_OK) goto done;
+            batch[staged].action = is_create ? WF_REPO_WRITE_CREATE
+                                             : WF_REPO_WRITE_UPDATE;
+            batch[staged].record_cbor = bodies[staged];
+            batch[staged].record_cbor_len = body_len;
+        }
+        staged++;
+    }
+
+    wf_cid old_head = s->head;
+    wf_cid new_commit = {{0}, 0};
+    const wf_cid *prev = s->head.len ? &s->head : NULL;
+    st = wf_repo_apply_writes(&s->car, prev, s->did, batch, staged, &s->key,
+                              &new_commit);
+    if (st != WF_OK) goto done;
+    st = commit_persist(s, &new_commit);
+    if (st != WF_OK) goto done;
+
+    /* The commit is durable; now bring the record index in line with it and
+     * describe the batch to the firehose as a single event. */
+    metalbear_repo_store_op *events = staged
+        ? calloc(staged, sizeof(*events)) : NULL;
+    if (staged && !events) { st = WF_ERR_ALLOC; goto done; }
+    for (size_t i = 0; i < staged; i++) {
+        char *record_cid = NULL;
+        if (batch[i].action == WF_REPO_WRITE_DELETE) {
+            index_delete_record(s, batch[i].collection, batch[i].rkey);
+        } else {
+            record_cid = wf_cid_to_string(&batch[i].out_record);
+            index_upsert_record(s, batch[i].collection, batch[i].rkey,
+                                record_cid ? record_cid : "", values[i]);
+        }
+        events[i].action = batch[i].action == WF_REPO_WRITE_CREATE ? "create"
+                         : batch[i].action == WF_REPO_WRITE_UPDATE ? "update"
+                                                                   : "delete";
+        events[i].collection = batch[i].collection;
+        events[i].rkey = batch[i].rkey;
+        events[i].cid = batch[i].out_record;
+        events[i].has_cid = batch[i].action != WF_REPO_WRITE_DELETE;
+
+        cJSON *r = cJSON_CreateObject();
+        /* `results` is a CLOSED union in the lexicon, so each entry must carry
+         * the $type that discriminates it; without one a strict client rejects
+         * the whole response. */
+        if (batch[i].action == WF_REPO_WRITE_DELETE) {
             cJSON_AddStringToObject(r, "$type",
                                     "com.atproto.repo.applyWrites#deleteResult");
-            cJSON_AddItemToArray(results, r);
         } else {
-            st = WF_ERR_INVALID_ARG;
-            break;
+            cJSON_AddStringToObject(r, "$type",
+                batch[i].action == WF_REPO_WRITE_CREATE
+                    ? "com.atproto.repo.applyWrites#createResult"
+                    : "com.atproto.repo.applyWrites#updateResult");
+            char *uri = make_uri(s->did, batch[i].collection, batch[i].rkey);
+            cJSON_AddStringToObject(r, "uri", uri ? uri : "");
+            free(uri);
+            cJSON_AddStringToObject(r, "cid", record_cid ? record_cid : "");
+            /* wolfram performs no lexicon validation, so report "unknown"
+             * (what atproto reports for an unrecognised $type). */
+            cJSON_AddStringToObject(r, "validationStatus", "unknown");
         }
+        cJSON_AddItemToArray(results, r);
+        free(record_cid);
     }
+    emit_commit_event_ops(s, &old_head, events, staged);
+    free(events);
+
+done:
+    for (size_t i = 0; i < write_count; i++) {
+        if (bodies) free(bodies[i]);
+        if (rkeys) free(rkeys[i]);
+        if (collections) free(collections[i]);
+        if (values) free(values[i]);
+    }
+    free(bodies);
+    free(rkeys);
+    free(collections);
+    free(values);
+    free(batch);
     cJSON_Delete(root);
     if (st != WF_OK) { cJSON_Delete(results); return st; }
 
