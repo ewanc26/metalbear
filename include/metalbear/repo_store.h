@@ -424,6 +424,14 @@ cJSON *metalbear_did_document_build(const char *did, const char *handle,
  *  Borrowed from `document`. */
 const char *metalbear_did_document_handle(const cJSON *document);
 
+/** did:key of the repo signing key from the document's #atproto
+ *  verification method. Heap-allocated; caller frees. NULL when absent. */
+char *metalbear_did_document_signing_key(const cJSON *document);
+
+/** serviceEndpoint of the document's #atproto_pds service entry, or NULL.
+ *  Borrowed from `document`. */
+const char *metalbear_did_document_pds_endpoint(const cJSON *document);
+
 #ifdef __cplusplus
 }
 #endif
