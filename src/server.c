@@ -681,13 +681,46 @@ static wf_status fetch_remote_did_doc(metalbear_server *server,
     return *out_json ? WF_OK : WF_ERR_ALLOC;
 }
 
+/*
+ * Is `did` a did:web whose document THIS server publishes?
+ *
+ * A did:web's authority is whoever serves its document, so for one we host
+ * ourselves there is no external party to consult — and trying to consult one
+ * is actively harmful: the request loops back through our own ingress and
+ * occupies a worker thread that is waiting on this very server. With a handful
+ * of such requests the pool is exhausted and the PDS wedges. Resolve these
+ * locally instead.
+ */
+static bool did_web_is_self_hosted(metalbear_server *server, const char *did) {
+    if (!did || strncmp(did, "did:web:", 8) != 0 || !server->public_url)
+        return false;
+    const char *host = did + 8;
+    size_t host_len = strcspn(host, ":");   /* stop at the first path segment */
+
+    const char *ours = server->public_url;
+    if (strncmp(ours, "https://", 8) == 0) ours += 8;
+    else if (strncmp(ours, "http://", 7) == 0) ours += 7;
+    size_t ours_len = strcspn(ours, "/");
+
+    return host_len == ours_len && strncmp(host, ours, host_len) == 0;
+}
+
 /* metalbear_xrpc_did_doc_provider: resolve `did` through the identity layer
  * (PLC directory / did:web well-known) and return its raw JSON. Deliberately
- * skips the local registry — describeRepo uses this to check a handle
- * bi-directionally, which a locally synthesised document cannot do. Returns
- * NULL when the DID does not resolve. */
+ * skips the local registry for DIDs someone else is authoritative for —
+ * describeRepo uses this to check a handle bi-directionally, which a locally
+ * synthesised document cannot do. Returns NULL when the DID does not resolve. */
 static char *resolve_did_doc_json(void *ctx, const char *did) {
     metalbear_server *server = ctx;
+    if (did_web_is_self_hosted(server, did)) {
+        metalbear_account_context *acct = context_for_did(server, did);
+        if (!acct) return NULL;
+        cJSON *doc = build_did_doc(server, acct);
+        if (!doc) return NULL;
+        char *json = cJSON_PrintUnformatted(doc);
+        cJSON_Delete(doc);
+        return json;
+    }
     char *json = NULL;
     if (!did || fetch_remote_did_doc(server, did, &json) != WF_OK) return NULL;
     return json;
@@ -705,6 +738,12 @@ static bool did_doc_matches_service(metalbear_server *server,
     const char *local_key =
         acct->repo ? metalbear_repo_store_signing_key_did(acct->repo) : NULL;
     if (!local_key || !local_key[0]) return false;
+
+    /* For a did:web we publish ourselves the document is generated from this
+     * repo's own key and this server's URL, so it agrees by construction.
+     * Fetching it back over the network would only deadlock on ourselves. */
+    if (did_web_is_self_hosted(server, acct->did))
+        return context_for_did(server, acct->did) != NULL;
 
     char *json = NULL;
     if (fetch_remote_did_doc(server, acct->did, &json) != WF_OK || !json)
@@ -1854,11 +1893,48 @@ static wf_status proxy_appview(metalbear_server *server,
         return WF_OK;
     }
 
+    /*
+     * `atproto-proxy: <did>#<service_id>` names the service the client wants
+     * this request delivered to, and the audience its service-auth must carry.
+     * Honouring it is what lets one PDS front several services — chat, for
+     * one, lives at did:web:api.bsky.chat and is not served by the AppView, so
+     * without this every chat call is answered by whichever host appview_url
+     * happens to name.
+     */
+    char *upstream = NULL;
+    const char *audience = server->appview_did;
+    char audience_buf[256];
+    const char *proxy_header = req->atproto_proxy;
+    if (proxy_header && proxy_header[0]) {
+        const char *hash = strrchr(proxy_header, '#');
+        upstream = resolve_did_web_service(proxy_header, hash ? hash + 1 : NULL);
+        if (!upstream) {
+            wf_xrpc_response_set_error(resp, 502, "BadGateway",
+                                       "Could not resolve atproto-proxy target");
+            return WF_OK;
+        }
+        size_t did_len = hash ? (size_t)(hash - proxy_header)
+                              : strlen(proxy_header);
+        if (did_len < sizeof(audience_buf)) {
+            memcpy(audience_buf, proxy_header, did_len);
+            audience_buf[did_len] = '\0';
+            audience = audience_buf;
+        }
+    } else {
+        upstream = strdup(server->appview_url);
+        if (!upstream) {
+            wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                       "Out of memory");
+            return WF_OK;
+        }
+    }
+
     char target[1024];
     int n = snprintf(target, sizeof(target), "%s/xrpc/%s%s%s",
-                     server->appview_url, req->nsid ? req->nsid : "",
+                     upstream, req->nsid ? req->nsid : "",
                      req->raw_query && req->raw_query[0] ? "?" : "",
                      req->raw_query ? req->raw_query : "");
+    free(upstream);
     if (n < 0 || (size_t)n >= sizeof(target)) {
         wf_xrpc_response_set_error(resp, 414, "UriTooLong",
                                    "Proxied URI exceeds limit");
@@ -1870,7 +1946,7 @@ static wf_status proxy_appview(metalbear_server *server,
         metalbear_account_context *acct = context_for_did(server, requester_did);
         if (acct && acct->repo) {
             metalbear_repo_store_create_service_auth(acct->repo,
-                server->appview_did, (int64_t)time(NULL) + 300,
+                audience, (int64_t)time(NULL) + 300,
                 req->nsid, &service_token);
         }
     }
@@ -4424,10 +4500,35 @@ static wf_status appview_get_profiles(void *ctx, const wf_xrpc_request *req,
                                       wf_xrpc_response *resp) {
     return appview_public(ctx, req, resp);
 }
+/* An actor's likes are gated on the viewer, so this needs the requester's
+ * identity rather than an anonymous read. */
 static wf_status appview_get_actor_likes(void *ctx,
                                          const wf_xrpc_request *req,
                                          wf_xrpc_response *resp) {
+    return appview_private(ctx, req, resp);
+}
+
+/* The requester's own following feed — meaningless without their identity. */
+static wf_status appview_get_timeline(void *ctx, const wf_xrpc_request *req,
+                                      wf_xrpc_response *resp) {
+    return appview_private(ctx, req, resp);
+}
+
+/* Thread content is public; viewer state is a bonus the public AppView omits. */
+static wf_status appview_get_post_thread(void *ctx, const wf_xrpc_request *req,
+                                         wf_xrpc_response *resp) {
     return appview_public(ctx, req, resp);
+}
+
+/* Push registration is per-account state on the AppView. */
+static wf_status appview_register_push(void *ctx, const wf_xrpc_request *req,
+                                       wf_xrpc_response *resp) {
+    return appview_private(ctx, req, resp);
+}
+
+static wf_status appview_unregister_push(void *ctx, const wf_xrpc_request *req,
+                                         wf_xrpc_response *resp) {
+    return appview_private(ctx, req, resp);
 }
 static wf_status appview_get_actor_statistics(void *ctx,
                                               const wf_xrpc_request *req,
@@ -5170,6 +5271,86 @@ static wf_status handle_well_known_did(void *ctx, const wf_xrpc_request *request
     return WF_OK;
 }
 
+/*
+ * Serve the DID document for a path-form did:web account hosted here:
+ *
+ *   did:web:example.com:acct:alice  ->  GET /acct/alice/did.json
+ *
+ * The hostname form (did:web:alice.example.com) is already handled by
+ * handle_well_known_did via the Host header, but it needs a wildcard DNS entry
+ * and ingress route per account. The path form works over the PDS's single
+ * existing hostname, which is what makes did:web accounts practical to
+ * self-host.
+ *
+ * The document is built from the repo's own signing key, so it agrees with the
+ * commits that repo signs by construction.
+ */
+static wf_status handle_account_did_web(void *ctx,
+                                        const wf_xrpc_request *request,
+                                        wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    const char *path = request->path ? request->path : "";
+    static const char prefix[] = "/acct/";
+    static const char suffix[] = "/did.json";
+    size_t len = strlen(path);
+    size_t plen = sizeof(prefix) - 1, slen = sizeof(suffix) - 1;
+    if (len <= plen + slen || strncmp(path, prefix, plen) != 0 ||
+        strcmp(path + len - slen, suffix) != 0) {
+        wf_xrpc_response_set_error(response, 404, "NotFound",
+                                   "No DID document at this path");
+        return WF_OK;
+    }
+    size_t name_len = len - plen - slen;
+    /* One path segment only: nested segments are a different DID. */
+    if (name_len == 0 || memchr(path + plen, '/', name_len)) {
+        wf_xrpc_response_set_error(response, 404, "NotFound",
+                                   "No DID document at this path");
+        return WF_OK;
+    }
+
+    const char *host = server->service_did &&
+        strncmp(server->service_did, "did:web:", 8) == 0
+            ? server->service_did + 8 : NULL;
+    if (!host) {
+        wf_xrpc_response_set_error(response, 404, "NotFound",
+                                   "Server does not host did:web accounts");
+        return WF_OK;
+    }
+
+    char did[512];
+    int n = snprintf(did, sizeof(did), "did:web:%s:acct:%.*s", host,
+                     (int)name_len, path + plen);
+    if (n < 0 || (size_t)n >= sizeof(did)) {
+        wf_xrpc_response_set_error(response, 404, "NotFound",
+                                   "No DID document at this path");
+        return WF_OK;
+    }
+
+    metalbear_account_context *acct = context_for_did(server, did);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 404, "NotFound",
+                                   "No such account");
+        return WF_OK;
+    }
+    cJSON *doc = build_did_doc(server, acct);
+    if (!doc) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not build DID document");
+        return WF_OK;
+    }
+    char *json = cJSON_PrintUnformatted(doc);
+    cJSON_Delete(doc);
+    if (!json) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not serialize DID document");
+        return WF_OK;
+    }
+    wf_xrpc_response_set_body(response, json, strlen(json));
+    wf_xrpc_response_set_content_type(response, "application/did+ld+json");
+    free(json);
+    return WF_OK;
+}
+
 static wf_status get_actor_preferences(void *ctx, const wf_xrpc_request *request,
                                        wf_xrpc_response *response) {
     metalbear_server *server = ctx;
@@ -5252,6 +5433,10 @@ static wf_status register_identity_documents(metalbear_server *server) {
     if (status != WF_OK) return status;
     status = wf_xrpc_server_register_http_route(server->xrpc, "GET",
         "/.well-known/atproto-did", handle_atproto_did, server);
+    if (status != WF_OK) return status;
+    /* Path-form did:web accounts: /acct/<name>/did.json. */
+    status = wf_xrpc_server_register_http_prefix(server->xrpc, "GET", "/acct/",
+                                                 handle_account_did_web, server);
     if (status != WF_OK) return status;
     status = wf_xrpc_server_register_http_route(server->xrpc, "GET", "/",
                                                 landing_handler, server);
@@ -5580,8 +5765,20 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "app.bsky.actor.getProfiles",
             appview_get_profiles, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
-            "app.bsky.actor.getActorLikes",
+            "app.bsky.feed.getActorLikes",
             appview_get_actor_likes, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.feed.getTimeline",
+            appview_get_timeline, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "app.bsky.feed.getPostThread",
+            appview_get_post_thread, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "app.bsky.notification.registerPush",
+            appview_register_push, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+            "app.bsky.notification.unregisterPush",
+            appview_unregister_push, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "app.bsky.actor.getActorStatistics",
             appview_get_actor_statistics, server) != WF_OK ||
@@ -5615,13 +5812,13 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "app.bsky.notification.listNotifications",
             appview_get_notifications, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
-            "app.bsky.chat.bsky.convo.getConvo",
+            "chat.bsky.convo.getConvo",
             appview_get_convo, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
-            "app.bsky.chat.bsky.convo.getConvos",
+            "chat.bsky.convo.getConvos",
             appview_get_convos, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
-            "app.bsky.chat.bsky.convo.getMessages",
+            "chat.bsky.convo.getMessages",
             appview_get_messages, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "app.bsky.labeler.getServices",
