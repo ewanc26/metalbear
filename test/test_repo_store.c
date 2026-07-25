@@ -297,6 +297,57 @@ static int run_unit(void) {
     return failures;
 }
 
+/* ── Repo DID immutability ────────────────────────────────────────── */
+
+/*
+ * A repo's DID is immutable: already-written commits embed it in signed
+ * CBOR, so re-opening a repo under a different DID cannot be made correct by
+ * rewriting the meta row. Opening must fail rather than silently serving
+ * records whose AT-URIs name a DID that resolves nowhere.
+ *
+ * Regression: this previously succeeded, loading the stored DID and ignoring
+ * the caller's, which is how a live PDS ended up writing every record under a
+ * placeholder DID left over from bootstrap.
+ */
+static int run_did_immutability(void) {
+    int failures = 0;
+    char path[256];
+    temp_path(path, sizeof(path), "did");
+
+    metalbear_repo_store *store = NULL;
+    wf_status s = metalbear_repo_store_open(path, "did:plc:originalowner1234",
+                                            "orig.example.com", &store);
+    WF_CHECK(s == WF_OK && store != NULL);
+    if (s != WF_OK) {
+        unlink(path);
+        return failures + 1;
+    }
+    WF_CHECK(strcmp(metalbear_repo_store_did(store), "did:plc:originalowner1234") == 0);
+    metalbear_repo_store_free(store);
+
+    /* Re-opening under the same DID is the normal path and must still work. */
+    store = NULL;
+    s = metalbear_repo_store_open(path, "did:plc:originalowner1234",
+                                  "orig.example.com", &store);
+    WF_CHECK(s == WF_OK && store != NULL);
+    if (store) {
+        WF_CHECK(strcmp(metalbear_repo_store_did(store), "did:plc:originalowner1234") == 0);
+        metalbear_repo_store_free(store);
+    }
+
+    /* Re-opening under a different DID must be refused, not silently accepted
+     * with the stored DID winning. */
+    store = NULL;
+    s = metalbear_repo_store_open(path, "did:plc:someotheraccount99",
+                                  "other.example.com", &store);
+    WF_CHECK(s != WF_OK);
+    WF_CHECK(store == NULL);
+    if (store) metalbear_repo_store_free(store);
+
+    unlink(path);
+    return failures;
+}
+
 /* ── Phase 3: server round-trip ───────────────────────────────────── */
 
 static int run_server(void) {
@@ -390,6 +441,7 @@ static int run_server(void) {
 
 int main(void) {
     run_unit();
+    run_did_immutability();
     run_server();
     WF_TEST_SUMMARY();
 }
