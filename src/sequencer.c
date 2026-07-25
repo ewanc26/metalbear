@@ -237,11 +237,11 @@ void metalbear_sequencer_repo_event(const metalbear_repo_store_event *repo_event
     metalbear_sequencer *s = context;
     if (!s || !repo_event) return;
     wf_subscribe_event event = {0};
-    /* `op` and `path` must live at function scope: append_event (below)
-     * serialises commit->ops -> &op and op.path -> path after the else
-     * block ends; block scope would leave both dangling. */
-    wf_subscribe_repo_op op = {0};
-    char path[512];
+    /* `ops` and the path buffers must live at function scope: append_event
+     * (below) serialises commit->ops and each op.path after the else block
+     * ends; block scope would leave them dangling. */
+    wf_subscribe_repo_op *ops = NULL;
+    char (*paths)[512] = NULL;
     if (repo_event->kind == METALBEAR_REPO_STORE_EVENT_SYNC) {
         event.type = WF_SUBSCRIBE_EVENT_SYNC;
         snprintf(event.data.sync.did, sizeof(event.data.sync.did), "%s",
@@ -263,19 +263,40 @@ void metalbear_sequencer_repo_event(const metalbear_repo_store_event *repo_event
         commit->blocks_len = repo_event->blocks_len;
         commit->prev_data = repo_event->prev_data;
         commit->has_prev_data = repo_event->has_prev_data;
-        snprintf(op.action, sizeof(op.action), "%s", repo_event->action);
-        snprintf(path, sizeof(path), "%s/%s", repo_event->collection,
-                 repo_event->rkey);
-        op.path = path;
-        op.cid = repo_event->cid;
-        op.has_cid = repo_event->has_cid;
-        op.prev = repo_event->prev;
-        op.has_prev = repo_event->has_prev;
-        commit->ops = &op;
-        commit->ops_count = 1;
+        /* A batched applyWrites is one commit carrying several ops; the
+         * #commit frame must list all of them. */
+        size_t count = repo_event->ops_count;
+        if (count > 0) {
+            ops = calloc(count, sizeof(*ops));
+            paths = calloc(count, sizeof(*paths));
+            if (!ops || !paths) {
+                free(ops);
+                free(paths);
+                fprintf(stderr,
+                        "MetalBear: out of memory sequencing repository event\n");
+                return;
+            }
+            for (size_t i = 0; i < count; i++) {
+                const metalbear_repo_store_op *src = &repo_event->ops[i];
+                snprintf(ops[i].action, sizeof(ops[i].action), "%s",
+                         src->action ? src->action : "");
+                snprintf(paths[i], sizeof(paths[i]), "%s/%s",
+                         src->collection ? src->collection : "",
+                         src->rkey ? src->rkey : "");
+                ops[i].path = paths[i];
+                ops[i].cid = src->cid;
+                ops[i].has_cid = src->has_cid;
+                ops[i].prev = src->prev;
+                ops[i].has_prev = src->has_prev;
+            }
+        }
+        commit->ops = ops;
+        commit->ops_count = count;
     }
     if (append_event(s, &event) != WF_OK)
         fprintf(stderr, "MetalBear: failed to persist repository event\n");
+    free(ops);
+    free(paths);
 }
 
 wf_status metalbear_sequencer_reconcile_repo(metalbear_sequencer *s,
