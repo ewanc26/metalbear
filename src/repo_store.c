@@ -351,16 +351,15 @@ static char *head_cid_string(metalbear_repo_store *s) {
     return s->head.len ? wf_cid_to_string(&s->head) : strdup("");
 }
 
-/* Compare a requested compare-and-swap CID (may be NULL/empty) against
- * the current value (a base32 string). Returns WF_OK when they match or
- * when no swap was requested; otherwise WF_ERR_INVALID_ARG (atproto
- * returns InvalidSwap — TODO: surface the specific XRPC error here).
- * The error is intentionally generic: the HTTP handler maps it to a
- * 400 InvalidSwap-equivalent response. */
+/* Compare a requested compare-and-swap CID (may be NULL/empty) against the
+ * current value (a base32 string). Returns WF_OK when they match or when no
+ * swap was requested, else WF_ERR_CONFLICT — distinct from WF_ERR_INVALID_ARG
+ * so the route handlers can report the lexicon's `InvalidSwap` error, which
+ * clients branch on to retry an optimistic write. */
 static wf_status check_swap(const char *requested, const char *current) {
     if (!requested || !*requested) return WF_OK;
     if (!current || strcmp(requested, current) != 0)
-        return WF_ERR_INVALID_ARG;
+        return WF_ERR_CONFLICT;
     return WF_OK;
 }
 
@@ -1022,7 +1021,8 @@ wf_status metalbear_repo_store_put_record(metalbear_repo_store *s, const char *c
     free(head);
     if (st != WF_OK) return st;
     if (swap_record_or_null && *swap_record_or_null) {
-        if (!exists) return WF_ERR_INVALID_ARG; /* TODO: atproto InvalidSwap */
+        /* A swapRecord guard on a record that is not there cannot match. */
+        if (!exists) return WF_ERR_CONFLICT;
         char *cur = wf_cid_to_string(&ex_cid);
         st = check_swap(swap_record_or_null, cur);
         free(cur);
@@ -1223,6 +1223,13 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
             free(rec_json);
             if (st != WF_OK) { free(uri); free(cid); break; }
             cJSON *r = cJSON_CreateObject();
+            /* `results` is a CLOSED union in the lexicon, so each entry must
+             * carry the $type that discriminates it; without one a strict
+             * client rejects the whole response. */
+            cJSON_AddStringToObject(r, "$type",
+                strcmp(t, "com.atproto.repo.applyWrites#create") == 0
+                    ? "com.atproto.repo.applyWrites#createResult"
+                    : "com.atproto.repo.applyWrites#updateResult");
             cJSON_AddStringToObject(r, "uri", uri ? uri : "");
             cJSON_AddStringToObject(r, "cid", cid ? cid : "");
             /* (d)/(g) per-op validationStatus; wolfram does no lexicon
@@ -1245,7 +1252,10 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
             st = metalbear_repo_store_delete_record(s, coll->valuestring,
                                              rk->valuestring, NULL, NULL);
             if (st != WF_OK) break;
-            cJSON_AddItemToArray(results, cJSON_CreateObject());
+            cJSON *r = cJSON_CreateObject();
+            cJSON_AddStringToObject(r, "$type",
+                                    "com.atproto.repo.applyWrites#deleteResult");
+            cJSON_AddItemToArray(results, r);
         } else {
             st = WF_ERR_INVALID_ARG;
             break;
@@ -1426,6 +1436,31 @@ static metalbear_repo_store *resolve_repo(metalbear_pds_repo_bundle *b,
     return store;
 }
 
+/*
+ * Report a repo-write failure using the names the lexicon actually defines.
+ * The only write error com.atproto.repo.{create,put,delete}Record and
+ * applyWrites declare is `InvalidSwap`, which clients branch on to retry an
+ * optimistic write; a missing record is `RecordNotFound`, and everything else
+ * falls back to the generic `InvalidRequest`. Invented names such as
+ * `CreationFailed` are invisible to a client matching on the lexicon.
+ */
+static void set_write_error(wf_xrpc_response *resp, wf_status st,
+                            const char *context) {
+    switch (st) {
+    case WF_ERR_CONFLICT:
+        wf_xrpc_response_set_error(resp, 400, "InvalidSwap",
+                                   "swap CID did not match current value");
+        return;
+    case WF_ERR_NOT_FOUND:
+        wf_xrpc_response_set_error(resp, 400, "RecordNotFound",
+                                   "record not found");
+        return;
+    default:
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest", context);
+        return;
+    }
+}
+
 static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
                                   wf_xrpc_response *resp) {
     metalbear_repo_store *s = resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
@@ -1456,9 +1491,7 @@ static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
                                               rec_json, swap_str, &uri, &cid);
     free(rec_json);
     if (st != WF_OK) {
-        /* CAS / validation failures surface as InvalidSwap-equivalent 400s. */
-        wf_xrpc_response_set_error(resp, 400, "CreationFailed",
-                                    "record creation failed");
+        set_write_error(resp, st, "record creation failed");
         return WF_OK;
     }
 
@@ -1512,8 +1545,7 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
                                            swap_str, swaprec_str, &uri, &cid);
     free(rec_json);
     if (st != WF_OK) {
-        wf_xrpc_response_set_error(resp, 400, "PutFailed",
-                                    "record put failed");
+        set_write_error(resp, st, "record put failed");
         return WF_OK;
     }
 
@@ -1560,13 +1592,17 @@ static wf_status h_delete_record(void *ctx, const wf_xrpc_request *req,
     wf_status st = metalbear_repo_store_delete_record(s, collection->valuestring,
                                               rkey->valuestring, swap_str,
                                               swaprec_str);
-    if (st != WF_OK) {
-        wf_xrpc_response_set_error(resp, 404, "RecordNotFound",
-                                   "record could not be deleted");
+    /* Deleting a record that is not there is a no-op success, matching the
+     * reference PDS: the response simply carries no `commit`. Clients delete
+     * idempotently (retried unlikes, unfollows), so a 404 here would surface
+     * as a spurious error on a retry that has nothing left to do. A swap
+     * guard that fails is still a real InvalidSwap conflict. */
+    if (st != WF_OK && st != WF_ERR_NOT_FOUND) {
+        set_write_error(resp, st, "record could not be deleted");
         return WF_OK;
     }
     cJSON *out = cJSON_CreateObject();
-    add_commit_meta(s, out);
+    if (st == WF_OK) add_commit_meta(s, out);
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
     if (!js) return WF_ERR_ALLOC;
@@ -1645,8 +1681,7 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
                                               &rev, &results);
     free(writes_json);
     if (st != WF_OK) {
-        wf_xrpc_response_set_error(resp, 400, "ApplyFailed",
-                                   "applyWrites failed");
+        set_write_error(resp, st, "applyWrites failed");
         return WF_OK;
     }
 
@@ -1765,6 +1800,56 @@ const char *metalbear_did_document_handle(const cJSON *document) {
         if (cJSON_IsString(entry) && entry->valuestring &&
             strncmp(entry->valuestring, "at://", 5) == 0)
             return entry->valuestring + 5;
+    }
+    return NULL;
+}
+
+/* DID document ids may be written as a bare fragment ("#atproto") or fully
+ * qualified ("did:plc:xyz#atproto"); match either. */
+static bool id_has_fragment(const char *id, const char *fragment) {
+    size_t len = strlen(id), flen = strlen(fragment);
+    return len >= flen && strcmp(id + len - flen, fragment) == 0;
+}
+
+/* did:key of the repo signing key advertised by a DID document's #atproto
+ * verification method. Heap-allocated; caller frees. NULL when absent. */
+char *metalbear_did_document_signing_key(const cJSON *document) {
+    const cJSON *methods =
+        cJSON_GetObjectItemCaseSensitive(document, "verificationMethod");
+    const cJSON *method = NULL;
+    cJSON_ArrayForEach(method, methods) {
+        const cJSON *id = cJSON_GetObjectItemCaseSensitive(method, "id");
+        const cJSON *key =
+            cJSON_GetObjectItemCaseSensitive(method, "publicKeyMultibase");
+        if (!cJSON_IsString(id) || !id->valuestring ||
+            !cJSON_IsString(key) || !key->valuestring) continue;
+        if (!id_has_fragment(id->valuestring, "#atproto")) continue;
+        size_t n = strlen("did:key:") + strlen(key->valuestring) + 1;
+        char *didkey = malloc(n);
+        if (!didkey) return NULL;
+        snprintf(didkey, n, "did:key:%s", key->valuestring);
+        return didkey;
+    }
+    return NULL;
+}
+
+/* serviceEndpoint of the document's #atproto_pds service entry, or NULL.
+ * Borrowed from `document`. */
+const char *metalbear_did_document_pds_endpoint(const cJSON *document) {
+    const cJSON *services = cJSON_GetObjectItemCaseSensitive(document, "service");
+    const cJSON *service = NULL;
+    cJSON_ArrayForEach(service, services) {
+        const cJSON *id = cJSON_GetObjectItemCaseSensitive(service, "id");
+        const cJSON *type = cJSON_GetObjectItemCaseSensitive(service, "type");
+        const cJSON *endpoint =
+            cJSON_GetObjectItemCaseSensitive(service, "serviceEndpoint");
+        if (!cJSON_IsString(endpoint) || !endpoint->valuestring) continue;
+        bool is_pds =
+            (cJSON_IsString(type) && type->valuestring &&
+             strcmp(type->valuestring, "AtprotoPersonalDataServer") == 0) ||
+            (cJSON_IsString(id) && id->valuestring &&
+             id_has_fragment(id->valuestring, "#atproto_pds"));
+        if (is_pds) return endpoint->valuestring;
     }
     return NULL;
 }
