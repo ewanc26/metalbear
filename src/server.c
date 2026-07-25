@@ -4745,6 +4745,41 @@ static wf_status get_blob(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     wf_xrpc_response_set_content_type(response, mime ? mime : "application/octet-stream");
+
+    /*
+     * Blobs are attacker-supplied bytes served from the PDS's own origin, so
+     * they must never be interpretable as a document there: an uploaded HTML
+     * or SVG blob would otherwise run as script on the same origin as every
+     * web client on this domain and could read their session tokens. The
+     * reference sets all three of these deliberately.
+     *
+     *   nosniff        — stop the browser second-guessing the declared type
+     *                    and executing e.g. text/plain as HTML.
+     *   attachment     — download rather than render, which also defuses
+     *                    markup that CSP alone would still allow (links).
+     *   CSP + sandbox  — deny every subresource and script capability if it
+     *                    is rendered anyway.
+     */
+    wf_xrpc_response_add_header(response, "X-Content-Type-Options", "nosniff");
+    /* The filename echoes a client-supplied parameter into a response header,
+     * so copy only characters a CID can contain — never trust the blob lookup
+     * to have rejected a quote or a newline for us. */
+    char safe_cid[80];
+    size_t safe_len = 0;
+    for (const char *p = cid->valuestring;
+         *p && safe_len + 1 < sizeof(safe_cid); p++) {
+        if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+            (*p >= '0' && *p <= '9'))
+            safe_cid[safe_len++] = *p;
+    }
+    safe_cid[safe_len] = '\0';
+    char disposition[128];
+    snprintf(disposition, sizeof(disposition), "attachment; filename=\"%s\"",
+             safe_cid);
+    wf_xrpc_response_add_header(response, "Content-Disposition", disposition);
+    wf_xrpc_response_add_header(response, "Content-Security-Policy",
+                                "default-src 'none'; sandbox");
+
     wf_xrpc_response_set_body(response, (const char *)data, len);
     free(data);
     free(mime);
