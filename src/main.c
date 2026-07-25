@@ -376,6 +376,7 @@ int main(void) {
         .plc_url = getenv("METALBEAR_PLC_URL"),
         .appview_url = getenv("METALBEAR_APPVIEW_URL"),
         .appview_did = getenv("METALBEAR_APPVIEW_DID"),
+        .lexicon_dir = getenv("METALBEAR_LEXICON_DIR"),
         .invite_required = false,
         .blob_upload_limit = 0,
     };

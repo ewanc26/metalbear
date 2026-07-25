@@ -36,6 +36,7 @@
 
 #include <cJSON.h>
 
+#include "wolfram/validate.h"
 #include "wolfram/xrpc.h"
 #include "wolfram/crypto.h"
 #include "wolfram/repo/commit.h"
@@ -425,14 +426,49 @@ typedef char *(*metalbear_xrpc_did_doc_provider)(void *ctx, const char *did);
 
 /**
  * As metalbear_xrpc_server_register_pds_repo_resolver, additionally wiring an
- * identity-layer DID document provider. Without one, describeRepo falls back
- * to a locally derived document and reports handleIsCorrect=false, since the
- * PDS cannot confirm the handle resolves back to the DID on its own.
+ * identity-layer DID document provider and a lexicon registry. Without a
+ * provider, describeRepo falls back to a locally derived document and reports
+ * handleIsCorrect=false, since the PDS cannot confirm the handle resolves back
+ * to the DID on its own. Without a registry, every write reports
+ * validationStatus "unknown", since nothing can be checked.
+ *
+ * The registry is borrowed and must outlive the server.
  */
 wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url,
-    metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx);
+    metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx,
+    const wf_lexicon_registry *lexicons);
+
+/** Outcome of checking a record against the lexicon corpus. */
+typedef enum metalbear_validation_status {
+    /* No schema is loaded for the collection, so nothing was checked. */
+    METALBEAR_VALIDATION_UNKNOWN = 0,
+    /* A schema was found and the record satisfies it. */
+    METALBEAR_VALIDATION_VALID,
+} metalbear_validation_status;
+
+/**
+ * Check `record_json` against the schema for `collection`, mirroring the
+ * reference PDS's prepareWrite:
+ *
+ *   - no registry, or no schema for the collection: WF_OK with
+ *     *out_status = UNKNOWN, unless `require_schema` (the caller passed
+ *     validate:true), which is WF_ERR_NOT_FOUND — the caller asked for a
+ *     guarantee that cannot be given.
+ *   - schema found and satisfied: WF_OK with *out_status = VALID.
+ *   - schema found and violated: WF_ERR_VALIDATION. The record must be
+ *     rejected, not stored with a warning.
+ *
+ * *out_message, when non-NULL and set, is a caller-owned description of the
+ * first violation suitable for an InvalidRecord error message.
+ */
+wf_status metalbear_validate_record(const wf_lexicon_registry *lexicons,
+                                    const char *collection,
+                                    const char *record_json,
+                                    bool require_schema,
+                                    metalbear_validation_status *out_status,
+                                    char **out_message);
 
 /**
  * Build the W3C DID document for an atproto account: `verificationMethod` as
