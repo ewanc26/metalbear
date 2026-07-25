@@ -31,7 +31,19 @@ MetalBear is a pure C11 AT Protocol PDS built on the sibling Wolfram SDK. It pro
   include `email` and `emailConfirmed` fields when email is configured.
 - Error codes must use lexicon-defined names (e.g. `InvalidHandle`,
   `HandleNotAvailable`, `ExpiredToken`) rather than generic names like
-  `InvalidRequest` or `InternalError`.
+  `InvalidRequest` or `InternalError`. Equally, do not invent names that merely
+  sound official: the `com.atproto.repo` write endpoints declare only
+  `InvalidSwap`, and the reference reports every other failure as plain
+  `InvalidRequest` with a descriptive message. Read the lexicon's `errors`
+  array and the reference handler before choosing a name — an invented one is
+  as unusable to a client as a generic one, and harder to spot.
+- The precision belongs in the message when the name is generic: `Invalid
+  record key: <rkey>`, `Invalid $type: expected <x>, got <y>`, `Too many
+  writes. Max: 200`.
+- Records must be validated against the lexicon corpus on write. A collection
+  with no schema is `validationStatus: "unknown"` and still stored; a
+  collection with a schema that the record violates is rejected. Never store a
+  record that fails a schema you have.
 - Auth callback must check `is_public_route` before DID ownership validation,
   since public route bodies may contain DIDs being created/registered, not
   accessed.
