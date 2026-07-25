@@ -92,6 +92,26 @@ wf_status metalbear_key_rotation_current_key(
     return WF_OK;
 }
 
+wf_status metalbear_key_rotation_import(metalbear_key_rotation *store,
+                                        const wf_signing_key *key) {
+    if (!store || !key || key->type != WF_KEY_TYPE_SECP256K1)
+        return WF_ERR_INVALID_ARG;
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db,
+            "INSERT OR REPLACE INTO signing_keys(id,key_bytes,created_at) "
+            "VALUES(0,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
+            -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_blob(stmt, 1, key->bytes, 32, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_DONE) status = WF_OK;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
 wf_status metalbear_key_rotation_rotate(metalbear_key_rotation *store,
                                         wf_signing_key *out_new_key,
                                         char **out_didkey) {

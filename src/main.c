@@ -14,6 +14,7 @@
 #include "wolfram/plc.h"
 #include "wolfram/syntax.h"
 #include "metalbear/key_rotation.h"
+#include "metalbear/repo_store.h"
 
 static volatile sig_atomic_t stopping;
 
@@ -39,63 +40,62 @@ static bool make_directory(const char *path) {
     return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-static int mint_bootstrap_did(const metalbear_config *config) {
-    char *enc_did = encode_did_for_dir(config->account_did);
-    if (!enc_did) {
-        fprintf(stderr, "MetalBear [ERROR] failed to encode DID for directory\n");
-        return 1;
-    }
-
+/* Build the on-disk account directory path for `did` under the data root.
+ * Heap-allocated; caller frees. */
+static char *account_dir_for_did(const metalbear_config *config,
+                                 const char *did) {
+    char *enc_did = encode_did_for_dir(did);
+    if (!enc_did) return NULL;
     size_t root_len = strlen(config->data_directory);
     size_t enc_len = strlen(enc_did);
     bool root_slash = root_len > 0 && config->data_directory[root_len - 1] == '/';
-    char *dir = malloc(root_len + (root_slash ? 0 : 1) + enc_len + 1);
-    if (!dir) {
-        fprintf(stderr, "MetalBear [ERROR] allocation failed\n");
-        free(enc_did);
-        return 1;
-    }
-    snprintf(dir, root_len + (root_slash ? 0 : 1) + enc_len + 1,
-             "%s%s%s", config->data_directory,
-             root_slash ? "" : "/", enc_did);
+    size_t n = root_len + (root_slash ? 0 : 1) + enc_len + 1;
+    char *dir = malloc(n);
+    if (dir)
+        snprintf(dir, n, "%s%s%s", config->data_directory,
+                 root_slash ? "" : "/", enc_did);
     free(enc_did);
+    return dir;
+}
 
-    if (!make_directory(dir)) {
-        fprintf(stderr, "MetalBear [ERROR] cannot create account directory %s\n", dir);
-        free(dir);
-        return 1;
-    }
+/* Join a filename onto a directory. Heap-allocated; caller frees. */
+static char *path_join(const char *dir, const char *name) {
+    size_t n = strlen(dir) + 1 + strlen(name) + 1;
+    char *p = malloc(n);
+    if (p) snprintf(p, n, "%s/%s", dir, name);
+    return p;
+}
 
-    char *key_path = NULL;
-    int key_path_len = snprintf(NULL, 0, "%s/keys.sqlite3", dir) + 1;
-    key_path = malloc((size_t)key_path_len);
-    if (!key_path) {
-        fprintf(stderr, "MetalBear [ERROR] allocation failed\n");
-        free(dir);
-        return 1;
-    }
-    snprintf(key_path, (size_t)key_path_len, "%s/keys.sqlite3", dir);
-    free(dir);
-
-    metalbear_key_rotation *rotation = NULL;
-    if (metalbear_key_rotation_open(key_path, &rotation) != WF_OK) {
-        fprintf(stderr, "MetalBear [ERROR] cannot open key rotation store at %s\n", key_path);
-        free(key_path);
-        return 1;
-    }
-    free(key_path);
-
+/*
+ * Mint a fresh did:plc for the bootstrap account and leave it immediately
+ * usable.
+ *
+ * A DID's name is the hash of its own genesis operation, so neither key can be
+ * filed under the account directory until the operation is signed and the DID
+ * computed. Both keys are therefore generated in memory first, and only once
+ * the directory name is known are they persisted:
+ *
+ *   - the rotation key into keys.sqlite3, so later PLC operations for this DID
+ *     can actually be signed;
+ *   - the account signing key into the repo store, so the repo signs its
+ *     commits with exactly the key this operation publishes as
+ *     verificationMethods.atproto.
+ *
+ * Persisting the signing key is what makes the identity federate. Publishing a
+ * key and then letting the repo store generate its own — as this did before —
+ * produces a DID document that disagrees with every commit the repo signs, so
+ * relays and AppViews reject the repo outright while the PDS reports success.
+ */
+static int mint_bootstrap_did(const metalbear_config *config) {
     wf_signing_key rotation_key;
     memset(&rotation_key, 0, sizeof(rotation_key));
-    if (metalbear_key_rotation_current_key(rotation, &rotation_key) != WF_OK) {
-        fprintf(stderr, "MetalBear [ERROR] cannot get rotation key\n");
-        metalbear_key_rotation_free(rotation);
+    if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &rotation_key) != WF_OK) {
+        fprintf(stderr, "MetalBear [ERROR] cannot generate rotation key\n");
         return 1;
     }
     char *rotation_didkey = NULL;
     if (wf_signing_key_public_didkey(&rotation_key, &rotation_didkey) != WF_OK) {
         fprintf(stderr, "MetalBear [ERROR] cannot derive rotation did:key\n");
-        metalbear_key_rotation_free(rotation);
         return 1;
     }
 
@@ -104,14 +104,12 @@ static int mint_bootstrap_did(const metalbear_config *config) {
     if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &acct_key) != WF_OK) {
         fprintf(stderr, "MetalBear [ERROR] cannot generate account signing key\n");
         free(rotation_didkey);
-        metalbear_key_rotation_free(rotation);
         return 1;
     }
     char *acct_didkey = NULL;
     if (wf_signing_key_public_didkey(&acct_key, &acct_didkey) != WF_OK) {
         fprintf(stderr, "MetalBear [ERROR] cannot derive account did:key\n");
         free(rotation_didkey);
-        metalbear_key_rotation_free(rotation);
         return 1;
     }
 
@@ -143,7 +141,6 @@ static int mint_bootstrap_did(const metalbear_config *config) {
         fprintf(stderr, "MetalBear [ERROR] failed to build PLC operation\n");
         free(acct_didkey);
         free(rotation_didkey);
-        metalbear_key_rotation_free(rotation);
         return 1;
     }
 
@@ -153,7 +150,6 @@ static int mint_bootstrap_did(const metalbear_config *config) {
         free(unsigned_json);
         free(acct_didkey);
         free(rotation_didkey);
-        metalbear_key_rotation_free(rotation);
         return 1;
     }
     cJSON *verification = cJSON_GetObjectItemCaseSensitive(root, "verificationMethods");
@@ -162,7 +158,6 @@ static int mint_bootstrap_did(const metalbear_config *config) {
         free(unsigned_json);
         free(acct_didkey);
         free(rotation_didkey);
-        metalbear_key_rotation_free(rotation);
         return 1;
     }
     {
@@ -174,7 +169,6 @@ static int mint_bootstrap_did(const metalbear_config *config) {
         free(unsigned_json);
         free(acct_didkey);
         free(rotation_didkey);
-        metalbear_key_rotation_free(rotation);
         return 1;
     }
     char *unsigned_with_key = cJSON_PrintUnformatted(root);
@@ -184,7 +178,6 @@ static int mint_bootstrap_did(const metalbear_config *config) {
         free(unsigned_json);
         free(acct_didkey);
         free(rotation_didkey);
-        metalbear_key_rotation_free(rotation);
         return 1;
     }
 
@@ -195,7 +188,6 @@ static int mint_bootstrap_did(const metalbear_config *config) {
         free(unsigned_json);
         free(acct_didkey);
         free(rotation_didkey);
-        metalbear_key_rotation_free(rotation);
         return 1;
     }
 
@@ -207,7 +199,6 @@ static int mint_bootstrap_did(const metalbear_config *config) {
         free(unsigned_json);
         free(acct_didkey);
         free(rotation_didkey);
-        metalbear_key_rotation_free(rotation);
         return 1;
     }
 
@@ -221,21 +212,77 @@ static int mint_bootstrap_did(const metalbear_config *config) {
         free(unsigned_json);
         free(acct_didkey);
         free(rotation_didkey);
-        metalbear_key_rotation_free(rotation);
         return 1;
     }
 
-    fprintf(stderr, "MetalBear [INFO] minted bootstrap PLC DID: %s\n", plc_did);
-    printf("%s\n", plc_did);
+    /* The DID now exists in the directory, so its account directory can be
+     * named and both keys filed where the server will look for them. */
+    int rc = 1;
+    char *dir = account_dir_for_did(config, plc_did);
+    char *key_path = dir ? path_join(dir, "keys.sqlite3") : NULL;
+    char *repo_path = dir ? path_join(dir, "repo.sqlite3") : NULL;
+    if (!dir || !key_path || !repo_path) {
+        fprintf(stderr, "MetalBear [ERROR] allocation failed\n");
+        goto cleanup;
+    }
+    if (!make_directory(dir)) {
+        fprintf(stderr, "MetalBear [ERROR] cannot create account directory %s\n",
+                dir);
+        goto cleanup;
+    }
 
+    metalbear_key_rotation *rotation = NULL;
+    if (metalbear_key_rotation_open(key_path, &rotation) != WF_OK ||
+        metalbear_key_rotation_import(rotation, &rotation_key) != WF_OK) {
+        fprintf(stderr,
+                "MetalBear [ERROR] cannot persist rotation key at %s; the DID "
+                "was published but no further PLC operation for it could be "
+                "signed\n", key_path);
+        metalbear_key_rotation_free(rotation);
+        goto cleanup;
+    }
+    metalbear_key_rotation_free(rotation);
+
+    /* Create the repo with the signing key just published, so its commits
+     * verify against the DID document. */
+    metalbear_repo_store *repo = NULL;
+    if (metalbear_repo_store_open_with_key(repo_path, plc_did,
+                                           config->account_handle, &acct_key,
+                                           &repo) != WF_OK) {
+        fprintf(stderr,
+                "MetalBear [ERROR] cannot create repo at %s with the published "
+                "signing key\n", repo_path);
+        goto cleanup;
+    }
+    const char *stored = metalbear_repo_store_signing_key_did(repo);
+    if (!stored || strcmp(stored, acct_didkey) != 0) {
+        fprintf(stderr,
+                "MetalBear [ERROR] repo signing key %s does not match the "
+                "published key %s\n", stored ? stored : "(none)", acct_didkey);
+        metalbear_repo_store_free(repo);
+        goto cleanup;
+    }
+    metalbear_repo_store_free(repo);
+
+    fprintf(stderr, "MetalBear [INFO] minted bootstrap PLC DID: %s\n", plc_did);
+    fprintf(stderr, "MetalBear [INFO] signing key %s published and stored in %s\n",
+            acct_didkey, repo_path);
+    fprintf(stderr, "MetalBear [INFO] set METALBEAR_ACCOUNT_DID=%s and restart\n",
+            plc_did);
+    printf("%s\n", plc_did);
+    rc = 0;
+
+cleanup:
+    free(dir);
+    free(key_path);
+    free(repo_path);
     free(plc_did);
     free(signed_json);
     free(unsigned_with_key);
     free(unsigned_json);
     free(acct_didkey);
     free(rotation_didkey);
-    metalbear_key_rotation_free(rotation);
-    return 0;
+    return rc;
 }
 
 static const char *required_env(const char *name) {
