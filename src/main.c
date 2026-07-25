@@ -12,6 +12,7 @@
 #include <cJSON.h>
 
 #include "wolfram/plc.h"
+#include "wolfram/syntax.h"
 #include "metalbear/key_rotation.h"
 
 static volatile sig_atomic_t stopping;
@@ -244,6 +245,41 @@ static const char *required_env(const char *name) {
     return value;
 }
 
+/*
+ * Validate an operator-supplied DID before it becomes an account identity.
+ *
+ * A DID reaching the registry is effectively permanent: the repo is created
+ * under it and its commits embed it in signed CBOR, so a bad value cannot be
+ * corrected later without discarding the repo. A placeholder
+ * ("did:plc:bearbootstrap") once passed generic DID validation here and became
+ * a live account, and every record written under it got an AT-URI resolving
+ * nowhere.
+ *
+ * did:web and other methods stay permitted — only the generic grammar applies
+ * to them — but a did:plc must satisfy the method's own 24-character base32
+ * rule. Returns 0 and logs when the value is unusable.
+ */
+static int did_env_is_usable(const char *name, const char *value) {
+    if (!value || !value[0]) return 0; /* required_env already complained */
+
+    if (!wf_syntax_did_is_valid(value)) {
+        fprintf(stderr, "MetalBear [ERROR] %s is not a valid DID: %s\n",
+                name, value);
+        return 0;
+    }
+    if (strncmp(value, "did:plc:", 8) == 0 && !wf_syntax_did_plc_is_valid(value)) {
+        fprintf(stderr,
+                "MetalBear [ERROR] %s is not a valid did:plc: %s\n"
+                "  A did:plc identifier is exactly 24 characters from the "
+                "base32 alphabet abcdefghijklmnopqrstuvwxyz234567.\n"
+                "  Mint a real one with METALBEAR_MINT_BOOTSTRAP_DID=1 rather "
+                "than using a placeholder.\n",
+                name, value);
+        return 0;
+    }
+    return 1;
+}
+
 int main(void) {
     const char *port_text = getenv("METALBEAR_PORT");
     char *end = NULL;
@@ -286,6 +322,12 @@ int main(void) {
         .invite_required = false,
         .blob_upload_limit = 0,
     };
+    /* Refuse to start on a malformed identity rather than bake it into a repo
+     * that cannot be corrected afterwards. */
+    if (!did_env_is_usable("METALBEAR_ACCOUNT_DID", config.account_did) ||
+        !did_env_is_usable("METALBEAR_SERVICE_DID", config.service_did))
+        return 1;
+
     const char *invite_required_text = getenv("METALBEAR_INVITE_REQUIRED");
     if (invite_required_text && (strcmp(invite_required_text, "1") == 0 ||
                           strcmp(invite_required_text, "true") == 0))
