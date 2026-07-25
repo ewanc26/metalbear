@@ -35,6 +35,46 @@ MetalBear is a pure C11 AT Protocol PDS built on the sibling Wolfram SDK. It pro
 - Auth callback must check `is_public_route` before DID ownership validation,
   since public route bodies may contain DIDs being created/registered, not
   accessed.
+- Query-string parameters arrive as JSON **strings**, never numbers or bools —
+  there is no lexicon at the HTTP layer to coerce them. Read them with
+  `query_param_int` / `query_param_bool`; a bare `cJSON_IsNumber` or
+  `cJSON_IsTrue` test silently discards every value a client sends and falls
+  back to the default.
+- Closed unions in a response (e.g. `applyWrites` results) must carry the
+  `$type` that discriminates each member, or a strict client rejects the whole
+  payload.
+
+## Identity: the signing key is the interop contract
+
+The single defect that makes a repo unfederatable is a DID document that
+advertises a signing key the repo does not sign with. Relays and AppViews
+reject such commits outright while the PDS reports success, so nothing surfaces
+it locally.
+
+- Whenever this server publishes a DID document (bootstrap minting, PLC
+  operations, `createAccount`), the key it publishes must be the key the repo
+  store actually holds. Pass it explicitly via
+  `metalbear_repo_store_open_with_key` /
+  `metalbear_account_context_open_with_key`; never let the repo generate its
+  own key after a document naming a different one has been published.
+- `didDoc` in any response is a **W3C DID document**: `verificationMethod` is
+  an array of Multikey entries keyed `<did>#atproto`. The `verificationMethods`
+  object map belongs only to unsigned PLC *operations*. Build documents with
+  `metalbear_did_document_build`.
+- `checkAccountStatus.validDid` and `describeRepo.handleIsCorrect` are
+  answers about the outside world; resolve the published document over the
+  network rather than reporting what this server believes.
+
+## Repo writes
+
+- `applyWrites` is atomic and produces exactly ONE signed commit and ONE
+  firehose `#commit` event listing every op. Use `wf_repo_apply_writes`; do not
+  loop over the single-record functions.
+- A record's CID covers its content only, so two records can legitimately share
+  one block. Deduplicate the block, never the MST entry.
+- Compare-and-swap failures return `WF_ERR_CONFLICT` and must surface as the
+  lexicon's `InvalidSwap`, which clients branch on to retry an optimistic
+  write. Deleting an absent record is a no-op success, not a 404.
 
 ## Validation
 
@@ -44,3 +84,8 @@ MetalBear is a pure C11 AT Protocol PDS built on the sibling Wolfram SDK. It pro
   or a dedicated test file covering success, auth failure, and schema conformance.
 - Test cleanup must remove all SQLite files (repo, auth, account, sequence,
   registry) plus blob directories.
+- A green local suite does not prove federation. For identity or repo-format
+  changes, verify against the live dev PDS at `/Volumes/Storage/Server/bear`:
+  export the repo with `com.atproto.sync.getRepo` and check the commit
+  signature against the key published in the PLC directory, using something
+  other than Wolfram — verifying wolfram's output with wolfram proves nothing.
