@@ -689,6 +689,41 @@ static char *resolve_did_doc_json(void *ctx, const char *did) {
     return json;
 }
 
+/* Does the account's *published* DID document actually describe this PDS?
+ * Mirrors the reference PDS's assertValidDidDocumentForService: the
+ * #atproto_pds service endpoint must be our public URL and the #atproto
+ * verification method must be the key this repo signs its commits with.
+ * A false answer means relays and AppViews will reject the repo's commits,
+ * so it must be resolved over the network rather than assumed. */
+static bool did_doc_matches_service(metalbear_server *server,
+                                    metalbear_account_context *acct) {
+    if (!acct->did || !acct->did[0] || !server->public_url) return false;
+    const char *local_key =
+        acct->repo ? metalbear_repo_store_signing_key_did(acct->repo) : NULL;
+    if (!local_key || !local_key[0]) return false;
+
+    char *json = NULL;
+    if (fetch_remote_did_doc(server, acct->did, &json) != WF_OK || !json)
+        return false;
+    cJSON *doc = cJSON_Parse(json);
+    free(json);
+    if (!doc) return false;
+
+    const char *endpoint = metalbear_did_document_pds_endpoint(doc);
+    char *published_key = metalbear_did_document_signing_key(doc);
+    bool valid = endpoint && strcmp(endpoint, server->public_url) == 0 &&
+                 published_key && strcmp(published_key, local_key) == 0;
+    if (!valid) {
+        LOG_WARN("DID document for %s does not match this service "
+                 "(endpoint=%s want=%s, key=%s want=%s)",
+                 acct->did, endpoint ? endpoint : "(none)", server->public_url,
+                 published_key ? published_key : "(none)", local_key);
+    }
+    free(published_key);
+    cJSON_Delete(doc);
+    return valid;
+}
+
 /* Build (local) or fetch (remote) the DID document for `did` as a cJSON
  * tree. Caller must cJSON_Delete the result. Sets *deactivated when the
  * local account exists but is deactivated. */
@@ -2276,6 +2311,50 @@ static int missing_blob_ref_cmp(const void *a, const void *b) {
                   ((const missing_blob_ref *)b)->cid);
 }
 
+/* Distinct blob CIDs referenced by the repo's records — checkAccountStatus's
+ * `expectedBlobs`, which a migrating client compares against `importedBlobs`
+ * to know whether blob transfer is complete. */
+typedef struct blob_ref_tally {
+    char **cids;
+    size_t count;
+} blob_ref_tally;
+
+static void blob_ref_tally_add(const char *cid, void *opaque) {
+    blob_ref_tally *tally = opaque;
+    for (size_t i = 0; i < tally->count; i++)
+        if (strcmp(tally->cids[i], cid) == 0) return;
+    char **grown = realloc(tally->cids, (tally->count + 1) * sizeof(*grown));
+    if (!grown) return;
+    tally->cids = grown;
+    tally->cids[tally->count] = strdup(cid);
+    if (tally->cids[tally->count]) tally->count++;
+}
+
+static wf_status blob_ref_tally_visit(const char *collection, const char *rkey,
+                                      const char *value_json, void *ctx) {
+    (void)collection;
+    (void)rkey;
+    cJSON *value = cJSON_Parse(value_json);
+    if (!value) return WF_OK;
+    json_walk_blob_refs(value, blob_ref_tally_add, ctx);
+    cJSON_Delete(value);
+    return WF_OK;
+}
+
+static size_t count_referenced_blobs(metalbear_repo_store *repo) {
+    blob_ref_tally tally = {0};
+    if (metalbear_repo_store_foreach_record(repo, blob_ref_tally_visit,
+                                            &tally) != WF_OK) {
+        for (size_t i = 0; i < tally.count; i++) free(tally.cids[i]);
+        free(tally.cids);
+        return 0;
+    }
+    size_t count = tally.count;
+    for (size_t i = 0; i < tally.count; i++) free(tally.cids[i]);
+    free(tally.cids);
+    return count;
+}
+
 static wf_status list_missing_blobs(void *ctx,
                                     const wf_xrpc_request *request,
                                     wf_xrpc_response *response) {
@@ -3044,11 +3123,7 @@ static wf_status check_account_status(void *ctx,
         free(cid);
         return WF_ERR_ALLOC;
     }
-    /* The account DID and service DID are configured at startup and the
-     * server publishes a service document for them, so the DID is valid
-     * for this PDS. */
-    bool valid_did = acct->did && acct->did[0] &&
-                     server->service_did && server->service_did[0];
+    bool valid_did = did_doc_matches_service(server, acct);
     cJSON_AddBoolToObject(root, "activated", active);
     cJSON_AddBoolToObject(root, "validDid", valid_did);
     cJSON_AddStringToObject(root, "repoCommit", cid ? cid : "");
@@ -3071,7 +3146,8 @@ static wf_status check_account_status(void *ctx,
     cJSON_AddNumberToObject(root, "indexedRecords",
                             (double)stats.indexed_records);
     cJSON_AddNumberToObject(root, "privateStateValues", 0);
-    cJSON_AddNumberToObject(root, "expectedBlobs", 0);
+    cJSON_AddNumberToObject(root, "expectedBlobs",
+                            (double)count_referenced_blobs(acct->repo));
     cJSON_AddNumberToObject(root, "importedBlobs", (double)blob_count);
     free(rev);
     free(cid);

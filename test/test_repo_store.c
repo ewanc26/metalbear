@@ -146,6 +146,29 @@ static int run_unit(void) {
                                   NULL, NULL);
     WF_CHECK(s == WF_ERR_NOT_FOUND);
 
+    /* A failed compare-and-swap must be distinguishable from a malformed
+     * request, because the route handlers turn it into the lexicon's
+     * `InvalidSwap` error and clients branch on that to retry the write. */
+    char *swap_uri = NULL, *swap_cid = NULL;
+    s = metalbear_repo_store_put_record(
+        store, "com.example.posts", rkey1,
+        "{\"$type\":\"com.example.posts\",\"text\":\"swap\"}",
+        "bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", NULL,
+        &swap_uri, &swap_cid);
+    WF_CHECK(s == WF_ERR_CONFLICT);
+    free(swap_uri);
+    free(swap_cid);
+    swap_uri = swap_cid = NULL;
+    /* A swapRecord guard naming a record that does not exist cannot match. */
+    s = metalbear_repo_store_put_record(
+        store, "com.example.posts", "absentrkey",
+        "{\"$type\":\"com.example.posts\",\"text\":\"swap\"}", NULL,
+        "bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        &swap_uri, &swap_cid);
+    WF_CHECK(s == WF_ERR_CONFLICT);
+    free(swap_uri);
+    free(swap_cid);
+
     /* applyWrites: create (new rkey) + update rkey1 + delete rkey1. */
     char writes[512];
     snprintf(writes, sizeof(writes),
@@ -170,6 +193,19 @@ static int run_unit(void) {
         WF_CHECK(strlen(crev) > 0);
         cJSON *resarr = cJSON_Parse(cres);
         WF_CHECK(resarr && cJSON_IsArray(resarr) && cJSON_GetArraySize(resarr) == 3);
+        /* `results` is a closed union: every entry must carry the $type that
+         * discriminates it, in write order create/update/delete. */
+        static const char *const want_types[] = {
+            "com.atproto.repo.applyWrites#createResult",
+            "com.atproto.repo.applyWrites#updateResult",
+            "com.atproto.repo.applyWrites#deleteResult",
+        };
+        for (int i = 0; resarr && i < cJSON_GetArraySize(resarr) && i < 3; i++) {
+            cJSON *e = cJSON_GetArrayItem(resarr, i);
+            cJSON *ty = e ? cJSON_GetObjectItemCaseSensitive(e, "$type") : NULL;
+            WF_CHECK(ty && cJSON_IsString(ty) &&
+                     strcmp(ty->valuestring, want_types[i]) == 0);
+        }
         cJSON_Delete(resarr);
     }
     /* rkey1 must now be gone; a fresh post was created in com.example.posts. */
