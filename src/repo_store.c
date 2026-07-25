@@ -404,7 +404,9 @@ wf_status metalbear_validate_record(const wf_lexicon_registry *lexicons,
         const char *path = result.errors->path ? result.errors->path : "record";
         const char *msg = result.errors->message ? result.errors->message
                                                  : "is invalid";
-        size_t n = strlen(collection) + strlen(path) + strlen(msg) + 16;
+        /* "Invalid " + collection + " record: " + path + " " + msg + NUL */
+        size_t n = strlen("Invalid  record:  ") + strlen(collection) +
+                   strlen(path) + strlen(msg) + 1;
         char *text = malloc(n);
         if (text) {
             snprintf(text, n, "Invalid %s record: %s %s", collection, path, msg);
@@ -1639,23 +1641,55 @@ static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
     *out_report = !explicit_off;
     if (explicit_off) return 1;
 
+    /* The $type, when present, must name the collection being written to. */
+    cJSON *parsed = cJSON_Parse(record_json);
+    cJSON *type = parsed
+        ? cJSON_GetObjectItemCaseSensitive(parsed, "$type") : NULL;
+    if (cJSON_IsString(type) && strcmp(type->valuestring, collection) != 0) {
+        char detail[512];
+        snprintf(detail, sizeof(detail),
+                 "Invalid $type: expected %s, got %s", collection,
+                 type->valuestring);
+        cJSON_Delete(parsed);
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest", detail);
+        return 0;
+    }
+    cJSON_Delete(parsed);
+
+    /* The reference reports every record problem as a plain InvalidRequest
+     * carrying a descriptive message — its InvalidRecordError is an internal
+     * class converted to InvalidRequestError(err.message). `InvalidRecord` is
+     * not a name the lexicons define, so emitting it would diverge. */
     char *message = NULL;
     wf_status st = metalbear_validate_record(b->lexicons, collection,
                                              record_json, explicit_on,
                                              out_status, &message);
     if (st == WF_ERR_NOT_FOUND) {
-        wf_xrpc_response_set_error(resp, 400, "InvalidRecord",
-                                   "Unknown lexicon type");
+        char detail[512];
+        snprintf(detail, sizeof(detail), "Unknown lexicon type: %s", collection);
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest", detail);
         return 0;
     }
     if (st == WF_ERR_VALIDATION) {
-        wf_xrpc_response_set_error(resp, 400, "InvalidRecord",
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
                                    message ? message : "record failed validation");
         free(message);
         return 0;
     }
     free(message);
     return st == WF_OK;
+}
+
+/* Reject a syntactically invalid record key with the message the reference
+ * uses. Returns 1 when the key is absent (the PDS mints one) or valid. */
+static int check_rkey(const cJSON *rkey, wf_xrpc_response *resp) {
+    if (!cJSON_IsString(rkey) || !rkey->valuestring[0]) return 1;
+    if (wf_syntax_record_key_is_valid(rkey->valuestring)) return 1;
+    char detail[320];
+    snprintf(detail, sizeof(detail), "Invalid record key: %s",
+             rkey->valuestring);
+    wf_xrpc_response_set_error(resp, 400, "InvalidRequest", detail);
+    return 0;
 }
 
 static const char *validation_status_text(metalbear_validation_status s) {
@@ -1711,7 +1745,8 @@ static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
 
     metalbear_validation_status vstatus;
     bool report_status = false;
-    if (!check_record((metalbear_pds_repo_bundle *)ctx, body,
+    if (!check_rkey(rkey, resp) ||
+        !check_record((metalbear_pds_repo_bundle *)ctx, body,
                       collection->valuestring, rec_json, resp, &vstatus,
                       &report_status)) {
         free(rec_json);
@@ -1778,7 +1813,8 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
 
     metalbear_validation_status vstatus;
     bool report_status = false;
-    if (!check_record((metalbear_pds_repo_bundle *)ctx, body,
+    if (!check_rkey(rkey, resp) ||
+        !check_record((metalbear_pds_repo_bundle *)ctx, body,
                       collection->valuestring, rec_json, resp, &vstatus,
                       &report_status)) {
         free(rec_json);
@@ -1939,6 +1975,11 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
      * others. Statuses are kept per write and stitched into the matching
      * result below, which the store cannot do since it has no registry. */
     int write_count = cJSON_GetArraySize(writes);
+    if (write_count > 200) {
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
+                                   "Too many writes. Max: 200");
+        return WF_OK;
+    }
     metalbear_validation_status *statuses = write_count
         ? calloc((size_t)write_count, sizeof(*statuses)) : NULL;
     if (write_count && !statuses) return WF_ERR_ALLOC;
@@ -1949,6 +1990,10 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
         const cJSON *type = cJSON_GetObjectItemCaseSensitive(w, "$type");
         const cJSON *coll = cJSON_GetObjectItemCaseSensitive(w, "collection");
         const cJSON *val = cJSON_GetObjectItemCaseSensitive(w, "value");
+        if (!check_rkey(cJSON_GetObjectItemCaseSensitive(w, "rkey"), resp)) {
+            free(statuses);
+            return WF_OK;
+        }
         bool is_write = cJSON_IsString(type) && val && cJSON_IsString(coll) &&
             (strcmp(type->valuestring, "com.atproto.repo.applyWrites#create") == 0 ||
              strcmp(type->valuestring, "com.atproto.repo.applyWrites#update") == 0);
