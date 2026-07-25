@@ -1337,8 +1337,6 @@ wf_status metalbear_repo_store_describe(metalbear_repo_store *s, char **out_json
     if (!obj) return WF_ERR_ALLOC;
     cJSON_AddStringToObject(obj, "handle", s->handle ? s->handle : "");
     cJSON_AddStringToObject(obj, "did", s->did ? s->did : "");
-    cJSON_AddBoolToObject(obj, "handleIsCorrect", 0);
-    cJSON_AddStringToObject(obj, "version", "0");
 
     cJSON *cols = cJSON_CreateArray();
     if (cols) {
@@ -1400,6 +1398,8 @@ typedef struct metalbear_pds_repo_bundle {
     metalbear_blob_store *fallback_blobs;
     char *service_did;
     char *public_url;
+    metalbear_xrpc_did_doc_provider did_doc_provider;
+    void *did_doc_ctx;
 } metalbear_pds_repo_bundle;
 
 /*
@@ -1602,9 +1602,9 @@ static wf_status h_get_record(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
     cJSON *out = cJSON_CreateObject();
-    cJSON_AddStringToObject(out, "uri",
-                            make_uri(s->did, collection->valuestring,
-                                     rkey->valuestring));
+    char *uri = make_uri(s->did, collection->valuestring, rkey->valuestring);
+    cJSON_AddStringToObject(out, "uri", uri);
+    free(uri);
     cJSON_AddStringToObject(out, "cid", cid);
     cJSON *val = cJSON_Parse(rec);
     if (val) cJSON_AddItemToObject(out, "value", val);
@@ -1688,51 +1688,85 @@ static wf_status h_query_labels(void *ctx, const wf_xrpc_request *req,
     return WF_OK;
 }
 
-static cJSON *build_describe_diddoc(const char *did, const char *handle,
+/*
+ * Build the W3C DID document for an atproto account, in the same shape the
+ * PLC directory serves: `verificationMethod` is an ARRAY of Multikey entries
+ * keyed `<did>#atproto`, not the `verificationMethods` object map that
+ * appears in unsigned PLC *operations*. Clients (@atproto/api,
+ * @atproto/identity) read the array form to recover the repo signing key, so
+ * emitting the operation shape here makes the document unusable to them.
+ */
+cJSON *metalbear_did_document_build(const char *did, const char *handle,
                                     const char *signing_key_didkey,
-                                    const char *public_url) {
+                                    const char *pds_endpoint) {
     cJSON *document = cJSON_CreateObject();
-    cJSON *context = cJSON_CreateArray();
-    cJSON *services = cJSON_CreateArray();
-    cJSON *service = cJSON_CreateObject();
-    cJSON *verification = cJSON_CreateObject();
-    cJSON *also_known_as = cJSON_CreateArray();
-    if (!document || !context || !services || !service || !verification || !also_known_as) {
-        cJSON_Delete(document);
-        cJSON_Delete(context);
-        cJSON_Delete(services);
-        cJSON_Delete(service);
-        cJSON_Delete(verification);
-        cJSON_Delete(also_known_as);
-        return NULL;
-    }
-    cJSON_AddItemToArray(context,
-                         cJSON_CreateString("https://www.w3.org/ns/did/v1"));
-    cJSON_AddItemToObject(document, "@context", context);
-    cJSON_AddStringToObject(document, "id", did ? did : "");
+    if (!document) return NULL;
+    cJSON *context = cJSON_AddArrayToObject(document, "@context");
+    if (!context) goto fail;
+    if (!cJSON_AddItemToArray(context,
+            cJSON_CreateString("https://www.w3.org/ns/did/v1")) ||
+        !cJSON_AddItemToArray(context,
+            cJSON_CreateString("https://w3id.org/security/multikey/v1")) ||
+        !cJSON_AddItemToArray(context,
+            cJSON_CreateString("https://w3id.org/security/suites/secp256k1-2019/v1")))
+        goto fail;
+    if (!cJSON_AddStringToObject(document, "id", did ? did : "")) goto fail;
+
+    cJSON *also_known_as = cJSON_AddArrayToObject(document, "alsoKnownAs");
+    if (!also_known_as) goto fail;
     if (handle && handle[0]) {
-        char aka[256];
+        char aka[512];
         snprintf(aka, sizeof(aka), "at://%s", handle);
-        cJSON_AddItemToArray(also_known_as, cJSON_CreateString(aka));
+        if (!cJSON_AddItemToArray(also_known_as, cJSON_CreateString(aka)))
+            goto fail;
     }
-    cJSON_AddItemToObject(document, "alsoKnownAs", also_known_as);
-    if (signing_key_didkey && signing_key_didkey[0])
-        cJSON_AddStringToObject(verification, "atproto", signing_key_didkey);
-    if (verification->child != NULL)
-        cJSON_AddItemToObject(document, "verificationMethods", verification);
-    else
-        cJSON_Delete(verification);
-    if (public_url && public_url[0]) {
-        cJSON_AddStringToObject(service, "id", "#atproto_pds");
-        cJSON_AddStringToObject(service, "type", "AtprotoPersonalDataServer");
-        cJSON_AddStringToObject(service, "serviceEndpoint", public_url);
-        cJSON_AddItemToArray(services, service);
-        cJSON_AddItemToObject(document, "service", services);
-    } else {
-        cJSON_Delete(services);
-        cJSON_Delete(service);
+
+    /* did:key:z... — the multibase portion is everything after the prefix. */
+    if (signing_key_didkey &&
+        strncmp(signing_key_didkey, "did:key:", 8) == 0 &&
+        signing_key_didkey[8]) {
+        cJSON *methods = cJSON_AddArrayToObject(document, "verificationMethod");
+        cJSON *method = cJSON_CreateObject();
+        if (!methods || !method) { cJSON_Delete(method); goto fail; }
+        if (!cJSON_AddItemToArray(methods, method)) { cJSON_Delete(method); goto fail; }
+        char method_id[512];
+        snprintf(method_id, sizeof(method_id), "%s#atproto", did ? did : "");
+        if (!cJSON_AddStringToObject(method, "id", method_id) ||
+            !cJSON_AddStringToObject(method, "type", "Multikey") ||
+            !cJSON_AddStringToObject(method, "controller", did ? did : "") ||
+            !cJSON_AddStringToObject(method, "publicKeyMultibase",
+                                     signing_key_didkey + 8))
+            goto fail;
+    }
+
+    if (pds_endpoint && pds_endpoint[0]) {
+        cJSON *services = cJSON_AddArrayToObject(document, "service");
+        cJSON *service = cJSON_CreateObject();
+        if (!services || !service) { cJSON_Delete(service); goto fail; }
+        if (!cJSON_AddItemToArray(services, service)) { cJSON_Delete(service); goto fail; }
+        if (!cJSON_AddStringToObject(service, "id", "#atproto_pds") ||
+            !cJSON_AddStringToObject(service, "type",
+                                     "AtprotoPersonalDataServer") ||
+            !cJSON_AddStringToObject(service, "serviceEndpoint", pds_endpoint))
+            goto fail;
     }
     return document;
+
+fail:
+    cJSON_Delete(document);
+    return NULL;
+}
+
+/* First at:// handle claimed by a DID document's alsoKnownAs, or NULL. */
+const char *metalbear_did_document_handle(const cJSON *document) {
+    const cJSON *aka = cJSON_GetObjectItemCaseSensitive(document, "alsoKnownAs");
+    const cJSON *entry = NULL;
+    cJSON_ArrayForEach(entry, aka) {
+        if (cJSON_IsString(entry) && entry->valuestring &&
+            strncmp(entry->valuestring, "at://", 5) == 0)
+            return entry->valuestring + 5;
+    }
+    return NULL;
 }
 
 static wf_status h_describe_repo(void *ctx, const wf_xrpc_request *req,
@@ -1747,36 +1781,59 @@ static wf_status h_describe_repo(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
     metalbear_pds_repo_bundle *bundle = (metalbear_pds_repo_bundle *)ctx;
-    if (bundle->public_url) {
-        cJSON *root = cJSON_Parse(json);
-        free(json);
-        if (!root) {
-            wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                       "describeRepo JSON parse failed");
-            return WF_OK;
-        }
-        cJSON *did_doc = build_describe_diddoc(
-            metalbear_repo_store_did(s),
-            metalbear_repo_store_handle(s),
-            metalbear_repo_store_signing_key_did(s),
-            bundle->public_url);
-        if (did_doc) {
-            cJSON_AddItemToObject(root, "didDoc", did_doc);
-            char *updated = cJSON_PrintUnformatted(root);
-            cJSON_Delete(root);
-            if (!updated) {
-                wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                           "describeRepo JSON serialize failed");
-                return WF_OK;
-            }
-            wf_xrpc_response_set_body(resp, updated, strlen(updated));
-            free(updated);
-            return WF_OK;
-        }
-        cJSON_Delete(root);
-    }
-    wf_xrpc_response_set_body(resp, json, strlen(json));
+    cJSON *root = cJSON_Parse(json);
     free(json);
+    if (!root) {
+        wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                   "describeRepo JSON parse failed");
+        return WF_OK;
+    }
+
+    const char *did = metalbear_repo_store_did(s);
+    const char *handle = metalbear_repo_store_handle(s);
+
+    /* Prefer the authoritative document from the identity layer (PLC / did:web)
+     * so `handleIsCorrect` reflects a real bi-directional resolution rather
+     * than the PDS simply agreeing with itself. Fall back to the locally
+     * derived document when no provider is wired up. */
+    cJSON *did_doc = NULL;
+    if (bundle->did_doc_provider) {
+        char *resolved = bundle->did_doc_provider(bundle->did_doc_ctx, did);
+        if (resolved) {
+            did_doc = cJSON_Parse(resolved);
+            free(resolved);
+        }
+    }
+    bool resolved_doc = did_doc != NULL;
+    if (!did_doc)
+        did_doc = metalbear_did_document_build(
+            did, handle, metalbear_repo_store_signing_key_did(s),
+            bundle->public_url);
+
+    /* didDoc is a required output field; without one the response would not
+     * satisfy the lexicon, so fail loudly instead of shipping a partial. */
+    if (!did_doc) {
+        cJSON_Delete(root);
+        wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                   "could not resolve DID document");
+        return WF_OK;
+    }
+
+    const char *claimed = metalbear_did_document_handle(did_doc);
+    bool handle_is_correct = resolved_doc && claimed && handle &&
+                             strcmp(claimed, handle) == 0;
+    cJSON_AddBoolToObject(root, "handleIsCorrect", handle_is_correct);
+    cJSON_AddItemToObject(root, "didDoc", did_doc);
+
+    char *updated = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!updated) {
+        wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                   "describeRepo JSON serialize failed");
+        return WF_OK;
+    }
+    wf_xrpc_response_set_body(resp, updated, strlen(updated));
+    free(updated);
     return WF_OK;
 }
 
@@ -1792,18 +1849,12 @@ wf_status metalbear_repo_store_list_records(metalbear_repo_store *s, const char 
 
     const char *cursor_str = cursor && *cursor ? cursor : NULL;
 
-    /* (e) ascending by default; descending when `reverse`. */
+    /* Descending (newest rkey first) by default, ascending when `reverse` —
+     * the order the reference PDS returns, and what clients paginating a
+     * collection expect. The cursor is the last rkey of the previous page, so
+     * it walks the same direction as the sort. */
     char sql[256];
     if (reverse) {
-        if (cursor_str)
-            snprintf(sql, sizeof(sql),
-                "SELECT rkey, cid, value FROM records "
-                "WHERE collection = ? AND rkey < ? ORDER BY rkey DESC LIMIT ?;");
-        else
-            snprintf(sql, sizeof(sql),
-                "SELECT rkey, cid, value FROM records "
-                "WHERE collection = ? ORDER BY rkey DESC LIMIT ?;");
-    } else {
         if (cursor_str)
             snprintf(sql, sizeof(sql),
                 "SELECT rkey, cid, value FROM records "
@@ -1812,6 +1863,15 @@ wf_status metalbear_repo_store_list_records(metalbear_repo_store *s, const char 
             snprintf(sql, sizeof(sql),
                 "SELECT rkey, cid, value FROM records "
                 "WHERE collection = ? ORDER BY rkey ASC LIMIT ?;");
+    } else {
+        if (cursor_str)
+            snprintf(sql, sizeof(sql),
+                "SELECT rkey, cid, value FROM records "
+                "WHERE collection = ? AND rkey < ? ORDER BY rkey DESC LIMIT ?;");
+        else
+            snprintf(sql, sizeof(sql),
+                "SELECT rkey, cid, value FROM records "
+                "WHERE collection = ? ORDER BY rkey DESC LIMIT ?;");
     }
 
     sqlite3_stmt *stmt = NULL;
@@ -1826,20 +1886,25 @@ wf_status metalbear_repo_store_list_records(metalbear_repo_store *s, const char 
     if (!records) { sqlite3_finalize(stmt); return WF_ERR_ALLOC; }
     int count = 0;
     int has_more = 0;
-    const char *last_rkey = NULL;
+    /* Owned copy: sqlite3_column_text pointers do not survive the next
+     * sqlite3_step / sqlite3_finalize, and the cursor is read after both. */
+    char *last_rkey = NULL;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         if (count >= limit) { /* over-fetch: there is a next page */
             has_more = 1;
-            last_rkey = (const char *)sqlite3_column_text(stmt, 0);
             break;
         }
         const char *rkey = (const char *)sqlite3_column_text(stmt, 0);
         const char *cid = (const char *)sqlite3_column_text(stmt, 1);
         const char *value = (const char *)sqlite3_column_text(stmt, 2);
-        last_rkey = rkey;
+        /* The cursor is the last record actually returned. Pointing it at the
+         * over-fetched row instead would skip that record on the next page. */
+        free(last_rkey);
+        last_rkey = rkey ? strdup(rkey) : NULL;
         cJSON *rec = cJSON_CreateObject();
-        cJSON_AddStringToObject(rec, "uri",
-                                 make_uri(s->did, collection, rkey));
+        char *uri = make_uri(s->did, collection, rkey);
+        cJSON_AddStringToObject(rec, "uri", uri);
+        free(uri);
         cJSON_AddStringToObject(rec, "cid", cid ? cid : "");
         cJSON *val = cJSON_Parse(value ? value : "{}");
         if (val) cJSON_AddItemToObject(rec, "value", val);
@@ -1852,6 +1917,7 @@ wf_status metalbear_repo_store_list_records(metalbear_repo_store *s, const char 
     cJSON_AddItemToObject(out, "records", records);
     if (has_more && last_rkey)
         cJSON_AddStringToObject(out, "cursor", last_rkey);
+    free(last_rkey);
 
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
@@ -2277,12 +2343,22 @@ static wf_status register_pds_repo_handlers(wf_xrpc_server *server,
 wf_status metalbear_xrpc_server_register_pds_repo_resolver(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url) {
+    return metalbear_xrpc_server_register_pds_repo_resolver_ex(
+        server, resolver, ctx, service_did, public_url, NULL, NULL);
+}
+
+wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
+    wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
+    const char *service_did, const char *public_url,
+    metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx) {
     if (!server) return WF_ERR_INVALID_ARG;
     metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
     if (!b) return WF_ERR_ALLOC;
     *b = (metalbear_pds_repo_bundle){0};
     b->resolver = resolver;
     b->resolver_ctx = ctx;
+    b->did_doc_provider = did_doc_provider;
+    b->did_doc_ctx = did_doc_ctx;
     if (service_did) b->service_did = strdup(service_did);
     if (public_url) b->public_url = strdup(public_url);
     wf_xrpc_server_own_ctx(server, b, free);

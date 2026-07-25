@@ -677,6 +677,18 @@ static wf_status fetch_remote_did_doc(metalbear_server *server,
     return *out_json ? WF_OK : WF_ERR_ALLOC;
 }
 
+/* metalbear_xrpc_did_doc_provider: resolve `did` through the identity layer
+ * (PLC directory / did:web well-known) and return its raw JSON. Deliberately
+ * skips the local registry — describeRepo uses this to check a handle
+ * bi-directionally, which a locally synthesised document cannot do. Returns
+ * NULL when the DID does not resolve. */
+static char *resolve_did_doc_json(void *ctx, const char *did) {
+    metalbear_server *server = ctx;
+    char *json = NULL;
+    if (!did || fetch_remote_did_doc(server, did, &json) != WF_OK) return NULL;
+    return json;
+}
+
 /* Build (local) or fetch (remote) the DID document for `did` as a cJSON
  * tree. Caller must cJSON_Delete the result. Sets *deactivated when the
  * local account exists but is deactivated. */
@@ -1219,46 +1231,10 @@ static metalbear_credential_kind valid_login(
 
 static cJSON *build_did_doc(metalbear_server *server,
                             metalbear_account_context *acct) {
-    cJSON *document = cJSON_CreateObject();
-    cJSON *context = cJSON_CreateArray();
-    cJSON *services = cJSON_CreateArray();
-    cJSON *service = cJSON_CreateObject();
-    cJSON *verification = cJSON_CreateObject();
-    cJSON *also_known_as = cJSON_CreateArray();
-    if (!document || !context || !services || !service || !verification || !also_known_as) {
-        cJSON_Delete(document);
-        cJSON_Delete(context);
-        cJSON_Delete(services);
-        cJSON_Delete(service);
-        cJSON_Delete(verification);
-        cJSON_Delete(also_known_as);
-        return NULL;
-    }
-    cJSON_AddItemToArray(context,
-                         cJSON_CreateString("https://www.w3.org/ns/did/v1"));
-    cJSON_AddItemToObject(document, "@context", context);
-    cJSON_AddStringToObject(document, "id", acct->did);
-    if (acct->handle && acct->handle[0]) {
-        char aka[256];
-        snprintf(aka, sizeof(aka), "at://%s", acct->handle);
-        cJSON_AddItemToArray(also_known_as, cJSON_CreateString(aka));
-    }
-    cJSON_AddItemToObject(document, "alsoKnownAs", also_known_as);
-    if (acct->repo) {
-        const char *signing_didkey = metalbear_repo_store_signing_key_did(acct->repo);
-        if (signing_didkey && signing_didkey[0])
-            cJSON_AddStringToObject(verification, "atproto", signing_didkey);
-    }
-    if (verification->child != NULL)
-        cJSON_AddItemToObject(document, "verificationMethods", verification);
-    else
-        cJSON_Delete(verification);
-    cJSON_AddStringToObject(service, "id", "#atproto_pds");
-    cJSON_AddStringToObject(service, "type", "AtprotoPersonalDataServer");
-    cJSON_AddStringToObject(service, "serviceEndpoint", server->public_url);
-    cJSON_AddItemToArray(services, service);
-    cJSON_AddItemToObject(document, "service", services);
-    return document;
+    const char *signing_didkey =
+        acct->repo ? metalbear_repo_store_signing_key_did(acct->repo) : NULL;
+    return metalbear_did_document_build(acct->did, acct->handle, signing_didkey,
+                                        server->public_url);
 }
 
 static cJSON *session_json(metalbear_server *server,
@@ -5341,9 +5317,10 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.server.getServiceAuth", get_service_auth,
             server) != WF_OK ||
-        metalbear_xrpc_server_register_pds_repo_resolver(server->xrpc,
+        metalbear_xrpc_server_register_pds_repo_resolver_ex(server->xrpc,
             metalbear_repo_resolver, server,
-            server->service_did, server->public_url) != WF_OK ||
+            server->service_did, server->public_url,
+            resolve_did_doc_json, server) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.repo.uploadBlob", upload_blob, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
