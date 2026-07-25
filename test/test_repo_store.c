@@ -162,10 +162,16 @@ static int run_unit(void) {
     char *ccid = NULL, *crev = NULL, *cres = NULL;
     s = metalbear_repo_store_apply_writes(store, writes, NULL, &ccid, &crev, &cres);
     WF_CHECK(s == WF_OK && ccid && crev && cres);
-    WF_CHECK(strlen(crev) > 0);
-    cJSON *resarr = cJSON_Parse(cres);
-    WF_CHECK(resarr && cJSON_IsArray(resarr) && cJSON_GetArraySize(resarr) == 3);
-    cJSON_Delete(resarr);
+    /* WF_CHECK records a failure and carries on, so anything that dereferences
+     * an out-param has to be guarded on the check above actually holding.
+     * Without this guard a failure here dies in strlen(NULL) and ctest reports
+     * a bare SegFault, losing the FAIL line that says what went wrong. */
+    if (crev && cres) {
+        WF_CHECK(strlen(crev) > 0);
+        cJSON *resarr = cJSON_Parse(cres);
+        WF_CHECK(resarr && cJSON_IsArray(resarr) && cJSON_GetArraySize(resarr) == 3);
+        cJSON_Delete(resarr);
+    }
     /* rkey1 must now be gone; a fresh post was created in com.example.posts. */
     s = metalbear_repo_store_get_record(store, "com.example.posts", rkey1,
                                  &recj, &reccid);
