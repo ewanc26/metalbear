@@ -57,6 +57,10 @@ typedef struct metalbear_config {
      * service-auth JWT minted from the PDS's repo key. */
     const char *appview_url;
     const char *appview_did;
+    /* Directory of lexicon JSON documents used to validate records on write.
+     * NULL falls back to the install/source locations; when no corpus is
+     * found, writes are stored unvalidated and report "unknown". */
+    const char *lexicon_dir;
 } metalbear_config;
 
 /* Start a single-account AT Protocol PDS. All strings are copied. */

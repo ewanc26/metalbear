@@ -132,6 +132,10 @@ struct metalbear_server {
     char *appview_did;        /* Upstream AppView DID for service-auth or NULL */
     metalbear_account_cache *account_cache;
     metalbear_report_store *reports;
+    /* Lexicon corpus used to validate records on write. NULL when no corpus
+     * was found, in which case every write reports validationStatus
+     * "unknown" rather than pretending records were checked. */
+    wf_lexicon_registry *lexicons;
 };
 
 static bool is_public_route(const char *nsid) {
@@ -4733,6 +4737,43 @@ static char *join_path(const char *directory, const char *name) {
     return path;
 }
 
+/*
+ * Load the lexicon corpus used to validate records on write.
+ *
+ * A missing corpus is not fatal: without one every write reports
+ * validationStatus "unknown", which is the honest answer and what the
+ * reference reports for a collection it has no schema for. It is logged
+ * loudly, though, because silently accepting malformed records is a much
+ * worse failure than refusing to start.
+ */
+static void load_lexicons(metalbear_server *server, const char *configured) {
+    static const char *const fallbacks[] = {
+        "/usr/local/share/metalbear/lexicons",
+        "../wolfram/lexicons",
+        "lexicons",
+    };
+    const char *candidates[1 + sizeof(fallbacks) / sizeof(fallbacks[0])];
+    size_t n = 0;
+    if (configured && configured[0]) candidates[n++] = configured;
+    for (size_t i = 0; i < sizeof(fallbacks) / sizeof(fallbacks[0]); i++)
+        candidates[n++] = fallbacks[i];
+
+    for (size_t i = 0; i < n; i++) {
+        wf_lexicon_registry *registry = wf_lexicon_registry_new();
+        if (!registry) return;
+        if (wf_lexicon_registry_load_dir(registry, candidates[i]) == WF_OK) {
+            server->lexicons = registry;
+            LOG_INFO("loaded lexicons from %s; records will be validated",
+                     candidates[i]);
+            return;
+        }
+        wf_lexicon_registry_free(registry);
+    }
+    LOG_WARN("no lexicon corpus found (set METALBEAR_LEXICON_DIR); records "
+             "will be stored without validation and reported as "
+             "validationStatus \"unknown\"");
+}
+
 static bool copy_config(metalbear_server *server,
                         const metalbear_config *config) {
     server->service_did = strdup(config->service_did);
@@ -4751,6 +4792,7 @@ static bool copy_config(metalbear_server *server,
         server->appview_url = strdup(config->appview_url);
     if (config->appview_did && config->appview_did[0])
         server->appview_did = strdup(config->appview_did);
+    load_lexicons(server, config->lexicon_dir);
     return server->service_did && (!config->public_url || server->public_url) &&
            server->user_domain && server->data_directory;
 }
@@ -5409,7 +5451,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         metalbear_xrpc_server_register_pds_repo_resolver_ex(server->xrpc,
             metalbear_repo_resolver, server,
             server->service_did, server->public_url,
-            resolve_did_doc_json, server) != WF_OK ||
+            resolve_did_doc_json, server, server->lexicons) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.repo.uploadBlob", upload_blob, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
@@ -5717,5 +5759,6 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->plc_url);
     free(server->appview_url);
     free(server->appview_did);
+    wf_lexicon_registry_free(server->lexicons);
     free(server);
 }

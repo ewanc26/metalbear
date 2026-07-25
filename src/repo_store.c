@@ -376,6 +376,45 @@ static int record_type_matches(const char *record_json,
     return ok;
 }
 
+wf_status metalbear_validate_record(const wf_lexicon_registry *lexicons,
+                                    const char *collection,
+                                    const char *record_json,
+                                    bool require_schema,
+                                    metalbear_validation_status *out_status,
+                                    char **out_message) {
+    if (out_status) *out_status = METALBEAR_VALIDATION_UNKNOWN;
+    if (out_message) *out_message = NULL;
+    if (!collection || !record_json) return WF_ERR_INVALID_ARG;
+
+    /* Nothing to check against. The reference reports `unknown` here rather
+     * than rejecting, so that a PDS still hosts collections whose lexicons it
+     * does not carry — unless the caller explicitly demanded validation. */
+    if (!lexicons || !wf_lexicon_registry_contains(lexicons, collection))
+        return require_schema ? WF_ERR_NOT_FOUND : WF_OK;
+
+    wf_validate_result result =
+        wf_validate_record(lexicons, collection, record_json,
+                           strlen(record_json));
+    if (result.success) {
+        wf_validate_result_free(&result);
+        if (out_status) *out_status = METALBEAR_VALIDATION_VALID;
+        return WF_OK;
+    }
+    if (out_message && result.errors) {
+        const char *path = result.errors->path ? result.errors->path : "record";
+        const char *msg = result.errors->message ? result.errors->message
+                                                 : "is invalid";
+        size_t n = strlen(collection) + strlen(path) + strlen(msg) + 16;
+        char *text = malloc(n);
+        if (text) {
+            snprintf(text, n, "Invalid %s record: %s %s", collection, path, msg);
+            *out_message = text;
+        }
+    }
+    wf_validate_result_free(&result);
+    return WF_ERR_VALIDATION;
+}
+
 /* Decode a record block (by CID) into canonical record JSON, or NULL. */
 static char *decode_record_json(metalbear_repo_store *s, const wf_cid *record_cid) {
     wf_car_block *blk = wf_car_find_block(&s->car, record_cid);
@@ -1507,6 +1546,7 @@ typedef struct metalbear_pds_repo_bundle {
     char *public_url;
     metalbear_xrpc_did_doc_provider did_doc_provider;
     void *did_doc_ctx;
+    const wf_lexicon_registry *lexicons; /* borrowed */
 } metalbear_pds_repo_bundle;
 
 /*
@@ -1573,6 +1613,56 @@ static bool query_param_bool(const cJSON *params, const char *name,
 }
 
 /*
+ * Run a write's record through the lexicon corpus and report the outcome the
+ * way the reference PDS does.
+ *
+ * Returns 0 and writes an `InvalidRecord` response when the record has a
+ * schema and violates it, or when the caller passed validate:true for a
+ * collection with no schema. Returns 1 to continue, with *out_status set to
+ * the value that belongs in the response's validationStatus and *out_report
+ * telling the caller whether to emit that field at all — validate:false means
+ * nothing was checked, so the field is omitted rather than guessed.
+ */
+static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
+                        const char *collection, const char *record_json,
+                        wf_xrpc_response *resp,
+                        metalbear_validation_status *out_status,
+                        bool *out_report) {
+    const cJSON *validate = body
+        ? cJSON_GetObjectItemCaseSensitive(body, "validate") : NULL;
+    bool explicit_off = cJSON_IsFalse(validate) ||
+        (cJSON_IsString(validate) && strcmp(validate->valuestring, "false") == 0);
+    bool explicit_on = cJSON_IsTrue(validate) ||
+        (cJSON_IsString(validate) && strcmp(validate->valuestring, "true") == 0);
+
+    *out_status = METALBEAR_VALIDATION_UNKNOWN;
+    *out_report = !explicit_off;
+    if (explicit_off) return 1;
+
+    char *message = NULL;
+    wf_status st = metalbear_validate_record(b->lexicons, collection,
+                                             record_json, explicit_on,
+                                             out_status, &message);
+    if (st == WF_ERR_NOT_FOUND) {
+        wf_xrpc_response_set_error(resp, 400, "InvalidRecord",
+                                   "Unknown lexicon type");
+        return 0;
+    }
+    if (st == WF_ERR_VALIDATION) {
+        wf_xrpc_response_set_error(resp, 400, "InvalidRecord",
+                                   message ? message : "record failed validation");
+        free(message);
+        return 0;
+    }
+    free(message);
+    return st == WF_OK;
+}
+
+static const char *validation_status_text(metalbear_validation_status s) {
+    return s == METALBEAR_VALIDATION_VALID ? "valid" : "unknown";
+}
+
+/*
  * Report a repo-write failure using the names the lexicon actually defines.
  * The only write error com.atproto.repo.{create,put,delete}Record and
  * applyWrites declare is `InvalidSwap`, which clients branch on to retry an
@@ -1619,6 +1709,15 @@ static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
     char *rec_json = cJSON_PrintUnformatted(record);
     if (!rec_json) return WF_ERR_ALLOC;
 
+    metalbear_validation_status vstatus;
+    bool report_status = false;
+    if (!check_record((metalbear_pds_repo_bundle *)ctx, body,
+                      collection->valuestring, rec_json, resp, &vstatus,
+                      &report_status)) {
+        free(rec_json);
+        return WF_OK;
+    }
+
     const char *rk = (rkey && cJSON_IsString(rkey)) ? rkey->valuestring : NULL;
     const char *swap_str = (swap && cJSON_IsString(swap)) ? swap->valuestring
                                                          : NULL;
@@ -1634,8 +1733,9 @@ static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
     cJSON *out = cJSON_CreateObject();
     cJSON_AddStringToObject(out, "uri", uri ? uri : "");
     cJSON_AddStringToObject(out, "cid", cid ? cid : "");
-    /* (d) wolfram performs no lexicon validation, so report "unknown". */
-    cJSON_AddStringToObject(out, "validationStatus", "unknown");
+    if (report_status)
+        cJSON_AddStringToObject(out, "validationStatus",
+                                validation_status_text(vstatus));
     add_commit_meta(s, out);
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
@@ -1675,6 +1775,16 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
                                                          : NULL;
     const char *swaprec_str = (swapRec && cJSON_IsString(swapRec))
                                   ? swapRec->valuestring : NULL;
+
+    metalbear_validation_status vstatus;
+    bool report_status = false;
+    if (!check_record((metalbear_pds_repo_bundle *)ctx, body,
+                      collection->valuestring, rec_json, resp, &vstatus,
+                      &report_status)) {
+        free(rec_json);
+        return WF_OK;
+    }
+
     char *uri = NULL, *cid = NULL;
     wf_status st = metalbear_repo_store_put_record(s, collection->valuestring,
                                            rkey->valuestring, rec_json,
@@ -1688,8 +1798,9 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
     cJSON *out = cJSON_CreateObject();
     cJSON_AddStringToObject(out, "uri", uri ? uri : "");
     cJSON_AddStringToObject(out, "cid", cid ? cid : "");
-    /* (d) wolfram performs no lexicon validation, so report "unknown". */
-    cJSON_AddStringToObject(out, "validationStatus", "unknown");
+    if (report_status)
+        cJSON_AddStringToObject(out, "validationStatus",
+                                validation_status_text(vstatus));
     add_commit_meta(s, out);
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
@@ -1822,14 +1933,48 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
     }
     const char *swap_str = (swap && cJSON_IsString(swap)) ? swap->valuestring
                                                          : NULL;
+
+    /* Validate every record BEFORE anything is committed. The batch is atomic,
+     * so one invalid record rejects the whole request rather than landing the
+     * others. Statuses are kept per write and stitched into the matching
+     * result below, which the store cannot do since it has no registry. */
+    int write_count = cJSON_GetArraySize(writes);
+    metalbear_validation_status *statuses = write_count
+        ? calloc((size_t)write_count, sizeof(*statuses)) : NULL;
+    if (write_count && !statuses) return WF_ERR_ALLOC;
+    bool report_status = true;
+    int idx = 0;
+    const cJSON *w = NULL;
+    cJSON_ArrayForEach(w, writes) {
+        const cJSON *type = cJSON_GetObjectItemCaseSensitive(w, "$type");
+        const cJSON *coll = cJSON_GetObjectItemCaseSensitive(w, "collection");
+        const cJSON *val = cJSON_GetObjectItemCaseSensitive(w, "value");
+        bool is_write = cJSON_IsString(type) && val && cJSON_IsString(coll) &&
+            (strcmp(type->valuestring, "com.atproto.repo.applyWrites#create") == 0 ||
+             strcmp(type->valuestring, "com.atproto.repo.applyWrites#update") == 0);
+        if (is_write) {
+            char *rec_json = cJSON_PrintUnformatted(val);
+            if (!rec_json) { free(statuses); return WF_ERR_ALLOC; }
+            bool report_one = true;
+            int ok = check_record((metalbear_pds_repo_bundle *)ctx, body,
+                                  coll->valuestring, rec_json, resp,
+                                  &statuses[idx], &report_one);
+            free(rec_json);
+            if (!ok) { free(statuses); return WF_OK; }
+            report_status = report_one;
+        }
+        idx++;
+    }
+
     char *writes_json = cJSON_PrintUnformatted(writes);
-    if (!writes_json) return WF_ERR_ALLOC;
+    if (!writes_json) { free(statuses); return WF_ERR_ALLOC; }
 
     char *cid = NULL, *rev = NULL, *results = NULL;
     wf_status st = metalbear_repo_store_apply_writes(s, writes_json, swap_str, &cid,
                                               &rev, &results);
     free(writes_json);
     if (st != WF_OK) {
+        free(statuses);
         set_write_error(resp, st, "applyWrites failed");
         return WF_OK;
     }
@@ -1840,7 +1985,20 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
     cJSON_AddStringToObject(commit, "rev", rev ? rev : "");
     cJSON_AddItemToObject(out, "commit", commit);
     cJSON *res = cJSON_Parse(results);
-    if (res) cJSON_AddItemToObject(out, "results", res);
+    if (res) {
+        /* Results are emitted in write order, so index i describes write i. */
+        for (int i = 0; i < cJSON_GetArraySize(res) && i < write_count; i++) {
+            cJSON *entry = cJSON_GetArrayItem(res, i);
+            if (!cJSON_GetObjectItemCaseSensitive(entry, "validationStatus"))
+                continue;
+            cJSON_DeleteItemFromObjectCaseSensitive(entry, "validationStatus");
+            if (report_status)
+                cJSON_AddStringToObject(entry, "validationStatus",
+                                        validation_status_text(statuses[i]));
+        }
+        cJSON_AddItemToObject(out, "results", res);
+    }
+    free(statuses);
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
     free(cid);
@@ -2576,13 +2734,14 @@ wf_status metalbear_xrpc_server_register_pds_repo_resolver(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url) {
     return metalbear_xrpc_server_register_pds_repo_resolver_ex(
-        server, resolver, ctx, service_did, public_url, NULL, NULL);
+        server, resolver, ctx, service_did, public_url, NULL, NULL, NULL);
 }
 
 wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url,
-    metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx) {
+    metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx,
+    const wf_lexicon_registry *lexicons) {
     if (!server) return WF_ERR_INVALID_ARG;
     metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
     if (!b) return WF_ERR_ALLOC;
@@ -2591,6 +2750,7 @@ wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
     b->resolver_ctx = ctx;
     b->did_doc_provider = did_doc_provider;
     b->did_doc_ctx = did_doc_ctx;
+    b->lexicons = lexicons;
     if (service_did) b->service_did = strdup(service_did);
     if (public_url) b->public_url = strdup(public_url);
     wf_xrpc_server_own_ctx(server, b, free);
