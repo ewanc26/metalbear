@@ -79,5 +79,5 @@ COPY --from=build /src/wolfram/lexicons /usr/local/share/metalbear/lexicons
 RUN mkdir -p /data
 WORKDIR /data
 ENV METALBEAR_DATA=/data
-EXPOSE 3000
+EXPOSE 2583
 ENTRYPOINT ["/usr/local/bin/metalbear"]

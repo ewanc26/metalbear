@@ -30,6 +30,7 @@ jobs:
             libsecp256k1-dev \
             libmicrohttpd-dev \
             libzstd-dev \
+            zlib1g-dev \
             libc-ares-dev \
             libidn2-dev \
             python3
