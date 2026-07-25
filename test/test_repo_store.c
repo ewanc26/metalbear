@@ -251,8 +251,47 @@ static int run_unit(void) {
     }
     WF_CHECK(has_posts);
     WF_CHECK(rev && cJSON_IsString(rev) && strlen(rev->valuestring) > 0);
+    /* The stub `version` field is not in the describeRepo lexicon. */
+    WF_CHECK(cJSON_GetObjectItemCaseSensitive(d, "version") == NULL);
     cJSON_Delete(d);
     free(desc);
+
+    /* The DID document must be W3C-shaped: `verificationMethod` as an array
+     * of Multikey entries, not the `verificationMethods` map that appears in
+     * unsigned PLC operations. Clients read the array form to recover the
+     * repo signing key. */
+    cJSON *doc = metalbear_did_document_build(
+        "did:plc:testpds", "renamed.example.com",
+        metalbear_repo_store_signing_key_did(store), "https://pds.example.com");
+    WF_CHECK(doc != NULL);
+    WF_CHECK(cJSON_GetObjectItemCaseSensitive(doc, "verificationMethods") == NULL);
+    cJSON *vms = cJSON_GetObjectItemCaseSensitive(doc, "verificationMethod");
+    WF_CHECK(vms && cJSON_IsArray(vms) && cJSON_GetArraySize(vms) == 1);
+    cJSON *vm = vms ? cJSON_GetArrayItem(vms, 0) : NULL;
+    cJSON *vm_id = vm ? cJSON_GetObjectItemCaseSensitive(vm, "id") : NULL;
+    cJSON *vm_type = vm ? cJSON_GetObjectItemCaseSensitive(vm, "type") : NULL;
+    cJSON *vm_ctrl = vm ? cJSON_GetObjectItemCaseSensitive(vm, "controller") : NULL;
+    cJSON *vm_key = vm ? cJSON_GetObjectItemCaseSensitive(vm, "publicKeyMultibase") : NULL;
+    WF_CHECK(vm_id && cJSON_IsString(vm_id) &&
+             strcmp(vm_id->valuestring, "did:plc:testpds#atproto") == 0);
+    WF_CHECK(vm_type && cJSON_IsString(vm_type) &&
+             strcmp(vm_type->valuestring, "Multikey") == 0);
+    WF_CHECK(vm_ctrl && cJSON_IsString(vm_ctrl) &&
+             strcmp(vm_ctrl->valuestring, "did:plc:testpds") == 0);
+    /* publicKeyMultibase is the did:key value minus its prefix. */
+    WF_CHECK(vm_key && cJSON_IsString(vm_key) && vm_key->valuestring[0] == 'z');
+    WF_CHECK(vm_key && strcmp(metalbear_repo_store_signing_key_did(store) + 8,
+                              vm_key->valuestring) == 0);
+    cJSON *svc = cJSON_GetObjectItemCaseSensitive(doc, "service");
+    WF_CHECK(svc && cJSON_IsArray(svc) && cJSON_GetArraySize(svc) == 1);
+    cJSON *svc0 = svc ? cJSON_GetArrayItem(svc, 0) : NULL;
+    WF_CHECK(svc0 && cJSON_IsString(cJSON_GetObjectItemCaseSensitive(svc0, "type")) &&
+             strcmp(cJSON_GetObjectItemCaseSensitive(svc0, "type")->valuestring,
+                    "AtprotoPersonalDataServer") == 0);
+    /* alsoKnownAs round-trips through the handle accessor. */
+    const char *claimed = metalbear_did_document_handle(doc);
+    WF_CHECK(claimed && strcmp(claimed, "renamed.example.com") == 0);
+    cJSON_Delete(doc);
 
     /* Phase 2 invariant: the head commit verifies with the store key. */
     int verified = 0;
@@ -282,6 +321,88 @@ static int run_unit(void) {
     int verified2 = 0;
     s = metalbear_repo_store_verify_head(store, &verified2, NULL);
     WF_CHECK(s == WF_OK && verified2 == 1);
+
+    /* listRecords ordering + pagination. Five records with sortable rkeys:
+     * the default order is newest-rkey-first (descending), `reverse` flips
+     * it, and paging with the returned cursor must visit every record
+     * exactly once — a cursor pointing at the over-fetched row would drop
+     * one record per page boundary. */
+    static const char *const page_rkeys[] = {"aaa", "bbb", "ccc", "ddd", "eee"};
+    for (size_t i = 0; i < 5; i++) {
+        char *purl = NULL, *pcid = NULL;
+        s = metalbear_repo_store_put_record(
+            store, "com.example.page", page_rkeys[i],
+            "{\"$type\":\"com.example.page\",\"n\":1}", NULL, NULL,
+            &purl, &pcid);
+        WF_CHECK(s == WF_OK);
+        free(purl);
+        free(pcid);
+    }
+
+    /* Default: descending by rkey. */
+    char *pj = NULL;
+    s = metalbear_repo_store_list_records(store, "com.example.page", NULL,
+                                          false, 50, &pj);
+    WF_CHECK(s == WF_OK && pj);
+    cJSON *pd = pj ? cJSON_Parse(pj) : NULL;
+    cJSON *pr = pd ? cJSON_GetObjectItemCaseSensitive(pd, "records") : NULL;
+    WF_CHECK(pr && cJSON_IsArray(pr) && cJSON_GetArraySize(pr) == 5);
+    for (int i = 0; pr && i < cJSON_GetArraySize(pr); i++) {
+        cJSON *e = cJSON_GetArrayItem(pr, i);
+        cJSON *u = e ? cJSON_GetObjectItemCaseSensitive(e, "uri") : NULL;
+        WF_CHECK(u && cJSON_IsString(u) &&
+                 strcmp(strrchr(u->valuestring, '/') + 1,
+                        page_rkeys[4 - i]) == 0);
+    }
+    cJSON_Delete(pd);
+    free(pj);
+
+    /* reverse=true: ascending by rkey. */
+    pj = NULL;
+    s = metalbear_repo_store_list_records(store, "com.example.page", NULL,
+                                          true, 50, &pj);
+    WF_CHECK(s == WF_OK && pj);
+    pd = pj ? cJSON_Parse(pj) : NULL;
+    pr = pd ? cJSON_GetObjectItemCaseSensitive(pd, "records") : NULL;
+    WF_CHECK(pr && cJSON_IsArray(pr) && cJSON_GetArraySize(pr) == 5);
+    for (int i = 0; pr && i < cJSON_GetArraySize(pr); i++) {
+        cJSON *e = cJSON_GetArrayItem(pr, i);
+        cJSON *u = e ? cJSON_GetObjectItemCaseSensitive(e, "uri") : NULL;
+        WF_CHECK(u && cJSON_IsString(u) &&
+                 strcmp(strrchr(u->valuestring, '/') + 1, page_rkeys[i]) == 0);
+    }
+    cJSON_Delete(pd);
+    free(pj);
+
+    /* Page through in twos and assert all five arrive, in order, once. */
+    char *page_cursor = NULL;
+    int seen = 0;
+    for (int guard = 0; guard < 10; guard++) {
+        pj = NULL;
+        s = metalbear_repo_store_list_records(store, "com.example.page",
+                                              page_cursor, false, 2, &pj);
+        WF_CHECK(s == WF_OK && pj);
+        pd = pj ? cJSON_Parse(pj) : NULL;
+        pr = pd ? cJSON_GetObjectItemCaseSensitive(pd, "records") : NULL;
+        int n = pr ? cJSON_GetArraySize(pr) : 0;
+        for (int i = 0; i < n; i++) {
+            cJSON *e = cJSON_GetArrayItem(pr, i);
+            cJSON *u = e ? cJSON_GetObjectItemCaseSensitive(e, "uri") : NULL;
+            WF_CHECK(seen < 5);
+            WF_CHECK(u && cJSON_IsString(u) &&
+                     strcmp(strrchr(u->valuestring, '/') + 1,
+                            page_rkeys[4 - seen]) == 0);
+            seen++;
+        }
+        cJSON *nc = pd ? cJSON_GetObjectItemCaseSensitive(pd, "cursor") : NULL;
+        free(page_cursor);
+        page_cursor = (nc && cJSON_IsString(nc)) ? strdup(nc->valuestring) : NULL;
+        cJSON_Delete(pd);
+        free(pj);
+        if (!page_cursor) break;
+    }
+    WF_CHECK(seen == 5);
+    free(page_cursor);
 
     free(uri1);
     free(cid1);

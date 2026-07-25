@@ -34,6 +34,8 @@
 #ifndef METALBEAR_REPO_STORE_H
 #define METALBEAR_REPO_STORE_H
 
+#include <cJSON.h>
+
 #include "wolfram/xrpc.h"
 #include "wolfram/crypto.h"
 #include "wolfram/repo/commit.h"
@@ -232,8 +234,9 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *store,
                                       char **out_results_json);
 
 /**
- * Produce the describeRepo payload (did, handle, version, collections,
- * rev, handleIsCorrect). *out_json is a caller-owned JSON string.
+ * Produce the base describeRepo payload (did, handle, collections, rev).
+ * The route handler adds the lexicon's required didDoc and handleIsCorrect,
+ * which need the identity layer. *out_json is a caller-owned JSON string.
  */
 wf_status metalbear_repo_store_describe(metalbear_repo_store *store, char **out_json);
 
@@ -389,6 +392,37 @@ typedef wf_status (*metalbear_xrpc_repo_resolver)(void *ctx,
 wf_status metalbear_xrpc_server_register_pds_repo_resolver(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url);
+
+/*
+ * Resolve the authoritative W3C DID document for `did`, returning it as
+ * heap-allocated JSON text the caller frees, or NULL when it cannot be
+ * resolved. Used by describeRepo to verify a handle bi-directionally.
+ */
+typedef char *(*metalbear_xrpc_did_doc_provider)(void *ctx, const char *did);
+
+/**
+ * As metalbear_xrpc_server_register_pds_repo_resolver, additionally wiring an
+ * identity-layer DID document provider. Without one, describeRepo falls back
+ * to a locally derived document and reports handleIsCorrect=false, since the
+ * PDS cannot confirm the handle resolves back to the DID on its own.
+ */
+wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
+    wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
+    const char *service_did, const char *public_url,
+    metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx);
+
+/**
+ * Build the W3C DID document for an atproto account: `verificationMethod` as
+ * an array of Multikey entries (`<did>#atproto`) and the #atproto_pds service
+ * entry. Caller owns the returned cJSON node.
+ */
+cJSON *metalbear_did_document_build(const char *did, const char *handle,
+                                    const char *signing_key_didkey,
+                                    const char *pds_endpoint);
+
+/** First at:// handle claimed by a DID document's alsoKnownAs, or NULL.
+ *  Borrowed from `document`. */
+const char *metalbear_did_document_handle(const cJSON *document);
 
 #ifdef __cplusplus
 }
