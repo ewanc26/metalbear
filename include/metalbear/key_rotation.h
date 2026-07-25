@@ -20,6 +20,13 @@ void metalbear_key_rotation_free(metalbear_key_rotation *store);
 wf_status metalbear_key_rotation_current_key(
     metalbear_key_rotation *store, wf_signing_key *out);
 
+/* Adopt `key` as the current signing key, replacing any existing one.
+ * Used when the key was generated before the store's location was known —
+ * bootstrap DID minting must compute the DID from a rotation key before it
+ * can name the account directory that key belongs in. */
+wf_status metalbear_key_rotation_import(metalbear_key_rotation *store,
+                                        const wf_signing_key *key);
+
 /* Rotate to a new signing key. Returns the new key's did:key. */
 wf_status metalbear_key_rotation_rotate(metalbear_key_rotation *store,
                                          wf_signing_key *out_new_key,

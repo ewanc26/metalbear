@@ -35,6 +35,67 @@ static void temp_path(char *buf, size_t n, const char *tag) {
     unlink(buf);
 }
 
+/*
+ * A repo opened with an explicit signing key must adopt it. Bootstrap DID
+ * minting publishes a key in the PLC document before the repo exists; if the
+ * repo generated its own key instead, every commit it signed would be
+ * unverifiable against that document.
+ */
+static int run_adopted_key(void) {
+    int failures = 0;
+    char path[256];
+    temp_path(path, sizeof(path), "adoptkey");
+
+    wf_signing_key key;
+    memset(&key, 0, sizeof(key));
+    WF_CHECK(wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &key) == WF_OK);
+    char *want_didkey = NULL;
+    WF_CHECK(wf_signing_key_public_didkey(&key, &want_didkey) == WF_OK &&
+             want_didkey);
+
+    metalbear_repo_store *store = NULL;
+    wf_status s = metalbear_repo_store_open_with_key(
+        path, "did:plc:adoptkey", "adopt.example.com", &key, &store);
+    WF_CHECK(s == WF_OK && store != NULL);
+    if (s != WF_OK || !store) {
+        free(want_didkey);
+        unlink(path);
+        return failures + 1;
+    }
+    WF_CHECK(want_didkey &&
+             strcmp(metalbear_repo_store_signing_key_did(store), want_didkey) == 0);
+
+    /* A commit signed by the adopted key must verify against it. */
+    char *uri = NULL, *cid = NULL;
+    WF_CHECK(metalbear_repo_store_create_record(
+                 store, "com.example.adopt", NULL,
+                 "{\"$type\":\"com.example.adopt\",\"n\":1}", NULL, &uri,
+                 &cid) == WF_OK);
+    int verified = 0;
+    WF_CHECK(metalbear_repo_store_verify_head(store, &verified, NULL) == WF_OK &&
+             verified == 1);
+    free(uri);
+    free(cid);
+
+    /* The key is fixed at creation: reopening must not replace it. */
+    metalbear_repo_store_free(store);
+    store = NULL;
+    wf_signing_key other;
+    memset(&other, 0, sizeof(other));
+    WF_CHECK(wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &other) == WF_OK);
+    WF_CHECK(metalbear_repo_store_open_with_key(path, "did:plc:adoptkey",
+                                                "adopt.example.com", &other,
+                                                &store) == WF_OK);
+    if (store)
+        WF_CHECK(want_didkey &&
+                 strcmp(metalbear_repo_store_signing_key_did(store),
+                        want_didkey) == 0);
+    metalbear_repo_store_free(store);
+    free(want_didkey);
+    unlink(path);
+    return failures;
+}
+
 /* ── Phase 1 + 2: unit tests (no server) ──────────────────────────── */
 
 static int run_unit(void) {
@@ -706,6 +767,7 @@ static int run_server(void) {
 
 int main(void) {
     run_unit();
+    run_adopted_key();
     run_did_immutability();
     run_server();
     WF_TEST_SUMMARY();

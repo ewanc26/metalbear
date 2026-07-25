@@ -111,6 +111,21 @@ typedef void (*metalbear_repo_store_event_cb)(const metalbear_repo_store_event *
 wf_status metalbear_repo_store_open(const char *path, const char *did,
                              const char *handle, metalbear_repo_store **out);
 
+/**
+ * As metalbear_repo_store_open, but on first creation adopts `signing_key`
+ * instead of generating one (NULL keeps the generating behaviour). Required
+ * when the account's DID document is published before the repo exists: the
+ * repo must sign with exactly the key that document advertises, or every
+ * commit it produces is unverifiable to relays and AppViews.
+ *
+ * Ignored when the store already exists — a repo's signing key is fixed at
+ * creation.
+ */
+wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
+                             const char *handle,
+                             const wf_signing_key *signing_key,
+                             metalbear_repo_store **out);
+
 /** Close a store and release all resources. Safe to call with NULL. */
 void metalbear_repo_store_free(metalbear_repo_store *store);
 

@@ -608,6 +608,13 @@ static void free_store(metalbear_repo_store *s) {
 
 wf_status metalbear_repo_store_open(const char *path, const char *did,
                              const char *handle, metalbear_repo_store **out) {
+    return metalbear_repo_store_open_with_key(path, did, handle, NULL, out);
+}
+
+wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
+                             const char *handle,
+                             const wf_signing_key *signing_key,
+                             metalbear_repo_store **out) {
     if (!path || !*path || !out) return WF_ERR_INVALID_ARG;
     *out = NULL;
 
@@ -750,7 +757,9 @@ wf_status metalbear_repo_store_open(const char *path, const char *did,
         if (!did || !*did) { free_store(s); return WF_ERR_INVALID_ARG; }
 
         wf_signing_key key;
-        if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &key) != WF_OK) {
+        if (signing_key) {
+            key = *signing_key;
+        } else if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &key) != WF_OK) {
             free_store(s);
             return WF_ERR_INTERNAL;
         }
