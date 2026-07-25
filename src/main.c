@@ -340,6 +340,14 @@ int main(void) {
 
     const char *listen_address = getenv("METALBEAR_LISTEN");
     const char *data_directory = getenv("METALBEAR_DATA");
+
+    /* Mint mode derives the account DID from the operation it is about to
+     * publish, so METALBEAR_ACCOUNT_DID is neither needed nor meaningful yet —
+     * demanding a valid one up front would make the operator supply the very
+     * identifier they are asking to have minted. */
+    const char *mint = getenv("METALBEAR_MINT_BOOTSTRAP_DID");
+    const bool minting = mint && mint[0] == '1';
+
     metalbear_config config = {
         .listen_address = listen_address && listen_address[0]
                               ? listen_address : "127.0.0.1",
@@ -349,7 +357,9 @@ int main(void) {
                               ? data_directory : "data",
         .service_did = required_env("METALBEAR_SERVICE_DID"),
         .public_url = getenv("METALBEAR_PUBLIC_URL"),
-        .account_did = required_env("METALBEAR_ACCOUNT_DID"),
+        /* Not required when minting: the DID is the output of that run. */
+        .account_did = minting ? getenv("METALBEAR_ACCOUNT_DID")
+                               : required_env("METALBEAR_ACCOUNT_DID"),
         .account_handle = required_env("METALBEAR_HANDLE"),
         .user_domain = required_env("METALBEAR_USER_DOMAIN"),
         .password = required_env("METALBEAR_PASSWORD"),
@@ -371,7 +381,8 @@ int main(void) {
     };
     /* Refuse to start on a malformed identity rather than bake it into a repo
      * that cannot be corrected afterwards. */
-    if (!did_env_is_usable("METALBEAR_ACCOUNT_DID", config.account_did) ||
+    if ((!minting &&
+         !did_env_is_usable("METALBEAR_ACCOUNT_DID", config.account_did)) ||
         !did_env_is_usable("METALBEAR_SERVICE_DID", config.service_did))
         return 1;
 
@@ -393,9 +404,8 @@ int main(void) {
         if (end && !*end && p <= 65535)
             config.smtp_port = (uint16_t)p;
     }
-    const char *mint = getenv("METALBEAR_MINT_BOOTSTRAP_DID");
-    if (mint && mint[0] == '1') {
-        if (!config.service_did || !config.account_did || !config.account_handle ||
+    if (minting) {
+        if (!config.service_did || !config.account_handle ||
             !config.user_domain || !config.password || !config.password[0] ||
             !config.data_directory) {
             fprintf(stderr, "MetalBear [ERROR] invalid config for mint mode\n");
