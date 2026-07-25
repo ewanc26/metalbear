@@ -378,7 +378,11 @@ int main(void) {
         .appview_did = getenv("METALBEAR_APPVIEW_DID"),
         .lexicon_dir = getenv("METALBEAR_LEXICON_DIR"),
         .invite_required = false,
-        .blob_upload_limit = 0,
+        /* Match the reference PDS's 5 MB default. Defaulting to unlimited
+         * makes an unauthenticated-adjacent upload path a disk-exhaustion
+         * lever on a server whose operator never thought about it; an
+         * operator who wants no cap can still set 0 explicitly. */
+        .blob_upload_limit = 5 * 1024 * 1024,
     };
     /* Refuse to start on a malformed identity rather than bake it into a repo
      * that cannot be corrected afterwards. */
