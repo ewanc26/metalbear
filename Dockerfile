@@ -68,6 +68,11 @@ COPY --from=build /src/build/_deps/cjson-build/libcjson.so* /usr/local/lib/
 COPY --from=build /src/build/_deps/libcbor-build/src/libcbor.so* /usr/local/lib/
 RUN ldconfig
 
+# Materialise /data in the image itself. It is normally a bind mount, but
+# without it in the image `docker exec` cannot even start a process (it chdirs
+# to WORKDIR first), which is exactly when you need a shell to diagnose a
+# broken mount.
+RUN mkdir -p /data
 WORKDIR /data
 ENV METALBEAR_DATA=/data
 EXPOSE 3000
