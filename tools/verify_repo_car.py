@@ -58,6 +58,24 @@ def dag_cbor_encode(obj):
 def _default(encoder, value):
     raise TypeError(f"unexpected {type(value)}")
 
+def resolve_did_doc(did, plc_url):
+    """Fetch the DID document from whoever is authoritative for the method."""
+    if did.startswith("did:plc:"):
+        url = f"{plc_url}/{did}"
+    elif did.startswith("did:web:"):
+        # did:web:host[:path:segments] -> https://host/path/segments/did.json,
+        # or /.well-known/did.json when there are no path segments.
+        rest = did[len("did:web:"):]
+        parts = rest.split(":")
+        host = parts[0]
+        url = (f"https://{host}/" + "/".join(parts[1:]) + "/did.json"
+               if len(parts) > 1 else f"https://{host}/.well-known/did.json")
+    else:
+        raise SystemExit(f"unsupported DID method: {did}")
+    req = urllib.request.Request(url, headers={"User-Agent": "metalbear-verify/1.0"})
+    return url, json.load(urllib.request.urlopen(req, timeout=20))
+
+
 def main(car_path, did, plc_url="https://plc.directory"):
     data = open(car_path, "rb").read()
     header, blocks = parse_car(data)
@@ -86,14 +104,14 @@ def main(car_path, did, plc_url="https://plc.directory"):
     sig = commit.pop("sig")
     unsigned = dag_cbor_encode(commit)
 
-    doc = json.load(urllib.request.urlopen(f"{plc_url}/{did}", timeout=20))
+    source, doc = resolve_did_doc(did, plc_url)
     vm = [m for m in doc["verificationMethod"] if m["id"].endswith("#atproto")][0]
     mb = vm["publicKeyMultibase"]
     assert mb[0] == "z"
     raw = b58decode(mb[1:])
     assert raw[:2] == b"\xe7\x01", f"expected secp256k1-pub multicodec, got {raw[:2].hex()}"
     pub_compressed = raw[2:]
-    print("PLC signing key:", mb)
+    print("published signing key:", mb, f"(from {source})")
 
     pub = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), pub_compressed)
     r = int.from_bytes(sig[:32], "big"); s = int.from_bytes(sig[32:], "big")
@@ -101,9 +119,9 @@ def main(car_path, did, plc_url="https://plc.directory"):
     try:
         pub.verify(der, unsigned, ec.ECDSA(hashes.SHA256()))
     except InvalidSignature:
-        print("COMMIT SIGNATURE: INVALID — a relay would reject this repo")
+        print("COMMIT SIGNATURE: INVALID - a relay would reject this repo")
         return 1
-    print("COMMIT SIGNATURE: VALID against the PLC-published key")
+    print("COMMIT SIGNATURE: VALID against the published key")
     return 0
 
 if __name__ == "__main__":
