@@ -2481,7 +2481,12 @@ static wf_status get_record(void *ctx, const wf_xrpc_request *request,
 }
 
 /* ── PLC DID minting helper ───────────────────────────────────── */
-static char *mint_plc_did(metalbear_server *server, const char *handle) {
+/* Mint a did:plc for `handle` and return it (caller frees), writing the
+ * account signing key the operation publishes into *out_signing_key. The
+ * repo created for this DID must adopt that key: a repo signing with anything
+ * else contradicts its own DID document, and relays reject it. */
+static char *mint_plc_did(metalbear_server *server, const char *handle,
+                          wf_signing_key *out_signing_key) {
     cJSON *root = NULL;
     cJSON *verification = NULL;
     char *unsigned_json = NULL;
@@ -2598,6 +2603,7 @@ static char *mint_plc_did(metalbear_server *server, const char *handle) {
     free(signed_json);
     free(account_didkey);
     free(rotation_didkey);
+    if (out_signing_key) *out_signing_key = acct_key;
     return plc_did;
 
 fail:
@@ -2693,6 +2699,11 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
       * server-side did:plc via PLC when configured; otherwise we mint a fresh
       * did:key so every account is independently addressable and isolated. */
     char *account_did = NULL;
+    /* Set only when this server minted the DID, in which case the repo must be
+     * created with the key that DID document publishes. */
+    wf_signing_key minted_key;
+    bool have_minted_key = false;
+    memset(&minted_key, 0, sizeof(minted_key));
     if (cJSON_IsString(did) && did->valuestring[0]) {
         account_did = strdup(did->valuestring);
         if (!account_did) {
@@ -2704,7 +2715,8 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
                  account_did, handle->valuestring);
     } else if (server->plc_url && server->plc_url[0]) {
         LOG_DEBUG("create_account: minting PLC DID for handle=%s", handle->valuestring);
-        account_did = mint_plc_did(server, handle->valuestring);
+        account_did = mint_plc_did(server, handle->valuestring, &minted_key);
+        have_minted_key = account_did != NULL;
         if (!account_did) {
             wf_xrpc_response_set_error(response, 500, "InternalError",
                                        "Could not mint PLC DID");
@@ -2739,9 +2751,10 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
      * its own signing key and persists the password verifier in the account
      * store — a real, isolated account rather than registry metadata alone. */
     metalbear_account_context *acct = NULL;
-    wf_status status = metalbear_account_context_open(
+    wf_status status = metalbear_account_context_open_with_key(
         server->service_did, server->public_url, account_did,
-        handle->valuestring, data_dir, password->valuestring, &acct);
+        handle->valuestring, data_dir, password->valuestring,
+        have_minted_key ? &minted_key : NULL, &acct);
     if (status != WF_OK) {
         free(account_did);
         free(data_dir);

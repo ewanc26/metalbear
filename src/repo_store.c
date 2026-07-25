@@ -1534,6 +1534,45 @@ static metalbear_repo_store *resolve_repo(metalbear_pds_repo_bundle *b,
 }
 
 /*
+ * Query-string parameters always arrive as JSON strings — the HTTP layer has
+ * no lexicon to coerce them against — so a plain cJSON_IsNumber /
+ * cJSON_IsTrue test silently discards every value a client actually sends and
+ * falls back to the default. `?limit=1&reverse=true` was being served as
+ * limit=50, reverse=false.
+ */
+static int query_param_int(const cJSON *params, const char *name,
+                           int fallback, int min, int max) {
+    const cJSON *p = params
+        ? cJSON_GetObjectItemCaseSensitive(params, name) : NULL;
+    long v = fallback;
+    if (cJSON_IsNumber(p)) {
+        v = (long)p->valuedouble;
+    } else if (cJSON_IsString(p) && p->valuestring[0]) {
+        char *end = NULL;
+        long parsed = strtol(p->valuestring, &end, 10);
+        if (*end != '\0') return fallback;
+        v = parsed;
+    }
+    if (v < min) v = min;
+    if (v > max) v = max;
+    return (int)v;
+}
+
+static bool query_param_bool(const cJSON *params, const char *name,
+                             bool fallback) {
+    const cJSON *p = params
+        ? cJSON_GetObjectItemCaseSensitive(params, name) : NULL;
+    if (cJSON_IsBool(p)) return cJSON_IsTrue(p);
+    if (cJSON_IsString(p) && p->valuestring[0]) {
+        if (strcmp(p->valuestring, "true") == 0 ||
+            strcmp(p->valuestring, "1") == 0) return true;
+        if (strcmp(p->valuestring, "false") == 0 ||
+            strcmp(p->valuestring, "0") == 0) return false;
+    }
+    return fallback;
+}
+
+/*
  * Report a repo-write failure using the names the lexicon actually defines.
  * The only write error com.atproto.repo.{create,put,delete}Record and
  * applyWrites declare is `InvalidSwap`, which clients branch on to retry an
@@ -1732,6 +1771,19 @@ static wf_status h_get_record(void *ctx, const wf_xrpc_request *req,
     if (st != WF_OK) {
         wf_xrpc_response_set_error(resp, 404, "RecordNotFound",
                                    "record not found");
+        return WF_OK;
+    }
+    /* The optional `cid` parameter pins the request to one version of the
+     * record. Returning the current version regardless would hand the caller
+     * different content than it asked for; the reference reports
+     * RecordNotFound when the stored CID does not match. */
+    cJSON *want_cid = cJSON_GetObjectItemCaseSensitive(p, "cid");
+    if (cJSON_IsString(want_cid) && want_cid->valuestring[0] &&
+        (!cid || strcmp(cid, want_cid->valuestring) != 0)) {
+        free(rec);
+        free(cid);
+        wf_xrpc_response_set_error(resp, 404, "RecordNotFound",
+                                   "record not found at requested cid");
         return WF_OK;
     }
     cJSON *out = cJSON_CreateObject();
@@ -2338,17 +2390,15 @@ static wf_status h_list_records(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
     cJSON *cursor = cJSON_GetObjectItemCaseSensitive(p, "cursor");
-    cJSON *limit = cJSON_GetObjectItemCaseSensitive(p, "limit");
-    cJSON *reverse = cJSON_GetObjectItemCaseSensitive(p, "reverse");
-    int lim = (limit && cJSON_IsNumber(limit)) ? limit->valueint : 50;
-    int rev = (reverse && cJSON_IsTrue(reverse)) ? 1 : 0;
+    int lim = query_param_int(p, "limit", 50, 1, 100);
+    int rev = query_param_bool(p, "reverse", false) ? 1 : 0;
     const char *cur = (cursor && cJSON_IsString(cursor)) ? cursor->valuestring
                                                           : NULL;
     char *json = NULL;
     wf_status st = metalbear_repo_store_list_records(s, collection->valuestring, cur,
                                               rev, lim, &json);
     if (st != WF_OK) {
-        wf_xrpc_response_set_error(resp, 400, "ListRecordsFailed",
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
                                     "failed to list records");
         return WF_OK;
     }

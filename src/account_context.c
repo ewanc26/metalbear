@@ -29,6 +29,15 @@ wf_status metalbear_account_context_open(const char *service_did,
                                          const char *data_directory,
                                          const char *password,
                                          metalbear_account_context **out) {
+    return metalbear_account_context_open_with_key(service_did, public_url, did,
+                                                   handle, data_directory,
+                                                   password, NULL, out);
+}
+
+wf_status metalbear_account_context_open_with_key(
+    const char *service_did, const char *public_url, const char *did,
+    const char *handle, const char *data_directory, const char *password,
+    const wf_signing_key *signing_key, metalbear_account_context **out) {
     if (!service_did || !did || !handle || !data_directory || !out)
         return WF_ERR_INVALID_ARG;
     *out = NULL;
@@ -58,7 +67,8 @@ wf_status metalbear_account_context_open(const char *service_did,
         !make_directory(blob_path))
         goto cleanup;
 
-    if (metalbear_repo_store_open(repo_path, did, handle, &ctx->repo) != WF_OK)
+    if (metalbear_repo_store_open_with_key(repo_path, did, handle, signing_key,
+                                           &ctx->repo) != WF_OK)
         goto cleanup;
     ctx->blobs = metalbear_blob_store_new(blob_path);
     if (!ctx->blobs) goto cleanup;

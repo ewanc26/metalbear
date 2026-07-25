@@ -57,6 +57,18 @@ wf_status metalbear_account_context_open(const char *service_did,
                                          const char *password,
                                          metalbear_account_context **out);
 
+/*
+ * As metalbear_account_context_open, but creates the repo with `signing_key`
+ * rather than a freshly generated one (NULL keeps the generating behaviour).
+ * Account creation publishes a signing key in the account's DID document
+ * before the repo exists; the repo must then adopt exactly that key, or every
+ * commit it signs is unverifiable to relays and AppViews.
+ */
+wf_status metalbear_account_context_open_with_key(
+    const char *service_did, const char *public_url, const char *did,
+    const char *handle, const char *data_directory, const char *password,
+    const wf_signing_key *signing_key, metalbear_account_context **out);
+
 /* Free every store in the context and the context itself. Safe with NULL. */
 void metalbear_account_context_close(metalbear_account_context *ctx);
 
