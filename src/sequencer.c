@@ -452,6 +452,17 @@ wf_status metalbear_sequencer_reconcile_account(metalbear_sequencer *s,
         s, did, active, active ? NULL : "deactivated");
 }
 
+/*
+ * Fetch the first event after `cursor`.
+ *
+ * Returns 1 with an owned frame, 0 when the stream is simply up to date, and
+ * -1 when the log could not be read at all. That last case used to be folded
+ * into 0: a failing query — a corrupt database, most obviously — looked
+ * identical to "no new events", so a subscriber sat there being told nothing
+ * had happened, forever, while every later event piled up behind the
+ * unreadable one. The connection stayed open and healthy-looking and the
+ * stream was silently dead, which is a great deal worse than an error.
+ */
 static int read_next_locked(metalbear_sequencer *s, int64_t cursor,
                             int64_t *seq, unsigned char **frame,
                             size_t *frame_len) {
@@ -461,10 +472,13 @@ static int read_next_locked(metalbear_sequencer *s, int64_t cursor,
     *frame_len = 0;
     if (sqlite3_prepare_v2(s->db,
             "SELECT seq,frame FROM events WHERE seq>? ORDER BY seq LIMIT 1;",
-            -1, &stmt, NULL) != SQLITE_OK)
-        return 0;
+            -1, &stmt, NULL) != SQLITE_OK) {
+        sqlite3_finalize(stmt);
+        return -1;
+    }
     sqlite3_bind_int64(stmt, 1, cursor);
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
+    int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
         int length = sqlite3_column_bytes(stmt, 1);
         const void *data = sqlite3_column_blob(stmt, 1);
         unsigned char *copy = malloc(length > 0 ? (size_t)length : 1);
@@ -475,6 +489,8 @@ static int read_next_locked(metalbear_sequencer *s, int64_t cursor,
             *frame_len = (size_t)length;
             found = 1;
         }
+    } else if (rc != SQLITE_DONE) {
+        found = -1;
     }
     sqlite3_finalize(stmt);
     return found;
@@ -515,9 +531,10 @@ static void *subscriber_main(void *raw) {
              * event arrives, so the keepalive below actually gets a turn. An
              * unbounded wait here would park this thread until the next write
              * and never ping — which is exactly what an idle firehose does. */
+            int read_rc = 0;
             for (int wait = 0; wait < 4 && !s->closing &&
-                    !read_next_locked(s, worker->cursor, &seq, &frame,
-                                      &length); wait++) {
+                    (read_rc = read_next_locked(s, worker->cursor, &seq, &frame,
+                                                &length)) == 0; wait++) {
                 struct timespec deadline;
                 clock_gettime(CLOCK_REALTIME, &deadline);
                 deadline.tv_nsec += 250000000L;
@@ -530,6 +547,24 @@ static void *subscriber_main(void *raw) {
             }
             int closing = s->closing;
             pthread_mutex_unlock(&s->mutex);
+            if (read_rc < 0) {
+                /* The log is unreadable. Say so and close, rather than hold a
+                 * connection open that will never carry another event. */
+                fprintf(stderr,
+                        "MetalBear: firehose log unreadable at cursor %lld: %s\n",
+                        (long long)worker->cursor, sqlite3_errmsg(s->db));
+                free(frame);
+                unsigned char *err = NULL;
+                size_t err_len = 0;
+                if (wf_sync_publish_error(worker->cursor, "InternalServerError",
+                                          "event log unreadable", &err,
+                                          &err_len) == WF_OK) {
+                    wf_xrpc_server_ws_send(worker->stream, err, err_len);
+                    free(err);
+                }
+                wf_xrpc_server_ws_close(worker->stream, 1011);
+                break;
+            }
             if (closing || wf_xrpc_server_ws_is_closed(worker->stream)) {
                 free(frame);
                 break;
