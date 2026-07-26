@@ -166,7 +166,26 @@ int main(void) {
     wf_xrpc_client *client = wf_xrpc_client_new(base);
     CHECK(client != NULL);
     wf_response response = {0};
-    int firehose = firehose_connect(metalbear_server_port(server), 2);
+    /*
+     * Sequence numbers are not guaranteed to start at 1 — a fresh event log is
+     * seeded above any value this host may already have issued, so a rebuilt
+     * PDS never re-hands-out cursors (see seed_sequence_floor). Read the base
+     * from the seeded events and express every cursor below relative to it,
+     * rather than hard-coding absolutes that are an implementation detail.
+     */
+    int64_t seq_base = 0;
+    {
+        int probe = firehose_connect(metalbear_server_port(server), 0);
+        CHECK(probe >= 0);
+        wf_subscribe_event first = {0};
+        CHECK(probe >= 0 && firehose_read(probe, &first));
+        seq_base = first.seq - 1;   /* seq of the first event, minus one */
+        CHECK(seq_base >= 0);
+        wf_subscribe_event_free(&first);
+        if (probe >= 0) close(probe);
+    }
+
+    int firehose = firehose_connect(metalbear_server_port(server), seq_base + 2);
     CHECK(firehose >= 0);
 
     CHECK(wf_xrpc_query(client, "_health", NULL, &response) == WF_OK);
@@ -979,7 +998,7 @@ int main(void) {
     wf_subscribe_event live_event = {0};
     CHECK(firehose >= 0 && firehose_read(firehose, &live_event));
     CHECK(live_event.type == WF_SUBSCRIBE_EVENT_COMMIT);
-    CHECK(live_event.seq == 3);
+    CHECK(live_event.seq == seq_base + 3);
     CHECK(strcmp(live_event.data.commit.did, "did:plc:metalbeartest") == 0);
     CHECK(live_event.data.commit.ops_count == 1);
     if (live_event.data.commit.ops_count == 1) {
@@ -991,7 +1010,9 @@ int main(void) {
     wf_subscribe_event_free(&live_event);
     if (firehose >= 0) close(firehose);
 
-    firehose = firehose_connect(metalbear_server_port(server), 999);
+    /* Comfortably past the head, whatever the base happens to be. */
+    firehose = firehose_connect(metalbear_server_port(server),
+                                seq_base + 100000);
     CHECK(firehose >= 0);
     wf_subscribe_event future_event = {0};
     CHECK(firehose >= 0 && firehose_read(firehose, &future_event));
@@ -1209,7 +1230,7 @@ int main(void) {
     /* deleteToken was not consumed — still valid for later use */
     free(delete_token);
 
-    firehose = firehose_connect(metalbear_server_port(server), 3);
+    firehose = firehose_connect(metalbear_server_port(server), seq_base + 3);
     CHECK(firehose >= 0);
     wf_xrpc_client_set_auth(client, access_token);
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.deactivateAccount",
@@ -1219,7 +1240,7 @@ int main(void) {
     wf_subscribe_event deactivated_event = {0};
     CHECK(firehose >= 0 && firehose_read(firehose, &deactivated_event));
     CHECK(deactivated_event.type == WF_SUBSCRIBE_EVENT_ACCOUNT);
-    CHECK(deactivated_event.seq == 4);
+    CHECK(deactivated_event.seq == seq_base + 4);
     CHECK(!deactivated_event.data.account.active);
     CHECK(deactivated_event.data.account.has_status &&
           strcmp(deactivated_event.data.account.status, "deactivated") == 0);
@@ -1278,12 +1299,13 @@ int main(void) {
                 &response) == WF_OK);
             wf_response_free(&response);
 
-            firehose = firehose_connect(metalbear_server_port(server), 2);
+            firehose = firehose_connect(metalbear_server_port(server),
+                                        seq_base + 2);
             CHECK(firehose >= 0);
             wf_subscribe_event replay_event = {0};
             CHECK(firehose >= 0 && firehose_read(firehose, &replay_event));
             CHECK(replay_event.type == WF_SUBSCRIBE_EVENT_COMMIT);
-            CHECK(replay_event.seq == 3);
+            CHECK(replay_event.seq == seq_base + 3);
             CHECK(replay_event.data.commit.ops_count == 1);
             if (replay_event.data.commit.ops_count == 1)
                 CHECK(strcmp(replay_event.data.commit.ops[0].path,
@@ -1301,7 +1323,8 @@ int main(void) {
             cJSON_Delete(json);
             wf_response_free(&response);
 
-            firehose = firehose_connect(metalbear_server_port(server), 4);
+            firehose = firehose_connect(metalbear_server_port(server),
+                                        seq_base + 4);
             CHECK(firehose >= 0);
             CHECK(wf_xrpc_procedure(client,
                     "com.atproto.server.activateAccount", "{}", &response) ==
@@ -1311,18 +1334,18 @@ int main(void) {
             wf_subscribe_event activation_event = {0};
             CHECK(firehose >= 0 && firehose_read(firehose, &activation_event));
             CHECK(activation_event.type == WF_SUBSCRIBE_EVENT_IDENTITY &&
-                  activation_event.seq == 5);
+                  activation_event.seq == seq_base + 5);
             wf_subscribe_event_free(&activation_event);
             memset(&activation_event, 0, sizeof(activation_event));
             CHECK(firehose >= 0 && firehose_read(firehose, &activation_event));
             CHECK(activation_event.type == WF_SUBSCRIBE_EVENT_ACCOUNT &&
-                  activation_event.seq == 6 &&
+                  activation_event.seq == seq_base + 6 &&
                   activation_event.data.account.active);
             wf_subscribe_event_free(&activation_event);
             memset(&activation_event, 0, sizeof(activation_event));
             CHECK(firehose >= 0 && firehose_read(firehose, &activation_event));
             CHECK(activation_event.type == WF_SUBSCRIBE_EVENT_SYNC &&
-                  activation_event.seq == 7 &&
+                  activation_event.seq == seq_base + 7 &&
                   activation_event.data.sync.blocks_len > 0);
             wf_subscribe_event_free(&activation_event);
             if (firehose >= 0) close(firehose);
