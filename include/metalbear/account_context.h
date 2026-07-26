@@ -34,7 +34,11 @@ typedef struct metalbear_account_context {
     metalbear_blob_store *blobs;
     metalbear_auth_store *auth;
     metalbear_account_store *account;
+    /* The PDS-wide event log this account publishes into. Borrowed when the
+     * server supplies one (the normal case) and owned only in the standalone
+     * fallback — see `owns_sequencer`. */
     metalbear_sequencer *sequencer;
+    bool owns_sequencer;
     metalbear_oauth_store *oauth;
     metalbear_key_rotation *key_rotation;
     bool active;
@@ -68,6 +72,23 @@ wf_status metalbear_account_context_open_with_key(
     const char *service_did, const char *public_url, const char *did,
     const char *handle, const char *data_directory, const char *password,
     const wf_signing_key *signing_key, metalbear_account_context **out);
+
+/*
+ * As above, but publishes repo events into `sequencer` — the PDS-wide event
+ * log — instead of opening one per account.
+ *
+ * com.atproto.sync.subscribeRepos is a single server-wide stream: a relay
+ * subscribes to the host, not to an account. With a sequencer per account only
+ * one of them could ever be served, so every other account's commits were
+ * invisible to the network however correctly they were recorded. Pass the
+ * server's sequencer here; NULL keeps the standalone per-account behaviour,
+ * which is only useful for tests that open a context on its own.
+ */
+wf_status metalbear_account_context_open_shared(
+    const char *service_did, const char *public_url, const char *did,
+    const char *handle, const char *data_directory, const char *password,
+    const wf_signing_key *signing_key, metalbear_sequencer *sequencer,
+    metalbear_account_context **out);
 
 /* Free every store in the context and the context itself. Safe with NULL. */
 void metalbear_account_context_close(metalbear_account_context *ctx);
