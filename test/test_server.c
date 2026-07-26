@@ -1363,24 +1363,26 @@ int main(void) {
             CHECK(response.status == 200);
             wf_response_free(&response);
             /* Activation emits identity, then account, then sync — in that
-             * order and strictly after the deactivation. */
+             * order and strictly after the deactivation.  Skip past any
+             * reconciliation events for other accounts that startup may
+             * have emitted. */
             wf_subscribe_event activation_event = {0};
-            CHECK(firehose >= 0 && firehose_read(firehose, &activation_event));
-            CHECK(activation_event.type == WF_SUBSCRIBE_EVENT_IDENTITY &&
-                  activation_event.seq > deactivated_seq);
+            CHECK(firehose >= 0 && firehose_read_until(firehose,
+                    WF_SUBSCRIBE_EVENT_IDENTITY, &activation_event));
+            CHECK(activation_event.seq > deactivated_seq);
             int64_t prev_seq = activation_event.seq;
             wf_subscribe_event_free(&activation_event);
             memset(&activation_event, 0, sizeof(activation_event));
-            CHECK(firehose >= 0 && firehose_read(firehose, &activation_event));
-            CHECK(activation_event.type == WF_SUBSCRIBE_EVENT_ACCOUNT &&
-                  activation_event.seq > prev_seq &&
+            CHECK(firehose >= 0 && firehose_read_until(firehose,
+                    WF_SUBSCRIBE_EVENT_ACCOUNT, &activation_event));
+            CHECK(activation_event.seq > prev_seq &&
                   activation_event.data.account.active);
             prev_seq = activation_event.seq;
             wf_subscribe_event_free(&activation_event);
             memset(&activation_event, 0, sizeof(activation_event));
-            CHECK(firehose >= 0 && firehose_read(firehose, &activation_event));
-            CHECK(activation_event.type == WF_SUBSCRIBE_EVENT_SYNC &&
-                  activation_event.seq > prev_seq &&
+            CHECK(firehose >= 0 && firehose_read_until(firehose,
+                    WF_SUBSCRIBE_EVENT_SYNC, &activation_event));
+            CHECK(activation_event.seq > prev_seq &&
                   activation_event.data.sync.blocks_len > 0);
             /* The lexicon caps #sync.blocks at 10000 bytes: it carries the
              * commit block alone, not the repo. Exporting everything here
