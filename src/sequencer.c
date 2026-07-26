@@ -420,6 +420,10 @@ static int read_next_locked(metalbear_sequencer *s, int64_t cursor,
     return found;
 }
 
+/* Keepalive cadence for an idle firehose. Must stay well under the tightest
+ * idle timeout in a typical deployment path (nginx defaults to 60s). */
+#define METALBEAR_FIREHOSE_PING_SECONDS 20
+
 static void *subscriber_main(void *raw) {
     subscriber_worker *worker = raw;
     metalbear_sequencer *s = worker->sequencer;
@@ -433,14 +437,27 @@ static void *subscriber_main(void *raw) {
         }
         wf_xrpc_server_ws_close(worker->stream, 1008);
     } else {
+        /*
+         * A firehose is idle most of the time on a small server, and an idle
+         * connection looks dead to every proxy in the path — nginx's
+         * proxy_read_timeout defaults to 60s, CDNs impose their own. Relays
+         * were observed reconnecting every ~60s against this PDS for exactly
+         * that reason, never staying attached long enough to be useful.
+         * Ping periodically so the connection survives the quiet.
+         */
+        time_t last_activity = time(NULL);
         while (!wf_xrpc_server_ws_is_closed(worker->stream)) {
             unsigned char *frame = NULL;
             size_t length = 0;
             int64_t seq = 0;
             pthread_mutex_lock(&s->mutex);
-            while (!s->closing &&
-                   !read_next_locked(s, worker->cursor, &seq, &frame,
-                                     &length)) {
+            /* Bounded wait: hand control back to the outer loop even when no
+             * event arrives, so the keepalive below actually gets a turn. An
+             * unbounded wait here would park this thread until the next write
+             * and never ping — which is exactly what an idle firehose does. */
+            for (int wait = 0; wait < 4 && !s->closing &&
+                    !read_next_locked(s, worker->cursor, &seq, &frame,
+                                      &length); wait++) {
                 struct timespec deadline;
                 clock_gettime(CLOCK_REALTIME, &deadline);
                 deadline.tv_nsec += 250000000L;
@@ -465,6 +482,14 @@ static void *subscriber_main(void *raw) {
                 }
                 worker->cursor = seq;
                 free(frame);
+                last_activity = time(NULL);
+            } else {
+                /* Comfortably inside a 60s proxy idle timeout. */
+                time_t now = time(NULL);
+                if (now - last_activity >= METALBEAR_FIREHOSE_PING_SECONDS) {
+                    if (wf_xrpc_server_ws_ping(worker->stream) != WF_OK) break;
+                    last_activity = now;
+                }
             }
         }
     }
