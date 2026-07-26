@@ -413,6 +413,9 @@ static int run_unit(void) {
              "]", rkey1, rkey1);
     char *ccid = NULL, *crev = NULL, *cres = NULL;
     s = metalbear_repo_store_apply_writes(store, writes, NULL, &ccid, &crev, &cres);
+    if (s != WF_OK)
+        fprintf(stderr, "DEBUG applyWrites: status=%d rkey1=%s writes=%s\n",
+                (int)s, rkey1, writes);
     WF_CHECK(s == WF_OK && ccid && crev && cres);
     /* WF_CHECK records a failure and carries on, so anything that dereferences
      * an out-param has to be guarded on the check above actually holding.
