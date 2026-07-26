@@ -141,6 +141,27 @@ static int firehose_read(int fd, wf_subscribe_event *event) {
     return status == WF_OK;
 }
 
+/*
+ * Read forward until an event of `type` arrives, discarding the rest.
+ *
+ * Assertions here used to pin absolute sequence numbers (seq_base + 3, + 4,
+ * …), which made every one of them break whenever the number of events the
+ * server emits changed — as it did when account creation began announcing
+ * #identity/#account/#sync on the host log. What these tests actually care
+ * about is that a given event appears, in order, after the write that caused
+ * it; the exact ordinal is an implementation detail of everything that ran
+ * before. Bounded so a missing event fails rather than hangs.
+ */
+static int firehose_read_until(int fd, int type, wf_subscribe_event *event) {
+    for (int i = 0; i < 32; i++) {
+        memset(event, 0, sizeof(*event));
+        if (!firehose_read(fd, event)) return 0;
+        if (event->type == type) return 1;
+        wf_subscribe_event_free(event);
+    }
+    return 0;
+}
+
 int main(void) {
     char directory[] = "/tmp/metalbear-test-XXXXXX";
     CHECK(mkdtemp(directory) != NULL);
@@ -996,9 +1017,13 @@ int main(void) {
     cJSON_Delete(json);
     wf_response_free(&response);
     wf_subscribe_event live_event = {0};
-    CHECK(firehose >= 0 && firehose_read(firehose, &live_event));
+    CHECK(firehose >= 0 &&
+          firehose_read_until(firehose, WF_SUBSCRIBE_EVENT_COMMIT,
+                              &live_event));
     CHECK(live_event.type == WF_SUBSCRIBE_EVENT_COMMIT);
-    CHECK(live_event.seq == seq_base + 3);
+    /* Anchor the later assertions to where this commit actually landed. */
+    int64_t commit_seq = live_event.seq;
+    CHECK(commit_seq > seq_base);
     CHECK(strcmp(live_event.data.commit.did, "did:plc:metalbeartest") == 0);
     CHECK(live_event.data.commit.ops_count == 1);
     if (live_event.data.commit.ops_count == 1) {
@@ -1230,7 +1255,7 @@ int main(void) {
     /* deleteToken was not consumed — still valid for later use */
     free(delete_token);
 
-    firehose = firehose_connect(metalbear_server_port(server), seq_base + 3);
+    firehose = firehose_connect(metalbear_server_port(server), commit_seq);
     CHECK(firehose >= 0);
     wf_xrpc_client_set_auth(client, access_token);
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.deactivateAccount",
@@ -1238,9 +1263,12 @@ int main(void) {
     CHECK(response.status == 200);
     wf_response_free(&response);
     wf_subscribe_event deactivated_event = {0};
-    CHECK(firehose >= 0 && firehose_read(firehose, &deactivated_event));
+    CHECK(firehose >= 0 &&
+          firehose_read_until(firehose, WF_SUBSCRIBE_EVENT_ACCOUNT,
+                              &deactivated_event));
     CHECK(deactivated_event.type == WF_SUBSCRIBE_EVENT_ACCOUNT);
-    CHECK(deactivated_event.seq == seq_base + 4);
+    int64_t deactivated_seq = deactivated_event.seq;
+    CHECK(deactivated_seq > commit_seq);
     CHECK(!deactivated_event.data.account.active);
     CHECK(deactivated_event.data.account.has_status &&
           strcmp(deactivated_event.data.account.status, "deactivated") == 0);
@@ -1299,13 +1327,16 @@ int main(void) {
                 &response) == WF_OK);
             wf_response_free(&response);
 
+            /* Replay from just before the commit: it must come back. */
             firehose = firehose_connect(metalbear_server_port(server),
-                                        seq_base + 2);
+                                        commit_seq - 1);
             CHECK(firehose >= 0);
             wf_subscribe_event replay_event = {0};
-            CHECK(firehose >= 0 && firehose_read(firehose, &replay_event));
+            CHECK(firehose >= 0 &&
+                  firehose_read_until(firehose, WF_SUBSCRIBE_EVENT_COMMIT,
+                                      &replay_event));
             CHECK(replay_event.type == WF_SUBSCRIBE_EVENT_COMMIT);
-            CHECK(replay_event.seq == seq_base + 3);
+            CHECK(replay_event.seq == commit_seq);
             CHECK(replay_event.data.commit.ops_count == 1);
             if (replay_event.data.commit.ops_count == 1)
                 CHECK(strcmp(replay_event.data.commit.ops[0].path,
@@ -1324,28 +1355,32 @@ int main(void) {
             wf_response_free(&response);
 
             firehose = firehose_connect(metalbear_server_port(server),
-                                        seq_base + 4);
+                                        deactivated_seq);
             CHECK(firehose >= 0);
             CHECK(wf_xrpc_procedure(client,
                     "com.atproto.server.activateAccount", "{}", &response) ==
                   WF_OK);
             CHECK(response.status == 200);
             wf_response_free(&response);
+            /* Activation emits identity, then account, then sync — in that
+             * order and strictly after the deactivation. */
             wf_subscribe_event activation_event = {0};
             CHECK(firehose >= 0 && firehose_read(firehose, &activation_event));
             CHECK(activation_event.type == WF_SUBSCRIBE_EVENT_IDENTITY &&
-                  activation_event.seq == seq_base + 5);
+                  activation_event.seq > deactivated_seq);
+            int64_t prev_seq = activation_event.seq;
             wf_subscribe_event_free(&activation_event);
             memset(&activation_event, 0, sizeof(activation_event));
             CHECK(firehose >= 0 && firehose_read(firehose, &activation_event));
             CHECK(activation_event.type == WF_SUBSCRIBE_EVENT_ACCOUNT &&
-                  activation_event.seq == seq_base + 6 &&
+                  activation_event.seq > prev_seq &&
                   activation_event.data.account.active);
+            prev_seq = activation_event.seq;
             wf_subscribe_event_free(&activation_event);
             memset(&activation_event, 0, sizeof(activation_event));
             CHECK(firehose >= 0 && firehose_read(firehose, &activation_event));
             CHECK(activation_event.type == WF_SUBSCRIBE_EVENT_SYNC &&
-                  activation_event.seq == seq_base + 7 &&
+                  activation_event.seq > prev_seq &&
                   activation_event.data.sync.blocks_len > 0);
             wf_subscribe_event_free(&activation_event);
             if (firehose >= 0) close(firehose);
