@@ -30,11 +30,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-# glibc hides POSIX/BSD symbols (struct sigaction, strdup, nanosleep, gmtime_r,
-# ...) under strict ISO-C mode, which macOS/BSD libc expose by default. Define
-# _DEFAULT_SOURCE so the (portable) codebase builds on Linux without source
-# changes.
-ENV CFLAGS="-D_DEFAULT_SOURCE"
+# The POSIX feature-test macros glibc needs are set by Wolfram's CMake target
+# and inherited here, so no global CFLAGS override is required. Setting it here
+# only masked the problem for this image while CI and every other consumer
+# still broke.
 COPY MetalBear ./MetalBear
 COPY wolfram ./wolfram
 
