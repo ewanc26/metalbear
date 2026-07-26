@@ -10,6 +10,8 @@ struct metalbear_account_cache {
     char *service_did;
     char *public_url;
     char *data_directory;
+    /* Borrowed: the PDS-wide event log every cached account publishes into. */
+    metalbear_sequencer *sequencer;
     pthread_mutex_t lock;
     struct cache_entry {
         char *did;
@@ -36,6 +38,11 @@ metalbear_account_cache *metalbear_account_cache_new(const char *service_did,
         return NULL;
     }
     return cache;
+}
+
+void metalbear_account_cache_set_sequencer(metalbear_account_cache *cache,
+                                           metalbear_sequencer *sequencer) {
+    if (cache) cache->sequencer = sequencer;
 }
 
 void metalbear_account_cache_free(metalbear_account_cache *cache) {
@@ -81,9 +88,9 @@ metalbear_account_context *metalbear_account_cache_get(
     }
 
     metalbear_account_context *ctx = NULL;
-    wf_status status = metalbear_account_context_open(
+    wf_status status = metalbear_account_context_open_shared(
         cache->service_did, cache->public_url, did, entry->handle,
-        entry->data_directory, NULL, &ctx);
+        entry->data_directory, NULL, NULL, cache->sequencer, &ctx);
     metalbear_account_entry_free(entry);
     if (status != WF_OK || !ctx) return NULL;
 

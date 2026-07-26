@@ -38,6 +38,17 @@ wf_status metalbear_account_context_open_with_key(
     const char *service_did, const char *public_url, const char *did,
     const char *handle, const char *data_directory, const char *password,
     const wf_signing_key *signing_key, metalbear_account_context **out) {
+    return metalbear_account_context_open_shared(service_did, public_url, did,
+                                                 handle, data_directory,
+                                                 password, signing_key, NULL,
+                                                 out);
+}
+
+wf_status metalbear_account_context_open_shared(
+    const char *service_did, const char *public_url, const char *did,
+    const char *handle, const char *data_directory, const char *password,
+    const wf_signing_key *signing_key, metalbear_sequencer *sequencer,
+    metalbear_account_context **out) {
     if (!service_did || !did || !handle || !data_directory || !out)
         return WF_ERR_INVALID_ARG;
     *out = NULL;
@@ -78,9 +89,15 @@ wf_status metalbear_account_context_open_with_key(
     if (metalbear_account_store_open(account_path, password ? password : "",
                                      &ctx->account) != WF_OK)
         goto cleanup;
-    if (metalbear_sequencer_open(seq_path, did, handle,
-                                 &ctx->sequencer) != WF_OK)
+    if (sequencer) {
+        ctx->sequencer = sequencer;      /* borrowed: the PDS-wide log */
+        ctx->owns_sequencer = false;
+    } else if (metalbear_sequencer_open(seq_path, did, handle,
+                                        &ctx->sequencer) == WF_OK) {
+        ctx->owns_sequencer = true;
+    } else {
         goto cleanup;
+    }
 
     /*
      * Wire the repo to its own sequencer here, not at the call site.
@@ -119,7 +136,8 @@ void metalbear_account_context_close(metalbear_account_context *ctx) {
     if (ctx->blobs) metalbear_blob_store_free(ctx->blobs);
     if (ctx->auth) metalbear_auth_store_free(ctx->auth);
     if (ctx->account) metalbear_account_store_free(ctx->account);
-    if (ctx->sequencer) metalbear_sequencer_free(ctx->sequencer);
+    if (ctx->sequencer && ctx->owns_sequencer)
+        metalbear_sequencer_free(ctx->sequencer);
     if (ctx->oauth) metalbear_oauth_store_free(ctx->oauth);
     if (ctx->key_rotation) metalbear_key_rotation_free(ctx->key_rotation);
     free(ctx->did);

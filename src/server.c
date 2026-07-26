@@ -132,6 +132,9 @@ struct metalbear_server {
     char *appview_did;        /* Upstream AppView DID for service-auth or NULL */
     metalbear_account_cache *account_cache;
     metalbear_report_store *reports;
+    /* The PDS-wide firehose log. subscribeRepos is one stream for the whole
+     * host, so every account publishes into this rather than its own. */
+    metalbear_sequencer *sequencer;
     /* Lexicon corpus used to validate records on write. NULL when no corpus
      * was found, in which case every write reports validationStatus
      * "unknown" rather than pretending records were checked. */
@@ -502,20 +505,30 @@ static int query_param_int(const cJSON *params, const char *name,
 static wf_status request_account_delete(void *ctx,
                                         const wf_xrpc_request *request,
                                         wf_xrpc_response *response) {
-    (void)request;
     metalbear_server *server = ctx;
+    /* The requester's own account — not the server's configured one. This
+     * route is authenticated, so there is always a subject to act on. */
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
     char token[33];
-    if (metalbear_account_create_email_token(server->bootstrap->account, "delete",
+    if (metalbear_account_create_email_token(acct->account, "delete",
                                              token, sizeof(token)) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not create deletion token");
         return WF_OK;
     }
-    /* Send confirmation email if configured */
-    if (server->email && server->account_email && server->account_email[0]) {
-        metalbear_email_send_account_deletion(
-            server->email, server->account_email, token);
-    }
+    /* Send confirmation to the requester's own address. */
+    char *acct_email = NULL;
+    metalbear_account_get_email(acct->account, &acct_email, NULL);
+    const char *to = (acct_email && acct_email[0]) ? acct_email
+                                                   : server->account_email;
+    if (server->email && to && to[0])
+        metalbear_email_send_account_deletion(server->email, to, token);
+    free(acct_email);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     cJSON_AddStringToObject(root, "token", token);
@@ -546,30 +559,42 @@ static wf_status delete_account(void *ctx, const wf_xrpc_request *request,
                                    "token is required");
         return WF_OK;
     }
-    if (!metalbear_account_verify_password(server->bootstrap->account,
+    /*
+     * Act on the account named by `did`. This took the caller's did, ignored
+     * it, and deleted the server's configured account instead — so a user
+     * deleting their own account destroyed somebody else's, and anyone holding
+     * that account's credentials could delete it while naming any did at all.
+     */
+    metalbear_account_context *acct = context_for_did(server, did->valuestring);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "Account not found");
+        return WF_OK;
+    }
+    if (!metalbear_account_verify_password(acct->account,
                                            password->valuestring)) {
         wf_xrpc_response_set_error(response, 401, "AuthenticationRequired",
                                    "Invalid password");
         return WF_OK;
     }
     wf_status token_status = metalbear_account_verify_email_token(
-        server->bootstrap->account, "delete", token->valuestring);
+        acct->account, "delete", token->valuestring);
     if (token_status != WF_OK) {
         wf_xrpc_response_set_error(response, 400, "InvalidToken",
                                    "Invalid or expired deletion token");
         return WF_OK;
     }
     /* Revoke all sessions */
-    metalbear_auth_delete_all(server->bootstrap->auth);
+    metalbear_auth_delete_all(acct->auth);
     /* Delete all app passwords and credentials */
-    metalbear_account_delete(server->bootstrap->account);
+    metalbear_account_delete(acct->account);
     /* Deactivate the account */
-    metalbear_account_deactivate(server->bootstrap->account, NULL);
+    metalbear_account_deactivate(acct->account, NULL);
     /* Remove from the account registry */
-    metalbear_account_registry_remove(server->registry, server->bootstrap->did);
+    metalbear_account_registry_remove(server->registry, acct->did);
     /* Emit deactivation event to firehose */
-    metalbear_sequencer_account_status(
-        server->bootstrap->sequencer, server->bootstrap->did, 0, "deleted");
+    metalbear_sequencer_account_status(acct->sequencer, acct->did, 0,
+                                       "deleted");
     return WF_OK;
 }
 
@@ -3374,6 +3399,63 @@ static wf_status update_email(void *ctx, const wf_xrpc_request *request,
     return WF_OK;
 }
 
+/*
+ * Find the account a password-reset request refers to.
+ *
+ * These flows are unauthenticated — the caller presents an email address, or a
+ * token minted against one account — so the account has to be looked up rather
+ * than assumed. Both previously operated on the server's configured account
+ * regardless of what was presented, which meant a user resetting their own
+ * password reset somebody else's, and no other account could reset at all.
+ *
+ * Linear over the registry, which is fine: both routes are rate-limited by
+ * their email round-trip and are not on any hot path.
+ */
+static metalbear_account_context *context_for_email(metalbear_server *server,
+                                                    const char *email) {
+    if (!email || !email[0]) return NULL;
+    metalbear_account_entry *entries = NULL;
+    size_t count = 0;
+    if (metalbear_account_registry_list(server->registry, &entries, &count) !=
+        WF_OK)
+        return NULL;
+    metalbear_account_context *found = NULL;
+    for (size_t i = 0; i < count && !found; i++) {
+        metalbear_account_context *acct = context_for_did(server,
+                                                          entries[i].did);
+        if (!acct) continue;
+        char *stored = NULL;
+        metalbear_account_get_email(acct->account, &stored, NULL);
+        if (stored && stored[0] && strcmp(stored, email) == 0) found = acct;
+        free(stored);
+    }
+    metalbear_account_entries_free(entries, count);
+    return found;
+}
+
+/* Find the account an email token was minted for. `purpose` is "reset" or
+ * "delete". Tokens are per-account, so the only way to identify the account
+ * from a bare token is to ask each one whether it issued it. */
+static metalbear_account_context *context_for_email_token(
+    metalbear_server *server, const char *purpose, const char *token) {
+    if (!purpose || !token || !token[0]) return NULL;
+    metalbear_account_entry *entries = NULL;
+    size_t count = 0;
+    if (metalbear_account_registry_list(server->registry, &entries, &count) !=
+        WF_OK)
+        return NULL;
+    metalbear_account_context *found = NULL;
+    for (size_t i = 0; i < count && !found; i++) {
+        metalbear_account_context *acct = context_for_did(server,
+                                                          entries[i].did);
+        if (acct && metalbear_account_verify_email_token(acct->account, purpose,
+                                                         token) == WF_OK)
+            found = acct;
+    }
+    metalbear_account_entries_free(entries, count);
+    return found;
+}
+
 static wf_status request_password_reset(void *ctx,
                                         const wf_xrpc_request *request,
                                         wf_xrpc_response *response) {
@@ -3386,10 +3468,12 @@ static wf_status request_password_reset(void *ctx,
                                    "email is required");
         return WF_OK;
     }
-    /* Look up the email on file to verify it matches */
+    /* Look the account up by the address presented, rather than assuming one. */
+    metalbear_account_context *acct =
+        context_for_email(server, email_param->valuestring);
     char *email = NULL;
-    metalbear_account_get_email(server->bootstrap->account, &email, NULL);
-    if (!email || !email[0] ||
+    if (acct) metalbear_account_get_email(acct->account, &email, NULL);
+    if (!acct || !email || !email[0] ||
         strcmp(email, email_param->valuestring) != 0) {
         free(email);
         /* Always return success to avoid email enumeration */
@@ -3399,7 +3483,7 @@ static wf_status request_password_reset(void *ctx,
         return set_json(response, root);
     }
     char token[33];
-    if (metalbear_account_create_email_token(server->bootstrap->account, "reset",
+    if (metalbear_account_create_email_token(acct->account, "reset",
                                              token, sizeof(token)) != WF_OK) {
         free(email);
         wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -3432,15 +3516,15 @@ static wf_status reset_password(void *ctx, const wf_xrpc_request *request,
                                     "password is required");
         return WF_OK;
     }
-    wf_status status = metalbear_account_verify_email_token(
-        server->bootstrap->account, "reset", token->valuestring);
-    if (status != WF_OK) {
+    metalbear_account_context *acct =
+        context_for_email_token(server, "reset", token->valuestring);
+    if (!acct) {
         wf_xrpc_response_set_error(response, 400, "InvalidToken",
                                    "Invalid or expired reset token");
         return WF_OK;
     }
-    status = metalbear_account_reset_password(server->bootstrap->account,
-                                              password->valuestring);
+    wf_status status = metalbear_account_reset_password(acct->account,
+                                                        password->valuestring);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not reset password");
@@ -5814,12 +5898,32 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         LOG_ERROR("cannot compute primary account directory");
         goto fail;
     }
-    if (metalbear_account_context_open(config->service_did,
-                                       server->public_url,
-                                       config->account_did,
-                                       config->account_handle,
-                                       primary_dir, config->password,
-                                       &server->bootstrap) != WF_OK) {
+    /* One event log for the host, at the data root — not inside any account's
+     * directory. A relay subscribes to the server, not to an account. */
+    char *seq_path = NULL;
+    if (asprintf(&seq_path, "%s/sequencer.sqlite3",
+                 config->data_directory) < 0 || !seq_path) {
+        LOG_ERROR("cannot compute sequencer path");
+        free(primary_dir);
+        goto fail;
+    }
+    if (metalbear_sequencer_open(seq_path, config->account_did,
+                                 config->account_handle,
+                                 &server->sequencer) != WF_OK) {
+        LOG_ERROR("cannot open sequencer at %s", seq_path);
+        free(seq_path);
+        free(primary_dir);
+        goto fail;
+    }
+    free(seq_path);
+
+    if (metalbear_account_context_open_shared(config->service_did,
+                                              server->public_url,
+                                              config->account_did,
+                                              config->account_handle,
+                                              primary_dir, config->password,
+                                              NULL, server->sequencer,
+                                              &server->bootstrap) != WF_OK) {
         LOG_ERROR("cannot open primary account context");
         free(primary_dir);
         goto fail;
@@ -5868,16 +5972,13 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
     free(reports_path);
-    metalbear_repo_store_set_event_callback(server->bootstrap->repo,
-                                     metalbear_sequencer_repo_event,
-                                     server->bootstrap->sequencer);
     if (metalbear_sequencer_reconcile_account(
-            server->bootstrap->sequencer, server->bootstrap->did,
+            server->sequencer, server->bootstrap->did,
             metalbear_account_is_active(server->bootstrap->account)) != WF_OK) {
         LOG_ERROR("cannot reconcile account sequence");
         goto fail;
     }
-    if (metalbear_sequencer_reconcile_repo(server->bootstrap->sequencer,
+    if (metalbear_sequencer_reconcile_repo(server->sequencer,
                                            server->bootstrap->repo) != WF_OK) {
         LOG_ERROR("cannot reconcile repository sequence");
         goto fail;
@@ -5899,6 +6000,11 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
      * above, so the cache opens secondary accounts with the same config. */
     server->account_cache = metalbear_account_cache_new(
         server->service_did, server->public_url, server->data_directory);
+    /* Every account the cache opens publishes into the one stream
+     * subscribeRepos serves; without this their commits go to a log nothing
+     * reads. */
+    metalbear_account_cache_set_sequencer(server->account_cache,
+                                          server->sequencer);
     if (!server->account_cache) {
         LOG_ERROR("cannot create account cache");
         goto fail;
@@ -5991,7 +6097,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "com.atproto.sync.getHead", get_head, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.sync.getCheckout", get_checkout, server) != WF_OK ||
-        metalbear_sequencer_register(server->bootstrap->sequencer,
+        metalbear_sequencer_register(server->sequencer,
                                      server->xrpc) != WF_OK) {
         LOG_ERROR("cannot register sync export routes");
         goto fail;
@@ -6243,7 +6349,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                                       : 1000;
 
     /* Apply initial retention */
-    metalbear_sequencer_retain(server->bootstrap->sequencer,
+    metalbear_sequencer_retain(server->sequencer,
                                server->retention_max_age,
                                server->retention_min_events);
 
@@ -6266,6 +6372,8 @@ void metalbear_server_free(metalbear_server *server) {
         metalbear_repo_store_set_event_callback(server->bootstrap->repo, NULL, NULL);
         metalbear_account_context_close(server->bootstrap);
     }
+    /* Freed after the account contexts, which borrow it. */
+    metalbear_sequencer_free(server->sequencer);
     metalbear_account_registry_free(server->registry);
     metalbear_email_free(server->email);
     metalbear_report_store_free(server->reports);
