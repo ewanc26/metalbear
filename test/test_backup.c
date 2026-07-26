@@ -17,8 +17,25 @@
 #define TEST_BACKUP TEST_DIR "/backup.dat"
 #define TEST_RESTORE_DIR TEST_DIR "/restore"
 
+/*
+ * Clear anything a previous run left behind.
+ *
+ * Cleanup only happened at the end of main, so an assertion failure anywhere
+ * left TEST_DB in place — and the next run then failed on CREATE TABLE before
+ * reaching the code under test, turning one bad run into a permanently red
+ * test that says nothing about the current build.
+ */
+static void reset_test_dir(void) {
+    unlink(TEST_RESTORE_DIR "/test.sqlite3");
+    rmdir(TEST_RESTORE_DIR);
+    unlink(TEST_BACKUP);
+    unlink(TEST_DB);
+    rmdir(TEST_DIR);
+}
+
 static void test_backup_create_restore(void) {
     printf("test_backup_create_restore...\n");
+    reset_test_dir();
     mkdir(TEST_DIR, 0700);
     /* Create a test database */
     sqlite3 *db = NULL;
@@ -117,6 +134,72 @@ static void test_sequencer_retention(void) {
 }
 
 
+/* Read the pruning high-water mark straight from the log. */
+static int64_t read_pruned_through(const char *path) {
+    sqlite3 *db = NULL;
+    sqlite3_stmt *stmt = NULL;
+    int64_t value = -1;
+    if (sqlite3_open(path, &db) == SQLITE_OK &&
+        sqlite3_prepare_v2(db, "SELECT value FROM meta "
+                               "WHERE key='pruned_through';",
+                           -1, &stmt, NULL) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW) {
+        value = sqlite3_column_int64(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return value;
+}
+
+/*
+ * Retention must record what it deleted, and record nothing when it deletes
+ * nothing.
+ *
+ * That mark is the only honest basis for answering OutdatedCursor: once a row
+ * is gone there is nothing left to infer the deletion from, the log simply
+ * starts later. Note it cannot be inferred from the oldest surviving event
+ * either — sequence numbers are seeded from wall-clock time, so a brand-new
+ * log legitimately starts in the billions and a subscriber asking from 0 has
+ * missed nothing at all.
+ */
+static void test_sequencer_prune_watermark(void) {
+    printf("test_sequencer_prune_watermark...\n");
+    char path[] = "/tmp/test_prune_XXXXXX";
+    int fd = mkstemp(path);
+    assert(fd >= 0);
+    close(fd);
+
+    metalbear_sequencer *seq = NULL;
+    assert(metalbear_sequencer_open(path, "did:plc:test", "test.example.com",
+                                    &seq) == WF_OK);
+    for (int i = 0; i < 10; i++) {
+        assert(metalbear_sequencer_account_status(seq, "did:plc:test", 1,
+                                                  NULL) == WF_OK);
+    }
+
+    /* Keeping more events than exist must delete nothing, and so must leave
+     * no mark: a cursor of 0 here has missed nothing. */
+    assert(metalbear_sequencer_retain(seq, 0, 100) == WF_OK);
+    assert(read_pruned_through(path) == -1);
+
+    /*
+     * Now prune for real. created_at is stored at one-second granularity, so
+     * rows written in the current second are not yet "older than now" — wait
+     * past the boundary rather than letting the result depend on where in the
+     * second the test happened to start.
+     */
+    int64_t current = metalbear_sequencer_current(seq);
+    sleep(2);
+    assert(metalbear_sequencer_retain(seq, 0, 3) == WF_OK);
+    int64_t mark = read_pruned_through(path);
+    assert(mark > 0);
+    assert(mark <= current);
+
+    metalbear_sequencer_free(seq);
+    unlink(path);
+    printf("  PASS\n");
+}
+
 /*
  * A firehose sequence must not restart at 1 on a fresh event log. Cursors are
  * per-host and consumers persist them, so a rebuilt PDS that reuses numbers it
@@ -162,6 +245,7 @@ int main(void) {
     test_email_config();
     test_sequencer_retention();
     test_sequencer_seq_floor();
+    test_sequencer_prune_watermark();
     printf("All tests passed.\n");
     /* Cleanup */
     unlink(TEST_DB);

@@ -38,6 +38,11 @@ typedef struct subscriber_worker {
     int64_t cursor;
     const char *error;
     const char *message;
+    /* The requested cursor pointed before the oldest retained event, so the
+     * span between them can never be delivered. The subscriber is told with
+     * #info{OutdatedCursor} before the replay starts, rather than being
+     * silently repositioned. */
+    int outdated;
 } subscriber_worker;
 
 static void timestamp_now(char out[64]) {
@@ -67,6 +72,32 @@ int64_t metalbear_sequencer_current(metalbear_sequencer *s) {
     int64_t seq = current_locked(s);
     pthread_mutex_unlock(&s->mutex);
     return seq;
+}
+
+/*
+ * The highest sequence number retention has deleted, or 0 if it never has.
+ *
+ * This is the only honest basis for OutdatedCursor. "Older than the oldest
+ * surviving event" is not the same question: sequence numbers are seeded from
+ * wall-clock time so a brand-new log legitimately starts in the billions, and
+ * a client asking from 0 there has missed nothing — the events it is asking
+ * about never existed. Only events this server actually deleted represent a
+ * gap it can never serve.
+ */
+static int64_t pruned_through(metalbear_sequencer *s) {
+    sqlite3_stmt *stmt = NULL;
+    int64_t pruned = 0;
+    if (!s) return 0;
+    pthread_mutex_lock(&s->mutex);
+    if (sqlite3_prepare_v2(s->db,
+            "SELECT value FROM meta WHERE key='pruned_through';",
+            -1, &stmt, NULL) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW) {
+        pruned = sqlite3_column_int64(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&s->mutex);
+    return pruned;
 }
 
 static wf_status append_event(metalbear_sequencer *s,
@@ -298,7 +329,10 @@ wf_status metalbear_sequencer_open(const char *path, const char *did,
             "PRAGMA journal_mode=WAL;"
             "CREATE TABLE IF NOT EXISTS events("
             "seq INTEGER PRIMARY KEY AUTOINCREMENT,"
-            "frame BLOB NOT NULL,created_at TEXT NOT NULL);",
+            "frame BLOB NOT NULL,created_at TEXT NOT NULL);"
+            /* Retention's high-water mark lives here: see pruned_through(). */
+            "CREATE TABLE IF NOT EXISTS meta("
+            "key TEXT PRIMARY KEY,value INTEGER NOT NULL);",
             NULL, NULL, NULL) != SQLITE_OK ||
         seed_sequence_floor(s) != WF_OK ||
         seed_account(s, did, handle) != WF_OK) {
@@ -538,6 +572,24 @@ static void *subscriber_main(void *raw) {
          * that reason, never staying attached long enough to be useful.
          * Ping periodically so the connection survives the quiet.
          */
+        /* Announce a gap before any event goes out, so the subscriber can
+         * attribute the jump to retention rather than to lost frames. */
+        if (worker->outdated) {
+            wf_subscribe_event info = {.type = WF_SUBSCRIBE_EVENT_INFO};
+            snprintf(info.data.info.name, sizeof(info.data.info.name), "%s",
+                     "OutdatedCursor");
+            snprintf(info.data.info.message, sizeof(info.data.info.message),
+                     "%s", "Requested cursor exceeded limit. Possibly missing "
+                           "events");
+            info.data.info.has_message = 1;
+            unsigned char *frame = NULL;
+            size_t length = 0;
+            if (wf_sync_publish_event(&info, &frame, &length) == WF_OK) {
+                wf_xrpc_server_ws_send(worker->stream, frame, length);
+                free(frame);
+            }
+        }
+
         time_t last_activity = time(NULL);
         while (!wf_xrpc_server_ws_is_closed(worker->stream)) {
             unsigned char *frame = NULL;
@@ -639,6 +691,18 @@ static wf_status subscribe_repos(void *context,
     } else if (cursor > current) {
         worker->error = "FutureCursor";
         worker->message = "Cursor in the future.";
+    } else if (has_cursor) {
+        /*
+         * Events are delivered with seq > cursor, so a cursor below the last
+         * seq retention deleted is asking for events this server can never
+         * serve again. Say so with #info before the replay, rather than
+         * resuming at the first surviving event and letting the subscriber
+         * believe its stream is continuous.
+         */
+        int64_t pruned = pruned_through(s);
+        if (pruned > 0 && cursor < pruned) {
+            worker->outdated = 1;
+        }
     }
     if (wf_xrpc_server_ws_retain(stream) != WF_OK) {
         free(worker);
@@ -672,20 +736,51 @@ wf_status metalbear_sequencer_retain(metalbear_sequencer *s,
         pthread_mutex_unlock(&s->mutex);
         return WF_OK;
     }
+    /* Compute the cutoff timestamp in the same ISO-8601 format
+     * timestamp_now() stores, so the string comparison in the DELETE matches.
+     * SQLite's strftime produces 'YYYY-MM-DD HH:MM:SS' (space-separated);
+     * the T and Z matter for lexicographic ordering against stored values. */
+    char cutoff_ts[64];
+    {
+        time_t t = time(NULL) - max_age_seconds;
+        struct tm utc;
+        gmtime_r(&t, &utc);
+        snprintf(cutoff_ts, sizeof(cutoff_ts),
+                 "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
+                 utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
+                 utc.tm_hour, utc.tm_min, utc.tm_sec);
+    }
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(s->db,
-            "DELETE FROM events WHERE seq <= ? AND "
-            "created_at < datetime('now', ?);",
+            "DELETE FROM events WHERE seq <= ? AND created_at < ?;",
             -1, &stmt, NULL) != SQLITE_OK) {
         pthread_mutex_unlock(&s->mutex);
         return WF_ERR_INTERNAL;
     }
-    char age_str[64];
-    snprintf(age_str, sizeof(age_str), "-%lld seconds", (long long)max_age_seconds);
     sqlite3_bind_int64(stmt, 1, cutoff);
-    sqlite3_bind_text(stmt, 2, age_str, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, cutoff_ts, -1, SQLITE_TRANSIENT);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
+
+    /*
+     * Remember how far the log has been pruned.
+     *
+     * A subscriber's cursor outlives the events it names, and once a row is
+     * gone there is nothing left to infer the deletion from — the log just
+     * starts later. Recording the high-water mark is what lets subscribe_repos
+     * answer OutdatedCursor instead of silently skipping the span.
+     */
+    if (sqlite3_changes(s->db) > 0) {
+        sqlite3_stmt *mark = NULL;
+        if (sqlite3_prepare_v2(s->db,
+                "INSERT INTO meta(key,value) VALUES('pruned_through',?1) "
+                "ON CONFLICT(key) DO UPDATE SET value=MAX(value,?1);",
+                -1, &mark, NULL) == SQLITE_OK) {
+            sqlite3_bind_int64(mark, 1, cutoff);
+            sqlite3_step(mark);
+        }
+        sqlite3_finalize(mark);
+    }
     pthread_mutex_unlock(&s->mutex);
     return WF_OK;
 }
