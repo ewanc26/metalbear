@@ -353,6 +353,19 @@ wf_status metalbear_repo_store_export(metalbear_repo_store *store,
                                unsigned char **out_data, size_t *out_len);
 
 /**
+ * Export just the current commit block as a single-block CAR rooted at it.
+ *
+ * This is what a firehose #sync event carries: the lexicon says "CAR file
+ * containing the commit, as a block" and caps it at 10000 bytes. Using the
+ * full-repo export here produces an oversized event that a validating relay
+ * rejects, so do not substitute metalbear_repo_store_export.
+ * On WF_OK, `*out_data` is caller-owned and freed with free().
+ */
+wf_status metalbear_repo_store_export_commit(metalbear_repo_store *store,
+                                             unsigned char **out_data,
+                                             size_t *out_len);
+
+/**
  * Export selected repository blocks as a rootless CAR.
  *
  * Every requested CID must exist; otherwise WF_ERR_NOT_FOUND is returned and
