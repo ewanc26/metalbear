@@ -1014,7 +1014,8 @@ static void emit_sync_event(metalbear_repo_store *s) {
     if (!parse_commit_at(s, &s->head, &current)) return;
     unsigned char *blocks = NULL;
     size_t blocks_len = 0;
-    if (metalbear_repo_store_export(s, NULL, &blocks, &blocks_len) != WF_OK) return;
+    if (metalbear_repo_store_export_commit(s, &blocks, &blocks_len) != WF_OK)
+        return;
     metalbear_repo_store_event event = {
         .kind = METALBEAR_REPO_STORE_EVENT_SYNC,
         .did = s->did,
@@ -2573,6 +2574,35 @@ wf_status metalbear_repo_store_export(metalbear_repo_store *s, const char *since
         status = wf_car_write(&export_car, out_data, out_len);
     free(export_car.blocks); /* Shallow references into s->car. */
     return status;
+}
+
+wf_status metalbear_repo_store_export_commit(metalbear_repo_store *s,
+                                             unsigned char **out_data,
+                                             size_t *out_len) {
+    /*
+     * A #sync event carries the commit block and nothing else.
+     *
+     * The lexicon is explicit — "CAR file containing the commit, as a block"
+     * with maxLength 10000 — and the reference builds it from exactly one
+     * block (getSyncEventData does getBlocks([root.cid])). Exporting the whole
+     * repo here produced a #sync that grew with the account and sailed past
+     * the limit after a handful of records, so a validating relay rejects the
+     * very event whose job is to recover a broken stream.
+     */
+    if (!s || !out_data || !out_len) return WF_ERR_INVALID_ARG;
+    *out_data = NULL;
+    *out_len = 0;
+    if (s->head.len == 0) return WF_ERR_NOT_FOUND;
+
+    wf_car_block *source = wf_car_find_block(&s->car, &s->head);
+    if (!source) return WF_ERR_NOT_FOUND;
+
+    wf_car export_car = {0};
+    export_car.roots = &s->head;
+    export_car.root_count = 1;
+    export_car.blocks = source;      /* Shallow reference into s->car. */
+    export_car.block_count = 1;
+    return wf_car_write(&export_car, out_data, out_len);
 }
 
 wf_status metalbear_repo_store_get_blocks(metalbear_repo_store *s,

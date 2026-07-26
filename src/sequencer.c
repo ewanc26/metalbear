@@ -204,7 +204,7 @@ wf_status metalbear_sequencer_account_activation(
     if (status != WF_OK) return status;
     unsigned char *blocks = NULL;
     size_t blocks_len = 0;
-    status = metalbear_repo_store_export(repo, NULL, &blocks, &blocks_len);
+    status = metalbear_repo_store_export_commit(repo, &blocks, &blocks_len);
     if (status == WF_OK) {
         wf_subscribe_event sync = {.type = WF_SUBSCRIBE_EVENT_SYNC};
         snprintf(sync.data.sync.did, sizeof(sync.data.sync.did), "%s", did);
@@ -420,7 +420,7 @@ wf_status metalbear_sequencer_reconcile_repo(metalbear_sequencer *s,
 
     unsigned char *blocks = NULL;
     size_t blocks_len = 0;
-    status = metalbear_repo_store_export(repo, NULL, &blocks, &blocks_len);
+    status = metalbear_repo_store_export_commit(repo, &blocks, &blocks_len);
     if (status == WF_OK) {
         wf_subscribe_event event = {.type = WF_SUBSCRIBE_EVENT_SYNC};
         snprintf(event.data.sync.did, sizeof(event.data.sync.did), "%s",

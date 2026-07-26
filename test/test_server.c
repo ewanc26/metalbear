@@ -1382,6 +1382,12 @@ int main(void) {
             CHECK(activation_event.type == WF_SUBSCRIBE_EVENT_SYNC &&
                   activation_event.seq > prev_seq &&
                   activation_event.data.sync.blocks_len > 0);
+            /* The lexicon caps #sync.blocks at 10000 bytes: it carries the
+             * commit block alone, not the repo. Exporting everything here
+             * grew with the account and silently passed the limit, and a
+             * validating relay drops the event that exists to repair a
+             * broken stream. */
+            CHECK(activation_event.data.sync.blocks_len <= 10000);
             wf_subscribe_event_free(&activation_event);
             if (firehose >= 0) close(firehose);
 
