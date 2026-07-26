@@ -56,6 +56,41 @@ MetalBear is a pure C11 AT Protocol PDS built on the sibling Wolfram SDK. It pro
   `$type` that discriminates each member, or a strict client rejects the whole
   payload.
 
+## The firehose is the only thing the network actually sees
+
+Reads can be perfect while a PDS is invisible. Every federation bug found so
+far looked healthy from the outside: records stored, getRepo serving, commits
+verifying, and nothing reaching a relay. Check the wire, not the API.
+
+- **subscribeRepos is one stream for the host**, not per account. It is served
+  from the server's sequencer at the data root. Anything that publishes
+  elsewhere is invisible however correctly it is recorded.
+- **Every account context must publish into that sequencer.** It is wired in
+  `metalbear_account_context_open` so it cannot be forgotten; wiring it at a
+  call site once meant only the primary account ever federated.
+- **CID links are DAG-CBOR**: tag 42 wrapping a byte string whose first byte is
+  `0x00`. Our decoder tolerantly skips leading zeros, so a frame written
+  without the prefix round-trips through our own tests perfectly and is
+  rejected outright by every strict reader. Assert on encoded bytes, not
+  round-trips.
+- **Sequence numbers must never restart.** Cursors are per-host and consumers
+  persist them; a log that restarts at 1 hands out numbers already used and
+  wedges every consumer on FutureCursor. A fresh log is seeded above any value
+  the host could have issued.
+- **A quiet PDS must announce itself.** Relays are told about new data via
+  requestCrawl to `METALBEAR_CRAWLERS`, throttled to 20 minutes.
+- When diagnosing, capture a `#commit` from `bsky.network` and one from the PDS
+  and compare them field by field. That is what found the missing CID prefix
+  after a great deal of guessing did not.
+
+## Multi-account, with no privileged account
+
+The "bootstrap" account is just the one named in configuration. It is not *the*
+account, and nothing server-wide should reach through it — that assumption
+produced a deleteAccount that destroyed the wrong account, password resets that
+only ever worked for one, and a firehose that served one account's log.
+Resolve the account a request acts on; never substitute the configured one.
+
 ## Identity: the signing key is the interop contract
 
 The single defect that makes a repo unfederatable is a DID document that
