@@ -38,6 +38,18 @@ wf_status metalbear_sequencer_account_activation(
     metalbear_repo_store *repo);
 
 /* Prune events older than max_age_seconds. Keeps at least min_events. */
+/*
+ * Called after an event is durably sequenced, so the PDS can tell its relays
+ * it has new data. The reference PDS does this from its sequencer for the same
+ * reason: a relay that has not dialled a quiet host has no other prompt to.
+ * Invoked on the writing thread — keep it cheap and do not block.
+ */
+typedef void (*metalbear_sequencer_notify_cb)(void *ctx);
+
+void metalbear_sequencer_set_notify(metalbear_sequencer *sequencer,
+                                    metalbear_sequencer_notify_cb cb,
+                                    void *ctx);
+
 wf_status metalbear_sequencer_retain(metalbear_sequencer *sequencer,
                                      int64_t max_age_seconds,
                                      int64_t min_events);

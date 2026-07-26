@@ -4481,6 +4481,104 @@ static wf_status admin_delete_account(void *ctx,
  * each configured crawler/relay (METALBEAR_CRAWLERS). When no crawlers
  * are configured, return an honest NoCrawlersConfigured error rather than
  * fabricating success. */
+/*
+ * Tell the configured relays this host has new data.
+ *
+ * A relay that has never dialled a quiet PDS has nothing else to prompt it —
+ * requestCrawl at startup alone is not enough, because the interesting moment
+ * is when there is something to fetch. The reference PDS notifies from its
+ * sequencer for exactly this reason, throttled so a busy repo does not hammer
+ * its relays; the same 20-minute floor is used here.
+ *
+ * Runs on a detached thread: this is called from the write path, and a relay
+ * that is slow or down must never hold up a commit.
+ */
+#define METALBEAR_CRAWLER_NOTIFY_SECONDS (20 * 60)
+
+typedef struct crawler_notice {
+    char *crawlers;   /* owned copy: comma-separated */
+    char *body;       /* owned: {"hostname":"..."} */
+} crawler_notice;
+
+static void *crawler_notify_main(void *raw) {
+    crawler_notice *n = raw;
+    char *save = NULL;
+    for (char *tok = strtok_r(n->crawlers, ",", &save); tok;
+         tok = strtok_r(NULL, ",", &save)) {
+        while (*tok == ' ') tok++;
+        if (!*tok) continue;
+        char *host = NULL;
+        if (strncmp(tok, "https://", 8) != 0 &&
+            strncmp(tok, "http://", 7) != 0) {
+            size_t need = strlen(tok) + strlen("https://") + 1;
+            host = malloc(need);
+            if (host) snprintf(host, need, "https://%s", tok);
+        } else {
+            host = strdup(tok);
+        }
+        if (!host) continue;
+        wf_xrpc_client *client = wf_xrpc_client_new(host);
+        if (client) {
+            wf_response up = {0};
+            wf_status st = wf_xrpc_procedure(
+                client, "com.atproto.sync.requestCrawl", n->body, &up);
+            if (st != WF_OK || up.status < 200 || up.status >= 300)
+                LOG_WARN("requestCrawl to %s failed (status %ld)", host,
+                         (long)up.status);
+            else
+                LOG_INFO("announced new data to %s", host);
+            wf_response_free(&up);
+            wf_xrpc_client_free(client);
+        }
+        free(host);
+    }
+    free(n->crawlers);
+    free(n->body);
+    free(n);
+    return NULL;
+}
+
+static void notify_crawlers(void *ctx) {
+    metalbear_server *server = ctx;
+    if (!server->crawlers || !server->crawlers[0]) return;
+    const char *hostname = server->public_url;
+    if (!hostname) return;
+    if (strncmp(hostname, "https://", 8) == 0) hostname += 8;
+    else if (strncmp(hostname, "http://", 7) == 0) hostname += 7;
+    if (!hostname[0]) return;
+
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    static time_t last = 0;
+    time_t now = time(NULL);
+    pthread_mutex_lock(&lock);
+    bool due = (last == 0) || (now - last >= METALBEAR_CRAWLER_NOTIFY_SECONDS);
+    if (due) last = now;
+    pthread_mutex_unlock(&lock);
+    if (!due) return;
+
+    crawler_notice *n = calloc(1, sizeof(*n));
+    if (!n) return;
+    n->crawlers = strdup(server->crawlers);
+    size_t body_len = strlen(hostname) + sizeof("{\"hostname\":\"\"}") + 1;
+    n->body = malloc(body_len);
+    if (!n->crawlers || !n->body) {
+        free(n->crawlers);
+        free(n->body);
+        free(n);
+        return;
+    }
+    snprintf(n->body, body_len, "{\"hostname\":\"%s\"}", hostname);
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, crawler_notify_main, n) != 0) {
+        free(n->crawlers);
+        free(n->body);
+        free(n);
+        return;
+    }
+    pthread_detach(thread);
+}
+
 static wf_status request_crawl(void *ctx, const wf_xrpc_request *request,
                                wf_xrpc_response *response) {
     metalbear_server *server = ctx;
@@ -5972,6 +6070,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
     free(reports_path);
+    /* Announce new data to configured relays, throttled. */
+    metalbear_sequencer_set_notify(server->sequencer, notify_crawlers, server);
+
     if (metalbear_sequencer_reconcile_account(
             server->sequencer, server->bootstrap->did,
             metalbear_account_is_active(server->bootstrap->account)) != WF_OK) {
