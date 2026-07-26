@@ -124,6 +124,25 @@ static bool create_session(wf_xrpc_client *client, const char *identifier,
     return valid;
 }
 
+/* Number of #commit frames in a sequencer log. Commit frames carry the record
+ * blocks, so they are far larger than the identity/account frames seeded when
+ * an account is created. */
+static int count_commit_events(const char *seq_path) {
+    sqlite3 *db = NULL;
+    int commits = 0;
+    if (sqlite3_open(seq_path, &db) == SQLITE_OK) {
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(db,
+                "SELECT COUNT(*) FROM events WHERE length(frame) > 400;",
+                -1, &stmt, NULL) == SQLITE_OK &&
+            sqlite3_step(stmt) == SQLITE_ROW)
+            commits = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+    return commits;
+}
+
 /* createRecord as the currently-authenticated client. Returns HTTP status. */
 static long create_record(wf_xrpc_client *client, const char *repo,
                           const char *rkey, const char *text) {
@@ -501,6 +520,9 @@ int main(void) {
     CHECK(get_record(client, "did:plc:carol", "spoof", NULL, 0) == 404);
 
     /* Carol writes to her own repo with her own token; bob cannot see it. */
+    char shared_seq[512];
+    snprintf(shared_seq, sizeof(shared_seq), "%s/sequencer.sqlite3", directory);
+    int commits_before = count_commit_events(shared_seq);
     if (token_carol) {
         wf_xrpc_client_set_auth(client, token_carol);
         CHECK(create_record(client, "did:plc:carol", "carolpost",
@@ -521,26 +543,13 @@ int main(void) {
      * nothing was ever published. That is indistinguishable from the account
      * not federating, and no test noticed because reads all still worked.
      */
-    {
-        char seq_path[512];
-        snprintf(seq_path, sizeof(seq_path),
-                 "%s/did_plc_carol/sequencer.sqlite3", directory);
-        sqlite3 *seq_db = NULL;
-        int commits = 0;
-        if (sqlite3_open(seq_path, &seq_db) == SQLITE_OK) {
-            sqlite3_stmt *stmt = NULL;
-            /* #commit frames carry the record blocks, so they are far larger
-             * than the identity/account frames seeded at account creation. */
-            if (sqlite3_prepare_v2(seq_db,
-                    "SELECT COUNT(*) FROM events WHERE length(frame) > 400;",
-                    -1, &stmt, NULL) == SQLITE_OK &&
-                sqlite3_step(stmt) == SQLITE_ROW)
-                commits = sqlite3_column_int(stmt, 0);
-            sqlite3_finalize(stmt);
-        }
-        sqlite3_close(seq_db);
-        CHECK(commits > 0);
-    }
+    /* Carol is not the bootstrap account, and her commit must still reach the
+     * PDS-wide log at the data root — that single stream is what
+     * subscribeRepos serves, so anything landing elsewhere is invisible to
+     * every relay however correctly it was recorded. Counting either side of
+     * her write attributes the new event to her rather than to the primary
+     * account's traffic. */
+    CHECK(count_commit_events(shared_seq) > commits_before);
 
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);

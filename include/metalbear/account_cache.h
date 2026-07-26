@@ -2,6 +2,7 @@
 #define METALBEAR_ACCOUNT_CACHE_H
 
 #include "metalbear/account_context.h"
+#include "metalbear/sequencer.h"
 #include "metalbear/account_registry.h"
 
 #include <stdbool.h>
@@ -19,6 +20,14 @@ typedef struct metalbear_account_cache metalbear_account_cache;
 metalbear_account_cache *metalbear_account_cache_new(const char *service_did,
                                                      const char *public_url,
                                                      const char *data_directory);
+
+/* Point the cache at the PDS-wide event log, so every account it opens
+ * publishes its commits into the single stream subscribeRepos serves. Borrowed
+ * — the caller keeps ownership and must outlive the cache. Call before the
+ * first metalbear_account_cache_get; without it, cached accounts fall back to
+ * their own per-account logs, which nothing serves. */
+void metalbear_account_cache_set_sequencer(metalbear_account_cache *cache,
+                                           metalbear_sequencer *sequencer);
 void metalbear_account_cache_free(metalbear_account_cache *cache);
 
 /* Return the open context for `did`, opening it on first use. The returned
