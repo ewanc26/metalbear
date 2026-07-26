@@ -6109,17 +6109,6 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     /* Announce new data to configured relays, throttled. */
     metalbear_sequencer_set_notify(server->sequencer, notify_crawlers, server);
 
-    if (metalbear_sequencer_reconcile_account(
-            server->sequencer, server->bootstrap->did,
-            metalbear_account_is_active(server->bootstrap->account)) != WF_OK) {
-        LOG_ERROR("cannot reconcile account sequence");
-        goto fail;
-    }
-    if (metalbear_sequencer_reconcile_repo(server->sequencer,
-                                           server->bootstrap->repo) != WF_OK) {
-        LOG_ERROR("cannot reconcile repository sequence");
-        goto fail;
-    }
     server->xrpc = wf_xrpc_server_start(config->listen_address, config->port,
                                         config->thread_count);
     if (!server->xrpc) {
@@ -6145,6 +6134,32 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     if (!server->account_cache) {
         LOG_ERROR("cannot create account cache");
         goto fail;
+    }
+
+    /* Reconcile every account in the registry against the host-wide
+     * sequencer.  This was bootstrap-only, so secondary accounts lost their
+     * #identity/#account events on restart and relays saw a bare #commit for
+     * DIDs they had never been introduced to. */
+    {
+        metalbear_account_entry *entries = NULL;
+        size_t count = 0;
+        if (metalbear_account_registry_list(server->registry, &entries,
+                                            &count) == WF_OK) {
+            for (size_t i = 0; i < count; i++) {
+                metalbear_account_context *acct =
+                    metalbear_account_cache_get(server->account_cache,
+                                                server->registry,
+                                                entries[i].did);
+                if (!acct) continue;
+                metalbear_sequencer_reconcile_account(
+                    server->sequencer, entries[i].did,
+                    metalbear_account_is_active(acct->account));
+                if (acct->repo)
+                    metalbear_sequencer_reconcile_repo(server->sequencer,
+                                                      acct->repo);
+            }
+            metalbear_account_entries_free(entries, count);
+        }
     }
 
     if (wf_xrpc_server_register_query(server->xrpc,
