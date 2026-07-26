@@ -116,12 +116,52 @@ static void test_sequencer_retention(void) {
     printf("  PASS\n");
 }
 
+
+/*
+ * A firehose sequence must not restart at 1 on a fresh event log. Cursors are
+ * per-host and consumers persist them, so a rebuilt PDS that reuses numbers it
+ * already issued leaves every consumer holding a higher cursor stuck on
+ * FutureCursor forever — observed as a relay reconnect-looping on cursor=390
+ * against a log that had restarted.
+ */
+static void test_sequencer_seq_floor(void) {
+    printf("test_sequencer_seq_floor...\n");
+    char path[] = "/tmp/test_seqfloor_XXXXXX";
+    int fd = mkstemp(path);
+    assert(fd >= 0);
+    close(fd);
+
+    metalbear_sequencer *seq = NULL;
+    assert(metalbear_sequencer_open(path, "did:plc:test", "test.example.com",
+                                    &seq) == WF_OK);
+    int64_t first = metalbear_sequencer_current(seq);
+    /* Seeded from wall-clock seconds, so far above any counter a previous
+     * incarnation of this host is likely to have reached. */
+    assert(first > 1000000000);
+    metalbear_sequencer_free(seq);
+
+    /* Reopening must continue the existing sequence, never reseed it. */
+    seq = NULL;
+    assert(metalbear_sequencer_open(path, "did:plc:test", "test.example.com",
+                                    &seq) == WF_OK);
+    int64_t reopened = metalbear_sequencer_current(seq);
+    assert(reopened == first);
+    assert(metalbear_sequencer_account_status(seq, "did:plc:test", 1, NULL) ==
+           WF_OK);
+    assert(metalbear_sequencer_current(seq) > reopened);
+    metalbear_sequencer_free(seq);
+
+    unlink(path);
+    printf("  PASS\n");
+}
+
 int main(void) {
     printf("MetalBear backup/email/retention tests\n");
     test_backup_create_restore();
     test_backup_verify_corrupted();
     test_email_config();
     test_sequencer_retention();
+    test_sequencer_seq_floor();
     printf("All tests passed.\n");
     /* Cleanup */
     unlink(TEST_DB);
