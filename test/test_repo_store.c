@@ -170,6 +170,100 @@ static int run_record_validation(void) {
     return failures;
 }
 
+/*
+ * Read-after-write's load-bearing query: which records post-date a given repo
+ * rev. An AppView reports how far it has indexed via `atproto-repo-rev`, and
+ * everything newer is a write the author cannot see yet.
+ */
+static int run_records_since_rev(void) {
+    int failures = 0;
+    char path[256];
+    temp_path(path, sizeof(path), "sincerev");
+
+    metalbear_repo_store *store = NULL;
+    if (metalbear_repo_store_open(path, "did:plc:sincerev", "s.example.com",
+                                  &store) != WF_OK || !store) {
+        WF_CHECK(0);
+        unlink(path);
+        return failures + 1;
+    }
+
+    char *u = NULL, *c = NULL;
+    WF_CHECK(metalbear_repo_store_create_record(
+                 store, "app.bsky.feed.post", "postone",
+                 "{\"$type\":\"app.bsky.feed.post\",\"text\":\"one\"}", NULL,
+                 &u, &c) == WF_OK);
+    free(u); free(c); u = c = NULL;
+
+    /* The rev after the first write is the watermark an AppView would report. */
+    char *rev_after_first = NULL, *cid_tmp = NULL;
+    WF_CHECK(metalbear_repo_store_get_head(store, &rev_after_first,
+                                           &cid_tmp) == WF_OK);
+    free(cid_tmp);
+
+    WF_CHECK(metalbear_repo_store_create_record(
+                 store, "app.bsky.feed.post", "posttwo",
+                 "{\"$type\":\"app.bsky.feed.post\",\"text\":\"two\"}", NULL,
+                 &u, &c) == WF_OK);
+    free(u); free(c); u = c = NULL;
+
+    /* Only the second post is newer than that watermark. */
+    char *js = NULL;
+    WF_CHECK(metalbear_repo_store_records_since_rev(store, rev_after_first, 10,
+                                                    &js) == WF_OK && js);
+    cJSON *d = js ? cJSON_Parse(js) : NULL;
+    cJSON *recs = d ? cJSON_GetObjectItemCaseSensitive(d, "records") : NULL;
+    WF_CHECK(recs && cJSON_IsArray(recs) && cJSON_GetArraySize(recs) == 1);
+    if (recs && cJSON_GetArraySize(recs) == 1) {
+        cJSON *e = cJSON_GetArrayItem(recs, 0);
+        cJSON *uri = cJSON_GetObjectItemCaseSensitive(e, "uri");
+        cJSON *coll = cJSON_GetObjectItemCaseSensitive(e, "collection");
+        cJSON *at = cJSON_GetObjectItemCaseSensitive(e, "indexedAt");
+        cJSON *val = cJSON_GetObjectItemCaseSensitive(e, "value");
+        WF_CHECK(uri && cJSON_IsString(uri) &&
+                 strstr(uri->valuestring, "posttwo") != NULL);
+        WF_CHECK(coll && cJSON_IsString(coll) &&
+                 strcmp(coll->valuestring, "app.bsky.feed.post") == 0);
+        WF_CHECK(at && cJSON_IsString(at) && at->valuestring[0]);
+        WF_CHECK(val && cJSON_IsObject(val));
+    }
+    cJSON_Delete(d);
+    free(js);
+    js = NULL;
+
+    /* A rev at or past the head means the AppView is caught up: nothing to
+     * splice, so callers send the upstream response through untouched. */
+    char *head_rev = NULL;
+    WF_CHECK(metalbear_repo_store_get_head(store, &head_rev, &cid_tmp) == WF_OK);
+    free(cid_tmp);
+    WF_CHECK(metalbear_repo_store_records_since_rev(store, head_rev, 10,
+                                                    &js) == WF_OK && js);
+    d = js ? cJSON_Parse(js) : NULL;
+    recs = d ? cJSON_GetObjectItemCaseSensitive(d, "records") : NULL;
+    WF_CHECK(recs && cJSON_IsArray(recs) && cJSON_GetArraySize(recs) == 0);
+    cJSON_Delete(d);
+    free(js);
+    js = NULL;
+
+    /* A rev that predates every local record cannot be describing this repo
+     * (an account migration, say). Splicing local records into a view built
+     * from someone else's history would be worse than showing a stale one, so
+     * the sanity check returns nothing. */
+    WF_CHECK(metalbear_repo_store_records_since_rev(store, "2222222222222", 10,
+                                                    &js) == WF_OK && js);
+    d = js ? cJSON_Parse(js) : NULL;
+    recs = d ? cJSON_GetObjectItemCaseSensitive(d, "records") : NULL;
+    WF_CHECK(recs && cJSON_IsArray(recs) && cJSON_GetArraySize(recs) == 0);
+    cJSON_Delete(d);
+    free(js);
+
+    free(rev_after_first);
+    free(head_rev);
+    metalbear_repo_store_free(store);
+    unlink(path);
+    return failures;
+}
+
 /* ── Phase 1 + 2: unit tests (no server) ──────────────────────────── */
 
 static int run_unit(void) {
@@ -841,6 +935,7 @@ static int run_server(void) {
 
 int main(void) {
     run_unit();
+    run_records_since_rev();
     run_record_validation();
     run_adopted_key();
     run_did_immutability();
