@@ -81,6 +81,21 @@ wf_status metalbear_account_context_open_with_key(
     if (metalbear_sequencer_open(seq_path, did, handle,
                                  &ctx->sequencer) != WF_OK)
         goto cleanup;
+
+    /*
+     * Wire the repo to its own sequencer here, not at the call site.
+     *
+     * This used to be done by hand for the bootstrap account only, so every
+     * other account — anything opened through the registry or the account
+     * cache — wrote records that never reached the firehose at all. Their
+     * commits existed in the repo and were served by getRepo, but no relay
+     * could ever learn about them, which is indistinguishable from the account
+     * not federating. Doing it where both halves are constructed makes it
+     * impossible to add an account context that silently does not publish.
+     */
+    metalbear_repo_store_set_event_callback(ctx->repo,
+                                            metalbear_sequencer_repo_event,
+                                            ctx->sequencer);
     if (metalbear_oauth_store_open(oauth_path, public_url ? public_url : "",
                                    did, &ctx->oauth) != WF_OK)
         goto cleanup;
