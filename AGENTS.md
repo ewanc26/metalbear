@@ -79,6 +79,18 @@ verifying, and nothing reaching a relay. Check the wire, not the API.
   the host could have issued.
 - **A quiet PDS must announce itself.** Relays are told about new data via
   requestCrawl to `METALBEAR_CRAWLERS`, throttled to 20 minutes.
+- **Account lifecycle events belong on the host log, not a context.** Opening
+  an account context without the server's sequencer gives it a private log
+  that nothing reads, so creation events vanish and the network's first sight
+  of a DID is a bare `#commit`. Sequence lifecycle events against
+  `server->sequencer` directly: resolving a context first also means the event
+  is skipped whenever the account is not cached, which is how deleteAccount
+  came to announce nothing.
+- **`#sync` carries the commit block, not the repo.** The lexicon caps
+  `blocks` at 10000 bytes. Use `metalbear_repo_store_export_commit`; the
+  full-repo export grows with the account and silently passes the limit, so a
+  validating relay drops the event on exactly the accounts big enough to need
+  it.
 - When diagnosing, capture a `#commit` from `bsky.network` and one from the PDS
   and compare them field by field. That is what found the missing CID prefix
   after a great deal of guessing did not.
