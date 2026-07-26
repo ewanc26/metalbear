@@ -23,6 +23,7 @@
 
 #include <cJSON.h>
 #include <ftw.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -510,6 +511,36 @@ int main(void) {
                      sizeof(text)) == 200);
     CHECK(strcmp(text, "carol-only") == 0);
     CHECK(get_record(client, "did:plc:bob", "carolpost", NULL, 0) == 404);
+
+    /*
+     * A non-bootstrap account's write must reach the firehose.
+     *
+     * The repo-to-sequencer callback was once wired by hand for the bootstrap
+     * account only, so every other account wrote records that no relay could
+     * ever learn about: the data was in the repo and served by getRepo, but
+     * nothing was ever published. That is indistinguishable from the account
+     * not federating, and no test noticed because reads all still worked.
+     */
+    {
+        char seq_path[512];
+        snprintf(seq_path, sizeof(seq_path),
+                 "%s/did_plc_carol/sequencer.sqlite3", directory);
+        sqlite3 *seq_db = NULL;
+        int commits = 0;
+        if (sqlite3_open(seq_path, &seq_db) == SQLITE_OK) {
+            sqlite3_stmt *stmt = NULL;
+            /* #commit frames carry the record blocks, so they are far larger
+             * than the identity/account frames seeded at account creation. */
+            if (sqlite3_prepare_v2(seq_db,
+                    "SELECT COUNT(*) FROM events WHERE length(frame) > 400;",
+                    -1, &stmt, NULL) == SQLITE_OK &&
+                sqlite3_step(stmt) == SQLITE_ROW)
+                commits = sqlite3_column_int(stmt, 0);
+            sqlite3_finalize(stmt);
+        }
+        sqlite3_close(seq_db);
+        CHECK(commits > 0);
+    }
 
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);
