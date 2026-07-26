@@ -342,6 +342,10 @@ static wf_status get_record_cbor(metalbear_repo_store *s, const char *collection
 }
 
 /* Forward declaration (defined in the Persistence section below). */
+/* Defined below, alongside the commit-event helpers. */
+static int parse_commit_at(metalbear_repo_store *s, const wf_cid *cid,
+                          wf_commit *out);
+
 static wf_status index_upsert_record(metalbear_repo_store *s, const char *collection,
                                       const char *rkey, const char *cid,
                                       const char *value);
@@ -535,16 +539,27 @@ static wf_status persist_new_blocks(metalbear_repo_store *s) {
 static wf_status index_upsert_record(metalbear_repo_store *s, const char *collection,
                                      const char *rkey, const char *cid,
                                      const char *value) {
+    /* Stamp the rev this record landed at, and when, so read-after-write can
+     * find records an AppView has not caught up to. The head is already
+     * updated by the time the index is written. */
+    char rev_buf[64] = "";
+    wf_commit head;
+    if (parse_commit_at(s, &s->head, &head))
+        snprintf(rev_buf, sizeof(rev_buf), "%s", head.rev);
+
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(s->db,
-            "INSERT OR REPLACE INTO records (collection, rkey, cid, value)"
-            " VALUES (?, ?, ?, ?);",
+            "INSERT OR REPLACE INTO records"
+            " (collection, rkey, cid, value, repo_rev, indexed_at)"
+            " VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
             -1, &stmt, NULL) != SQLITE_OK)
         return WF_ERR_INTERNAL;
     sqlite3_bind_text(stmt, 1, collection, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 2, rkey, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 3, cid, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 4, value, -1, SQLITE_TRANSIENT);
+    if (rev_buf[0]) sqlite3_bind_text(stmt, 5, rev_buf, -1, SQLITE_TRANSIENT);
+    else sqlite3_bind_null(stmt, 5);
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     return rc == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
@@ -707,6 +722,34 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
     if (!has_repo_rev && sqlite3_exec(s->db,
             "ALTER TABLE blocks ADD COLUMN repo_rev TEXT;", NULL, NULL,
             NULL) != SQLITE_OK) {
+        free_store(s);
+        return WF_ERR_INTERNAL;
+    }
+
+    /* Read-after-write needs to know which records post-date a given repo rev,
+     * and when each was written, so a just-created record can be spliced into
+     * an AppView response that has not indexed it yet. Legacy rows keep NULL
+     * and are simply never treated as "recent". */
+    int has_record_rev = 0, has_indexed_at = 0;
+    column_stmt = NULL;
+    if (sqlite3_prepare_v2(s->db, "PRAGMA table_info(records);", -1,
+                           &column_stmt, NULL) != SQLITE_OK) {
+        free_store(s);
+        return WF_ERR_INTERNAL;
+    }
+    while (sqlite3_step(column_stmt) == SQLITE_ROW) {
+        const char *name = (const char *)sqlite3_column_text(column_stmt, 1);
+        if (!name) continue;
+        if (strcmp(name, "repo_rev") == 0) has_record_rev = 1;
+        if (strcmp(name, "indexed_at") == 0) has_indexed_at = 1;
+    }
+    sqlite3_finalize(column_stmt);
+    if ((!has_record_rev && sqlite3_exec(s->db,
+            "ALTER TABLE records ADD COLUMN repo_rev TEXT;", NULL, NULL,
+            NULL) != SQLITE_OK) ||
+        (!has_indexed_at && sqlite3_exec(s->db,
+            "ALTER TABLE records ADD COLUMN indexed_at TEXT;", NULL, NULL,
+            NULL) != SQLITE_OK)) {
         free_store(s);
         return WF_ERR_INTERNAL;
     }
@@ -2358,6 +2401,76 @@ wf_status metalbear_repo_store_list_records(metalbear_repo_store *s, const char 
 
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
+    if (!js) return WF_ERR_ALLOC;
+    *out_json = js;
+    return WF_OK;
+}
+
+wf_status metalbear_repo_store_records_since_rev(metalbear_repo_store *s,
+                                                 const char *rev, int limit,
+                                                 char **out_json) {
+    if (!s || !rev || !*rev || !out_json) return WF_ERR_INVALID_ARG;
+    *out_json = NULL;
+    if (limit <= 0 || limit > 100) limit = 10;
+
+    /* Sanity check from the reference: if NOTHING predates the rev the client
+     * quoted, that rev is not describing this repo's history at all (an
+     * account migration, say). Splicing local records into a response built
+     * from someone else's timeline would be worse than showing a stale one. */
+    sqlite3_stmt *check = NULL;
+    if (sqlite3_prepare_v2(s->db,
+            "SELECT 1 FROM records WHERE repo_rev IS NOT NULL AND repo_rev <= ?"
+            " LIMIT 1;", -1, &check, NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    sqlite3_bind_text(check, 1, rev, -1, SQLITE_TRANSIENT);
+    bool has_older = sqlite3_step(check) == SQLITE_ROW;
+    sqlite3_finalize(check);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *records = cJSON_CreateArray();
+    if (!root || !records) {
+        cJSON_Delete(root);
+        cJSON_Delete(records);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddItemToObject(root, "records", records);
+
+    if (has_older) {
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(s->db,
+                "SELECT collection, rkey, cid, value, repo_rev, indexed_at"
+                " FROM records WHERE repo_rev IS NOT NULL AND repo_rev > ?"
+                " ORDER BY repo_rev ASC LIMIT ?;", -1, &stmt, NULL) != SQLITE_OK) {
+            cJSON_Delete(root);
+            return WF_ERR_INTERNAL;
+        }
+        sqlite3_bind_text(stmt, 1, rev, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 2, limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *collection = (const char *)sqlite3_column_text(stmt, 0);
+            const char *rkey = (const char *)sqlite3_column_text(stmt, 1);
+            const char *cid = (const char *)sqlite3_column_text(stmt, 2);
+            const char *value = (const char *)sqlite3_column_text(stmt, 3);
+            const char *indexed = (const char *)sqlite3_column_text(stmt, 5);
+            cJSON *entry = cJSON_CreateObject();
+            if (!entry) break;
+            char *uri = make_uri(s->did, collection ? collection : "",
+                                 rkey ? rkey : "");
+            cJSON_AddStringToObject(entry, "uri", uri ? uri : "");
+            free(uri);
+            cJSON_AddStringToObject(entry, "cid", cid ? cid : "");
+            cJSON_AddStringToObject(entry, "collection",
+                                    collection ? collection : "");
+            cJSON_AddStringToObject(entry, "indexedAt", indexed ? indexed : "");
+            cJSON *val = cJSON_Parse(value ? value : "{}");
+            if (val) cJSON_AddItemToObject(entry, "value", val);
+            cJSON_AddItemToArray(records, entry);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    char *js = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
     if (!js) return WF_ERR_ALLOC;
     *out_json = js;
     return WF_OK;
