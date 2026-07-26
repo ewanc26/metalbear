@@ -2730,7 +2730,9 @@ static wf_status h_get_latest_commit(void *ctx, const wf_xrpc_request *req,
     char *rev = NULL, *cid = NULL;
     wf_status st = metalbear_repo_store_get_head(s, &rev, &cid);
     if (st == WF_ERR_NOT_FOUND) {
-        wf_xrpc_response_set_error(resp, 400, "RepositoryNotFound",
+        /* The lexicon declares RepoNotFound; an invented name is as unusable
+         * to a client as a generic one. */
+        wf_xrpc_response_set_error(resp, 400, "RepoNotFound",
                                     "repository is empty");
         return WF_OK;
     } else if (st != WF_OK) {

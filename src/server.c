@@ -3147,10 +3147,20 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
      * its own signing key and persists the password verifier in the account
      * store — a real, isolated account rather than registry metadata alone. */
     metalbear_account_context *acct = NULL;
-    wf_status status = metalbear_account_context_open_with_key(
+    /*
+     * Open against the PDS-wide log, not a private one.
+     *
+     * Passing no sequencer here made the context open its own log under the
+     * account directory and seed the account's #identity and #account events
+     * into it. Nothing ever reads that file: every later request resolves the
+     * account through the cache, which uses the server's log. A relay's first
+     * sight of a new DID was therefore a bare #commit with no identity or
+     * account event before it.
+     */
+    wf_status status = metalbear_account_context_open_shared(
         server->service_did, server->public_url, account_did,
         handle->valuestring, data_dir, password->valuestring,
-        have_minted_key ? &minted_key : NULL, &acct);
+        have_minted_key ? &minted_key : NULL, server->sequencer, &acct);
     if (status != WF_OK) {
         free(account_did);
         free(data_dir);
@@ -3187,6 +3197,26 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not register account");
         return WF_OK;
+    }
+
+    /*
+     * Announce the new account on the host firehose.
+     *
+     * The registry row is now durable, so the account exists as far as this
+     * PDS is concerned; a relay learns of it only from these events. Emitting
+     * #identity and #account before any #commit is what lets a consumer bind
+     * the DID to its handle and know it is active — without them the first
+     * thing the network sees is a commit for a DID it has never heard of.
+     */
+    if (metalbear_sequencer_account_activation(server->sequencer, account_did,
+                                               handle->valuestring,
+                                               acct->repo) != WF_OK) {
+        /* Not fatal to account creation: the account is already durable, and
+         * reconciliation heals a missing tail event. Log loudly — a silently
+         * unannounced account looks exactly like a working one locally. */
+        LOG_ERROR("create_account: could not sequence creation events for "
+                  "did=%s handle=%s; account exists but is unannounced",
+                  account_did, handle->valuestring);
     }
 
     /* Issue a session scoped to the new account's own auth store. */
@@ -4460,13 +4490,19 @@ static wf_status admin_delete_account(void *ctx,
         return WF_OK;
     }
 
-    metalbear_account_registry_remove(server->registry, did->valuestring);
+    /*
+     * Announce the deletion before the registry row goes away.
+     *
+     * This used to resolve a context after the removal, which only succeeded
+     * when the account happened to still be in the in-memory cache — for any
+     * other account the registry lookup then failed and the #account event was
+     * skipped entirely, so relays never learned the account was gone. Sequence
+     * it against the host log directly, which needs no context at all.
+     */
+    metalbear_sequencer_account_status(server->sequencer, did->valuestring, 0,
+                                       "deleted");
 
-    metalbear_account_context *acct = context_for_did(server, did->valuestring);
-    if (acct) {
-        metalbear_sequencer_account_status(
-            acct->sequencer, did->valuestring, 0, "deleted");
-    }
+    metalbear_account_registry_remove(server->registry, did->valuestring);
 
     rmtree(data_dir);
     free(data_dir);
