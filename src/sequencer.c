@@ -18,7 +18,19 @@ struct metalbear_sequencer {
     pthread_mutex_t mutex;
     pthread_cond_t changed;
     int closing;
+    metalbear_sequencer_notify_cb notify;
+    void *notify_ctx;
 };
+
+void metalbear_sequencer_set_notify(metalbear_sequencer *s,
+                                    metalbear_sequencer_notify_cb cb,
+                                    void *ctx) {
+    if (!s) return;
+    pthread_mutex_lock(&s->mutex);
+    s->notify = cb;
+    s->notify_ctx = ctx;
+    pthread_mutex_unlock(&s->mutex);
+}
 
 typedef struct subscriber_worker {
     metalbear_sequencer *sequencer;
@@ -127,7 +139,12 @@ rollback:
 done:
     sqlite3_finalize(stmt);
     free(frame);
+    metalbear_sequencer_notify_cb notify = s->notify;
+    void *notify_ctx = s->notify_ctx;
     pthread_mutex_unlock(&s->mutex);
+    /* Outside the lock: the callback may do I/O, and it must never be able to
+     * deadlock the write path it was triggered from. */
+    if (status == WF_OK && notify) notify(notify_ctx);
     return status;
 }
 
