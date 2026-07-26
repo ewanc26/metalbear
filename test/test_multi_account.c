@@ -143,6 +143,33 @@ static int count_commit_events(const char *seq_path) {
     return commits;
 }
 
+/*
+ * Count events in the shared log that mention `did`.
+ *
+ * createAccount used to open the new account against a private per-account
+ * sequencer, so its #identity and #account events were written to a file
+ * nothing ever reads. The account then federated with a bare #commit for a
+ * DID the network had never been introduced to. The events must land in the
+ * host-wide log — this looks for the DID in the stored frames.
+ */
+static int count_events_mentioning(const char *seq_path, const char *did) {
+    sqlite3 *db = NULL;
+    int found = 0;
+    if (sqlite3_open(seq_path, &db) == SQLITE_OK) {
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(db,
+                "SELECT COUNT(*) FROM events WHERE instr(frame, ?) > 0;",
+                -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, did, -1, SQLITE_STATIC);
+            if (sqlite3_step(stmt) == SQLITE_ROW)
+                found = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+    return found;
+}
+
 /* createRecord as the currently-authenticated client. Returns HTTP status. */
 static long create_record(wf_xrpc_client *client, const char *repo,
                           const char *rkey, const char *text) {
@@ -550,6 +577,18 @@ int main(void) {
      * her write attributes the new event to her rather than to the primary
      * account's traffic. */
     CHECK(count_commit_events(shared_seq) > commits_before);
+
+    /*
+     * Account creation must announce itself on that same host-wide log.
+     *
+     * Carol was created through createAccount, so the log has to carry her
+     * #identity and #account as well as her commit — more than one event
+     * naming her DID. With the creation events going to a private per-account
+     * file, the only frame mentioning her here was the commit, and a relay's
+     * first sight of the DID was a commit for a repo it had never been told
+     * existed.
+     */
+    CHECK(count_events_mentioning(shared_seq, "did:plc:carol") > 1);
 
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);
