@@ -258,6 +258,22 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *store,
                                       char **out_results_json);
 
 /**
+ * Records written after `rev`, oldest first, as
+ * `{"records":[{uri,cid,collection,indexedAt,value}, ...]}`.
+ *
+ * This is the read-after-write query: an AppView reports how far it has
+ * indexed via the `atproto-repo-rev` response header, and anything newer than
+ * that is a write the user has made but cannot see yet. Returns an empty array
+ * when the quoted rev does not appear to describe this repo at all, so a
+ * mismatched rev degrades to a stale view rather than a wrong one.
+ *
+ * *out_json is a caller-owned JSON string.
+ */
+wf_status metalbear_repo_store_records_since_rev(metalbear_repo_store *store,
+                                                 const char *rev, int limit,
+                                                 char **out_json);
+
+/**
  * Produce the base describeRepo payload (did, handle, collections, rev).
  * The route handler adds the lexicon's required didDoc and handleIsCorrect,
  * which need the identity layer. *out_json is a caller-owned JSON string.
