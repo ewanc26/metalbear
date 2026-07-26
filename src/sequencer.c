@@ -201,6 +201,65 @@ wf_status metalbear_sequencer_account_activation(
     return status;
 }
 
+/*
+ * Start a brand-new event log above any sequence number this host can plausibly
+ * have issued before.
+ *
+ * Firehose cursors are per-host and consumers persist them. A sequence that
+ * restarts at 1 — after a restore from backup, a rebuilt data directory, or a
+ * migration — hands out numbers the host has already used. Every consumer
+ * holding a higher cursor then asks for events that will not exist for a long
+ * time, gets FutureCursor, and retries forever: observed here as a relay stuck
+ * reconnecting on cursor=390 against a log that had restarted at 1, never
+ * ingesting anything.
+ *
+ * Seeding from the wall clock makes the sequence monotonic across the lifetime
+ * of the host rather than the lifetime of the file, so an old cursor lands in
+ * the past — where it is served normally — instead of the future. The
+ * reference PDS uses a bare autoincrement and has the same hazard; nothing in
+ * the protocol requires seq to start at 1, only that it increase.
+ *
+ * Only applied to an empty log, so an existing sequence is never disturbed.
+ */
+static wf_status seed_sequence_floor(metalbear_sequencer *s) {
+    sqlite3_stmt *stmt = NULL;
+    int64_t existing = 0;
+    if (sqlite3_prepare_v2(s->db, "SELECT COUNT(*) FROM events;", -1, &stmt,
+                           NULL) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW)
+        existing = sqlite3_column_int64(stmt, 0);
+    sqlite3_finalize(stmt);
+    if (existing > 0) return WF_OK;
+
+    /* Seconds since the epoch: comfortably above any counter a previous
+     * incarnation reached, and still far inside the int64 the frame uses. */
+    int64_t floor_seq = (int64_t)time(NULL);
+    if (floor_seq <= 0) return WF_OK;
+
+    /*
+     * Insert a placeholder at the target seq, then delete it. AUTOINCREMENT
+     * keeps its high-water mark after the row goes, so the next real event
+     * lands at floor_seq + 1. Writing sqlite_sequence directly would be
+     * shorter but that table does not exist until the first AUTOINCREMENT
+     * insert has happened, and it carries no unique index to upsert against.
+     */
+    stmt = NULL;
+    if (sqlite3_prepare_v2(s->db,
+            "INSERT INTO events(seq,frame,created_at) VALUES(?,zeroblob(0),'');",
+            -1, &stmt, NULL) != SQLITE_OK) {
+        sqlite3_finalize(stmt);
+        return WF_OK;   /* not fatal: a sequence from 1 still works */
+    }
+    sqlite3_bind_int64(stmt, 1, floor_seq);
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) return WF_OK;
+
+    sqlite3_exec(s->db, "DELETE FROM events WHERE frame = zeroblob(0)"
+                        " AND created_at = '';", NULL, NULL, NULL);
+    return WF_OK;
+}
+
 wf_status metalbear_sequencer_open(const char *path, const char *did,
                                    const char *handle,
                                    metalbear_sequencer **out) {
@@ -224,6 +283,7 @@ wf_status metalbear_sequencer_open(const char *path, const char *did,
             "seq INTEGER PRIMARY KEY AUTOINCREMENT,"
             "frame BLOB NOT NULL,created_at TEXT NOT NULL);",
             NULL, NULL, NULL) != SQLITE_OK ||
+        seed_sequence_floor(s) != WF_OK ||
         seed_account(s, did, handle) != WF_OK) {
         metalbear_sequencer_free(s);
         return WF_ERR_INTERNAL;
