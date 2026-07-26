@@ -38,6 +38,19 @@ target_include_directories(metalbear_core PUBLIC include
 target_link_libraries(metalbear_core PUBLIC wolfram cjson PRIVATE SQLite3::SQLite3 Threads::Threads)
 target_compile_definitions(metalbear_core PRIVATE
     METALBEAR_VERSION="${PROJECT_VERSION}")
+
+# nftw() and its FTW_* flags are XSI extensions. Wolfram exports
+# _POSIX_C_SOURCE/_DEFAULT_SOURCE, which is enough for strdup and friends but
+# does not set __USE_XOPEN_EXTENDED, so glibc still hides FTW_DEPTH/FTW_PHYS.
+# PUBLIC so the test targets, which recursively delete their fixture trees,
+# inherit it too — the Docker image builds with tests off and so never caught
+# this, while CI did.
+if(UNIX)
+    target_compile_definitions(metalbear_core PUBLIC _XOPEN_SOURCE=700)
+    if(APPLE)
+        target_compile_definitions(metalbear_core PUBLIC _DARWIN_C_SOURCE)
+    endif()
+endif()
 target_compile_options(metalbear_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(metalbear src/main.c)
