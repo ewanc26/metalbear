@@ -82,6 +82,11 @@ verifying, and nothing reaching a relay. Check the wire, not the API.
 - When diagnosing, capture a `#commit` from `bsky.network` and one from the PDS
   and compare them field by field. That is what found the missing CID prefix
   after a great deal of guessing did not.
+- `tools/firehose_probe.py <host>` subscribes over the public ingress and
+  checks the frames a strict reader would reject. Like `verify_repo_car.py` it
+  is stdlib-only and shares no code with Wolfram — verifying our encoder with
+  our encoder proves nothing. Run it against the live host, not localhost: it
+  exercises the whole path a relay uses, TLS and proxy included.
 
 ## Multi-account, with no privileged account
 
