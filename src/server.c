@@ -5903,14 +5903,10 @@ static wf_status list_repos_by_collection(void *ctx,
         return WF_OK;
     }
     int limit = query_param_int(request->params, "limit", 500, 1, 2000);
-    size_t offset = 0;
     const cJSON *cursor_param = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor") : NULL;
-    if (cJSON_IsString(cursor_param) && cursor_param->valuestring[0]) {
-        char *end = NULL;
-        long parsed = strtol(cursor_param->valuestring, &end, 10);
-        if (*end == '\0' && parsed >= 0) offset = (size_t)parsed;
-    }
+    const char *cursor = cJSON_IsString(cursor_param)
+        ? cursor_param->valuestring : "";
 
     cJSON *root = cJSON_CreateObject();
     cJSON *repos = cJSON_CreateArray();
@@ -5920,62 +5916,66 @@ static wf_status list_repos_by_collection(void *ctx,
         return WF_ERR_ALLOC;
     }
 
-    metalbear_account_entry *entries = NULL;
-    size_t count = 0;
-    if (metalbear_account_registry_list(server->registry, &entries,
-                                        &count) != WF_OK) {
-        entries = NULL;
-        count = 0;
-    }
-    if (offset > count) offset = count;
-
     /* As in listRepos, `limit` counts accounts returned rather than rows
-     * examined, so accounts without the collection never occupy a slot. */
+     * examined, so accounts without the collection never occupy a slot, and
+     * the registry is walked a page at a time until the page is full. */
+    char last_did[256] = "";
+    snprintf(last_did, sizeof(last_did), "%s", cursor);
+    bool exhausted = false;
     size_t emitted = 0;
-    size_t scanned = offset;
-    for (size_t i = offset; i < count && emitted < (size_t)limit;
-         i++, scanned = i) {
-        metalbear_account_context *acct = context_for_did(server,
-                                                          entries[i].did);
-        if (!acct) continue;
-        char *described = NULL;
-        if (metalbear_repo_store_describe(acct->repo, &described) != WF_OK ||
-            !described)
-            continue;
-        cJSON *desc = cJSON_Parse(described);
-        free(described);
-        if (!desc) continue;
-        bool holds = false;
-        const cJSON *cols = cJSON_GetObjectItemCaseSensitive(desc,
-                                                             "collections");
-        const cJSON *item = NULL;
-        cJSON_ArrayForEach(item, cols) {
-            if (cJSON_IsString(item) &&
-                strcmp(item->valuestring, coll->valuestring) == 0) {
-                holds = true;
+    wf_status alloc_failure = WF_OK;
+    while (emitted < (size_t)limit && !exhausted && alloc_failure == WF_OK) {
+        metalbear_account_entry *entries = NULL;
+        size_t count = 0;
+        if (metalbear_account_registry_list_after(
+                server->registry, last_did, (size_t)limit, &entries,
+                &count) != WF_OK)
+            break;
+        if (count < (size_t)limit) exhausted = true;
+        for (size_t i = 0; i < count && emitted < (size_t)limit; i++) {
+            snprintf(last_did, sizeof(last_did), "%s", entries[i].did);
+            metalbear_account_context *acct = context_for_did(server,
+                                                              entries[i].did);
+            if (!acct) continue;
+            char *described = NULL;
+            if (metalbear_repo_store_describe(acct->repo, &described) != WF_OK ||
+                !described)
+                continue;
+            cJSON *desc = cJSON_Parse(described);
+            free(described);
+            if (!desc) continue;
+            bool holds = false;
+            const cJSON *cols = cJSON_GetObjectItemCaseSensitive(desc,
+                                                                 "collections");
+            const cJSON *item = NULL;
+            cJSON_ArrayForEach(item, cols) {
+                if (cJSON_IsString(item) &&
+                    strcmp(item->valuestring, coll->valuestring) == 0) {
+                    holds = true;
+                    break;
+                }
+            }
+            cJSON_Delete(desc);
+            if (!holds) continue;
+            cJSON *repo = cJSON_CreateObject();
+            if (!repo) {
+                alloc_failure = WF_ERR_ALLOC;
                 break;
             }
+            cJSON_AddStringToObject(repo, "did", acct->did);
+            cJSON_AddItemToArray(repos, repo);
+            emitted++;
         }
-        cJSON_Delete(desc);
-        if (!holds) continue;
-        cJSON *repo = cJSON_CreateObject();
-        if (!repo) {
-            metalbear_account_entries_free(entries, count);
-            cJSON_Delete(root);
-            cJSON_Delete(repos);
-            return WF_ERR_ALLOC;
-        }
-        cJSON_AddStringToObject(repo, "did", acct->did);
-        cJSON_AddItemToArray(repos, repo);
-        emitted++;
+        metalbear_account_entries_free(entries, count);
     }
-    metalbear_account_entries_free(entries, count);
+    if (alloc_failure != WF_OK) {
+        cJSON_Delete(root);
+        cJSON_Delete(repos);
+        return alloc_failure;
+    }
     cJSON_AddItemToObject(root, "repos", repos);
-    if (scanned < count) {
-        char cursor_buf[32];
-        snprintf(cursor_buf, sizeof(cursor_buf), "%zu", scanned);
-        cJSON_AddStringToObject(root, "cursor", cursor_buf);
-    }
+    if (!exhausted && last_did[0])
+        cJSON_AddStringToObject(root, "cursor", last_did);
     return set_json(response, root);
 }
 
@@ -5986,13 +5986,8 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
     int limit = query_param_int(request->params, "limit", 500, 1, 1000);
     cJSON *cursor_param = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor") : NULL;
-    size_t offset = 0;
-    if (cJSON_IsString(cursor_param) && cursor_param->valuestring[0]) {
-        char *end = NULL;
-        long parsed = strtol(cursor_param->valuestring, &end, 10);
-        if (*cursor_param->valuestring && *end == '\0' && parsed >= 0)
-            offset = (size_t)parsed;
-    }
+    const char *cursor = cJSON_IsString(cursor_param)
+        ? cursor_param->valuestring : "";
 
     cJSON *root = cJSON_CreateObject();
     cJSON *repos = cJSON_CreateArray();
@@ -6001,14 +5996,7 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
         cJSON_Delete(repos);
         return WF_ERR_ALLOC;
     }
-    metalbear_account_entry *entries = NULL;
-    size_t count = 0;
-    if (metalbear_account_registry_list(server->registry, &entries,
-                                        &count) != WF_OK) {
-        entries = NULL;
-        count = 0;
-    }
-    if (offset > count) offset = count;
+
     /*
      * `limit` counts repos returned, not registry rows examined.
      *
@@ -6018,51 +6006,73 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
      * relay enumerating accounts sees no accounts and concludes the host hosts
      * nothing. The reference joins against the repo root, so entries without a
      * repository never occupy a slot at all.
+     *
+     * Skipped rows are why the registry is walked a page at a time rather
+     * than asked for `limit` rows once: a batch of entries can yield fewer
+     * repositories than it holds, and the walk continues until the page is
+     * full or the registry is exhausted.
      */
+    char last_did[256] = "";
+    snprintf(last_did, sizeof(last_did), "%s", cursor);
+    bool exhausted = false;
     size_t emitted = 0;
-    size_t scanned = offset;
-    for (size_t i = offset; i < count && emitted < (size_t)limit;
-         i++, scanned = i) {
-        metalbear_account_context *acct = context_for_did(server,
-                                                          entries[i].did);
-        if (!acct) continue;
-        char *rev = NULL, *cid = NULL;
-        if (metalbear_repo_store_get_head(acct->repo, &rev, &cid) != WF_OK) {
+    wf_status alloc_failure = WF_OK;
+    while (emitted < (size_t)limit && !exhausted && alloc_failure == WF_OK) {
+        metalbear_account_entry *entries = NULL;
+        size_t count = 0;
+        if (metalbear_account_registry_list_after(
+                server->registry, last_did, (size_t)limit, &entries,
+                &count) != WF_OK)
+            break;
+        if (count < (size_t)limit) exhausted = true;
+        for (size_t i = 0; i < count && emitted < (size_t)limit; i++) {
+            snprintf(last_did, sizeof(last_did), "%s", entries[i].did);
+            metalbear_account_context *acct = context_for_did(server,
+                                                              entries[i].did);
+            if (!acct) continue;
+            char *rev = NULL, *cid = NULL;
+            if (metalbear_repo_store_get_head(acct->repo, &rev, &cid) != WF_OK) {
+                free(rev);
+                free(cid);
+                continue;
+            }
+            cJSON *repo = cJSON_CreateObject();
+            if (!repo) {
+                free(rev);
+                free(cid);
+                alloc_failure = WF_ERR_ALLOC;
+                break;
+            }
+            cJSON_AddStringToObject(repo, "did", acct->did);
+            cJSON_AddStringToObject(repo, "head", cid);
+            cJSON_AddStringToObject(repo, "rev", rev);
+            bool active = false;
+            const char *status = account_status_string(server, acct, &active);
+            cJSON_AddBoolToObject(repo, "active", active);
+            if (status)
+                cJSON_AddStringToObject(repo, "status", status);
+            cJSON_AddItemToArray(repos, repo);
+            emitted++;
             free(rev);
             free(cid);
-            continue;
         }
-        cJSON *repo = cJSON_CreateObject();
-        if (!repo) {
-            free(rev);
-            free(cid);
-            metalbear_account_entries_free(entries, count);
-            cJSON_Delete(root);
-            cJSON_Delete(repos);
-            return WF_ERR_ALLOC;
-        }
-        cJSON_AddStringToObject(repo, "did", acct->did);
-        cJSON_AddStringToObject(repo, "head", cid);
-        cJSON_AddStringToObject(repo, "rev", rev);
-        bool active = false;
-        const char *status = account_status_string(server, acct, &active);
-        cJSON_AddBoolToObject(repo, "active", active);
-        if (status)
-            cJSON_AddStringToObject(repo, "status", status);
-        cJSON_AddItemToArray(repos, repo);
-        emitted++;
-        free(rev);
-        free(cid);
+        metalbear_account_entries_free(entries, count);
     }
-    metalbear_account_entries_free(entries, count);
+    if (alloc_failure != WF_OK) {
+        cJSON_Delete(root);
+        cJSON_Delete(repos);
+        return alloc_failure;
+    }
     cJSON_AddItemToObject(root, "repos", repos);
-    /* Resume where the scan stopped, so skipped rows are not revisited. */
-    size_t next = scanned;
-    if (next < count) {
-        char cursor_buf[32];
-        snprintf(cursor_buf, sizeof(cursor_buf), "%zu", next);
-        cJSON_AddStringToObject(root, "cursor", cursor_buf);
-    }
+    /*
+     * The cursor is the last DID read, so the next page resumes after it
+     * whatever has been created or deleted in between. It is omitted only
+     * when the registry is known to be exhausted — a full page that happens
+     * to end at the last account still hands out a cursor, and the client
+     * gets one empty page rather than a truncated enumeration.
+     */
+    if (!exhausted && last_did[0])
+        cJSON_AddStringToObject(root, "cursor", last_did);
     return set_json(response, root);
 }
 
