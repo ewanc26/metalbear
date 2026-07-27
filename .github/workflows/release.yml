@@ -37,14 +37,15 @@ jobs:
             runs-on: ubuntu-24.04-arm
             os: linux
             arch: aarch64
+          # Apple silicon only. The Intel target ran on macos-13, the last
+          # x86_64 image, which now queues for hours or never picks up a runner
+          # at all and held whole releases behind it. Rosetta 2 runs Intel
+          # binaries on Apple silicon and not the reverse, so an Intel Mac
+          # builds from source.
           - name: macos-arm64
             runs-on: macos-15
             os: macos
             arch: arm64
-          - name: macos-x86_64
-            runs-on: macos-13
-            os: macos
-            arch: x86_64
 
     steps:
       - uses: actions/checkout@v4
@@ -272,10 +273,13 @@ jobs:
 
             ## Binaries
 
-            Prebuilt for Linux (x86_64, aarch64) and macOS (arm64, x86_64).
-            Each archive contains the binary, the lexicon corpus records are
+            Prebuilt for Linux (x86_64, aarch64) and macOS (arm64). Each
+            archive contains the binary, the lexicon corpus records are
             validated against, an example configuration, and the runtime
             libraries it expects. Verify with the accompanying `.sha256`.
+
+            There is no Intel macOS build: GitHub's last x86_64 macOS runner is
+            being retired. Build from source on an Intel Mac.
 
             MetalBear does not terminate TLS: bind it to loopback and put a
             reverse proxy in front, forwarding WebSocket upgrades.
