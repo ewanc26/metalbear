@@ -5,6 +5,8 @@
 #endif
 
 #include "metalbear/server.h"
+#include "metalbear/log.h"
+#include "metalbear/metrics.h"
 #include "metalbear/account.h"
 #include "metalbear/account_registry.h"
 #include "metalbear/account_context.h"
@@ -44,61 +46,7 @@
 #include <ftw.h>
 #include <curl/curl.h>
 
-typedef enum metalbear_log_level {
-    METALBEAR_LOG_DEBUG = 0,
-    METALBEAR_LOG_INFO,
-    METALBEAR_LOG_WARN,
-    METALBEAR_LOG_ERROR,
-} metalbear_log_level;
-
-static metalbear_log_level log_level = METALBEAR_LOG_INFO;
-static FILE *log_file = NULL;
-
-static metalbear_log_level metalbear_log_level_from_env(void) {
-    const char *level = getenv("METALBEAR_LOG_LEVEL");
-    if (!level || !level[0]) return METALBEAR_LOG_INFO;
-    if (strcmp(level, "debug") == 0 || strcmp(level, "DEBUG") == 0) return METALBEAR_LOG_DEBUG;
-    if (strcmp(level, "info") == 0 || strcmp(level, "INFO") == 0) return METALBEAR_LOG_INFO;
-    if (strcmp(level, "warn") == 0 || strcmp(level, "WARN") == 0) return METALBEAR_LOG_WARN;
-    if (strcmp(level, "error") == 0 || strcmp(level, "ERROR") == 0) return METALBEAR_LOG_ERROR;
-    char *end = NULL;
-    long v = strtol(level, &end, 10);
-    if (end && *end == '\0' && v >= 0 && v <= 3) return (int)v;
-    return METALBEAR_LOG_INFO;
-}
-
-static FILE *metalbear_log_file_from_env(void) {
-    const char *path = getenv("METALBEAR_LOG_FILE");
-    if (!path || !path[0]) return NULL;
-    return fopen(path, "a");
-}
-
-static void metalbear_log(metalbear_log_level level, const char *fmt, ...) {
-    if (level < log_level) return;
-    static const char *level_names[] = {"DEBUG", "INFO", "WARN", "ERROR"};
-    va_list args;
-    FILE *out = log_file ? log_file : stderr;
-    time_t now = time(NULL);
-    struct tm tm;
-#if defined(__APPLE__)
-    localtime_r(&now, &tm);
-#else
-    localtime_r(&now, &tm);
-#endif
-    char ts[32];
-    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
-    fprintf(out, "MetalBear [%s] [%s] ", level_names[level], ts);
-    va_start(args, fmt);
-    vfprintf(out, fmt, args);
-    va_end(args);
-    fprintf(out, "\n");
-    if (log_file) fflush(log_file);
-}
-
-#define LOG_DEBUG(...) metalbear_log(METALBEAR_LOG_DEBUG, __VA_ARGS__)
-#define LOG_INFO(...) metalbear_log(METALBEAR_LOG_INFO, __VA_ARGS__)
-#define LOG_WARN(...) metalbear_log(METALBEAR_LOG_WARN, __VA_ARGS__)
-#define LOG_ERROR(...) metalbear_log(METALBEAR_LOG_ERROR, __VA_ARGS__)
+/* Logging lives in log.c so the daemon shares it: see metalbear/log.h. */
 
 static char *join_path(const char *directory, const char *name);
 
@@ -111,6 +59,8 @@ static bool admin_authenticated(metalbear_server *server,
 
 struct metalbear_server {
     wf_xrpc_server *xrpc;
+    /* When this process began serving, for the uptime gauge at /metrics. */
+    time_t started_at;
     /*
      * The server's own PLC rotation key and OAuth store.
      *
@@ -176,6 +126,7 @@ static void publish_handle_dns(metalbear_server *server, const char *handle,
                                const char *did) {
     if (!server->handle_dns || !handle || !did) return;
     if (metalbear_handle_dns_publish(server->handle_dns, handle, did) != WF_OK) {
+        metalbear_metrics_inc(METALBEAR_METRIC_DNS_FAILURES);
         LOG_ERROR("dns: could not publish _atproto.%s for did=%s: %s; the "
                   "handle will not resolve until the record exists",
                   handle, did,
@@ -190,6 +141,7 @@ static void publish_handle_dns(metalbear_server *server, const char *handle,
 static void retract_handle_dns(metalbear_server *server, const char *handle) {
     if (!server->handle_dns || !handle) return;
     if (metalbear_handle_dns_retract(server->handle_dns, handle) != WF_OK) {
+        metalbear_metrics_inc(METALBEAR_METRIC_DNS_FAILURES);
         LOG_WARN("dns: could not remove _atproto.%s: %s; the record now points "
                  "at a handle this host no longer serves",
                  handle, metalbear_handle_dns_last_error(server->handle_dns));
@@ -469,7 +421,22 @@ static bool full_access_route(const char *nsid) {
 /* Defined below alongside the other account-status helpers. */
 static bool account_is_taken_down(metalbear_server *server, const char *did);
 
+static wf_status authenticate_request(wf_xrpc_request *req, void *ctx);
+
+/*
+ * Wraps the auth callback purely to count. It is the one place every XRPC
+ * request passes through, public routes included, and wrapping it means a
+ * refusal added later cannot forget to be counted — which is the whole value
+ * of the rejected/total ratio as a signal.
+ */
 static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
+    metalbear_metrics_inc(METALBEAR_METRIC_XRPC_REQUESTS);
+    wf_status status = authenticate_request(req, ctx);
+    if (status != WF_OK) metalbear_metrics_inc(METALBEAR_METRIC_XRPC_REJECTED);
+    return status;
+}
+
+static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
     metalbear_server *server = ctx;
     LOG_DEBUG("authenticate: nsid=%s method=%s host=%s auth=%s",
               req->nsid ? req->nsid : "-",
@@ -746,6 +713,7 @@ static wf_status delete_account(void *ctx, const wf_xrpc_request *request,
                                        "deleted");
     int64_t purged = 0;
     metalbear_sequencer_purge_account(server->sequencer, acct->did, &purged);
+    metalbear_metrics_inc(METALBEAR_METRIC_ACCOUNTS_DELETED);
     LOG_INFO("delete_account: purged %lld firehose events for did=%s",
              (long long)purged, acct->did);
     /* Drop the handle's TXT record: leaving it would keep pointing resolvers
@@ -1840,6 +1808,7 @@ static wf_status create_session(void *ctx, const wf_xrpc_request *request,
     if (credential == METALBEAR_CREDENTIAL_INVALID || !acct) {
         LOG_WARN("create_session: invalid credentials for host=%s",
                  request->host_header ? request->host_header : "(unknown)");
+        metalbear_metrics_inc(METALBEAR_METRIC_LOGIN_FAILURES);
         wf_xrpc_response_set_error(response, 401, "AuthenticationRequired",
                                    "Invalid identifier or password");
         return WF_OK;
@@ -1851,6 +1820,7 @@ static wf_status create_session(void *ctx, const wf_xrpc_request *request,
      */
     if (account_is_taken_down(server, acct->did)) {
         free(app_password_name);
+        metalbear_metrics_inc(METALBEAR_METRIC_LOGIN_FAILURES);
         LOG_WARN("create_session: refused taken-down account did=%s", acct->did);
         wf_xrpc_response_set_error(response, 401, "AccountTakedown",
                                    "Account has been taken down");
@@ -1871,6 +1841,7 @@ static wf_status create_session(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     free(app_password_name);
+    metalbear_metrics_inc(METALBEAR_METRIC_SESSIONS_CREATED);
     LOG_INFO("create_session: issued session for did=%s scope=%d", acct->did, scope);
     wf_status status = set_json(response, session_json(server, acct, &tokens));
     metalbear_session_tokens_free(&tokens);
@@ -3710,6 +3681,7 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
 
+    metalbear_metrics_inc(METALBEAR_METRIC_ACCOUNTS_CREATED);
     LOG_INFO("create_account: created handle=%s did=%s email=%s",
              handle->valuestring, account_did, email->valuestring);
 
@@ -4534,6 +4506,7 @@ static wf_status admin_update_subject_status(void *ctx,
          * effect on the tokens already issued rather than only on new logins.
          * Lifting it does not restore them: the holder logs in again.
          */
+        if (applying) metalbear_metrics_inc(METALBEAR_METRIC_TAKEDOWNS_APPLIED);
         if (account_subject && applying) {
             metalbear_account_context *acct = context_for_did(server, did);
             if (acct) metalbear_auth_delete_all(acct->auth);
@@ -5070,6 +5043,7 @@ static wf_status admin_delete_account(void *ctx,
     int64_t purged = 0;
     metalbear_sequencer_purge_account(server->sequencer, did->valuestring,
                                       &purged);
+    metalbear_metrics_inc(METALBEAR_METRIC_ACCOUNTS_DELETED);
     LOG_INFO("admin_delete_account: purged %lld firehose events for did=%s",
              (long long)purged, did->valuestring);
 
@@ -5141,11 +5115,13 @@ static void *crawler_notify_main(void *raw) {
             wf_response up = {0};
             wf_status st = wf_xrpc_procedure(
                 client, "com.atproto.sync.requestCrawl", n->body, &up);
-            if (st != WF_OK || up.status < 200 || up.status >= 300)
+            if (st != WF_OK || up.status < 200 || up.status >= 300) {
+                metalbear_metrics_inc(METALBEAR_METRIC_CRAWL_FAILURES);
                 LOG_WARN("requestCrawl to %s failed (status %ld)", host,
                          (long)up.status);
-            else
+            } else {
                 LOG_INFO("announced new data to %s", host);
+            }
             wf_response_free(&up);
             wf_xrpc_client_free(client);
         }
@@ -5790,6 +5766,7 @@ static wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
                                     "failed to store blob");
         return WF_OK;
     }
+    metalbear_metrics_inc(METALBEAR_METRIC_BLOBS_UPLOADED);
     cJSON *root = cJSON_CreateObject();
     cJSON *blob = cJSON_CreateObject();
     if (!root || !blob) {
@@ -6318,6 +6295,97 @@ static wf_status tls_check_handler(void *ctx, const wf_xrpc_request *req,
     return WF_OK;
 }
 
+/* ---- GET /metrics (Prometheus text format, admin-gated) ----
+ *
+ * Counters come from the metrics table; everything describing the host's
+ * current state is read from the real thing here rather than mirrored into a
+ * gauge, because a mirrored gauge is a second copy of the truth and drifts
+ * from the first.
+ *
+ * Behind the admin password. An open endpoint would publish the account count
+ * and the write rate of a private host to anyone who asked, and hand an
+ * unauthenticated caller an unbounded amount of work per request. Prometheus
+ * has had basic_auth in its scrape config for as long as it has existed.
+ */
+static wf_status metrics_handler(void *ctx, const wf_xrpc_request *req,
+                                 wf_xrpc_response *resp) {
+    metalbear_server *server = ctx;
+    if (!admin_authenticated(server, req)) {
+        wf_xrpc_response_set_error(resp, 401, "AuthenticationRequired",
+                                   "Authentication required");
+        return WF_OK;
+    }
+
+    sb_t sb = {0};
+    bool ok = sb_append(&sb,
+        "# HELP metalbear_build_info Version of the running server.\n"
+        "# TYPE metalbear_build_info gauge\n"
+        "metalbear_build_info{version=\"%s\"} 1\n", METALBEAR_VERSION);
+
+    for (int i = 0; ok && i < METALBEAR_METRIC_COUNT; i++) {
+        const char *name = metalbear_metric_name(i);
+        const char *help = metalbear_metric_help(i);
+        if (!name) continue;
+        ok = sb_append(&sb,
+                       "# HELP metalbear_%s %s\n"
+                       "# TYPE metalbear_%s counter\n"
+                       "metalbear_%s %llu\n",
+                       name, help ? help : "", name, name,
+                       (unsigned long long)metalbear_metrics_get(i));
+    }
+
+    /* Account counts, read from the registry at scrape time. */
+    size_t total = 0, active = 0, taken_down = 0;
+    metalbear_account_entry *entries = NULL;
+    size_t count = 0;
+    if (metalbear_account_registry_list(server->registry, &entries,
+                                        &count) == WF_OK) {
+        total = count;
+        for (size_t i = 0; i < count; i++) {
+            if (account_is_taken_down(server, entries[i].did)) taken_down++;
+            else if (entries[i].active) active++;
+        }
+        metalbear_account_entries_free(entries, count);
+    }
+    if (ok)
+        ok = sb_append(&sb,
+            "# HELP metalbear_accounts Accounts on this host by status.\n"
+            "# TYPE metalbear_accounts gauge\n"
+            "metalbear_accounts{status=\"active\"} %zu\n"
+            "metalbear_accounts{status=\"inactive\"} %zu\n"
+            "metalbear_accounts{status=\"takendown\"} %zu\n",
+            active, total - active - taken_down, taken_down);
+
+    /*
+     * The firehose cursor. A relay that has stopped consuming shows up as this
+     * climbing while nothing downstream moves, and it is the single number
+     * worth alerting on: a PDS whose sequence has stalled is one nobody can
+     * tell apart from a PDS that is down.
+     */
+    if (ok)
+        ok = sb_append(&sb,
+            "# HELP metalbear_firehose_seq Most recent firehose sequence number.\n"
+            "# TYPE metalbear_firehose_seq gauge\n"
+            "metalbear_firehose_seq %lld\n",
+            (long long)metalbear_sequencer_current(server->sequencer));
+
+    if (ok)
+        ok = sb_append(&sb,
+            "# HELP metalbear_uptime_seconds Seconds since this process began serving.\n"
+            "# TYPE metalbear_uptime_seconds gauge\n"
+            "metalbear_uptime_seconds %lld\n",
+            (long long)(time(NULL) - server->started_at));
+
+    if (!ok) {
+        free(sb.buf);
+        return WF_ERR_ALLOC;
+    }
+    wf_xrpc_response_set_content_type(resp, "text/plain; version=0.0.4");
+    wf_xrpc_response_set_body(resp, sb.buf, sb.len);
+    free(sb.buf);
+    return WF_OK;
+}
+
 static wf_status landing_handler(void *ctx, const wf_xrpc_request *req,
                                  wf_xrpc_response *resp) {
     (void)req;
@@ -6713,6 +6781,9 @@ static wf_status register_identity_documents(metalbear_server *server) {
     status = wf_xrpc_server_register_http_prefix(server->xrpc, "GET", "/acct/",
                                                  handle_account_did_web, server);
     if (status != WF_OK) return status;
+    status = wf_xrpc_server_register_http_route(server->xrpc, "GET", "/metrics",
+                                                metrics_handler, server);
+    if (status != WF_OK) return status;
     status = wf_xrpc_server_register_http_route(server->xrpc, "GET", "/",
                                                 landing_handler, server);
     if (status != WF_OK) return status;
@@ -6772,8 +6843,7 @@ static bool valid_config(const metalbear_config *config) {
 }
 
 metalbear_server *metalbear_server_start(const metalbear_config *config) {
-    log_level = metalbear_log_level_from_env();
-    log_file = metalbear_log_file_from_env();
+    metalbear_log_configure();
     if (!valid_config(config)) {
         LOG_ERROR("invalid server configuration");
         return NULL;
@@ -6784,6 +6854,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     }
 
     metalbear_server *server = calloc(1, sizeof(*server));
+    if (server) server->started_at = time(NULL);
     if (!server || !copy_config(server, config)) {
         LOG_ERROR("cannot initialise server");
         goto fail;
@@ -7364,10 +7435,7 @@ void metalbear_server_free(metalbear_server *server) {
     metalbear_handle_dns_free(server->handle_dns);
     metalbear_report_store_free(server->reports);
     wf_rate_limiter_free(server->rate_limiter);
-    if (log_file) {
-        fclose(log_file);
-        log_file = NULL;
-    }
+    metalbear_log_close();
     free(server->service_did);
     free(server->public_url);
     free(server->user_domain);
