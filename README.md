@@ -357,7 +357,7 @@ zone_id   = "..."
 ttl       = 300
 ```
 
-Three providers are supported. `zone_id` is whatever each uses to name the
+Four providers are supported. `zone_id` is whatever each uses to name the
 zone, and `api_token` a credential that may edit its records:
 
 | `provider` | `zone_id` | `api_token` | Minimum TTL |
@@ -365,6 +365,29 @@ zone, and `api_token` a credential that may edit its records:
 | `cloudflare` | the zone id from the dashboard | API token with `Zone.DNS:Edit` | 60 |
 | `digitalocean` | the domain, e.g. `example.com` | personal access token, write scope | 30 |
 | `desec` | the domain, e.g. `example.com` | account token | 3600 |
+| `rfc2136` | the zone, e.g. `example.com` | TSIG key as `<name>:<base64 secret>` | 1 |
+
+`rfc2136` is the one that is not a vendor. It speaks the dynamic-update
+protocol (RFC 2136, signed per RFC 8945) that the nameservers themselves
+implement, so it covers BIND, Knot, PowerDNS, NSD and anything else
+standards-compliant — including a nameserver you run. It needs one extra
+setting, the server to send updates to:
+
+```toml
+[dns]
+provider  = "rfc2136"
+server    = "ns1.example.com"   # or "ns1.example.com:5353"
+zone_id   = "example.com"
+api_token = "metalbear-key:c2VjcmV0..."
+```
+
+The credential is the same key name and base64 secret that `nsupdate -y`,
+certbot's rfc2136 plugin and a BIND `key` stanza all take. Updates go over TCP
+and are TSIG-signed; the corresponding grant in BIND looks like
+
+```
+update-policy { grant metalbear-key name _atproto.*.example.com. TXT; };
+```
 
 A `ttl` below the provider's floor is raised to it rather than refused: failing
 every write over a number the provider dislikes would take handle resolution
@@ -489,12 +512,9 @@ PLC directory, and its posts, profile and media appear on the Bluesky AppView.
 
 Still missing or unproven for production use:
 
-- request metrics are counted at the auth callback, so they cover every XRPC
-  route but not the plain HTTP ones, and carry no per-endpoint or per-status
-  breakdown
-- automatic `_atproto` record publication covers Cloudflare, DigitalOcean and
-  deSEC; on any other DNS provider the operator writes one TXT record per
-  account by hand, or handles never resolve
+- the per-route metric table is bounded at 128 routes, after which traffic is
+  counted under `other` rather than by name — enough for the protocol surface,
+  but a host proxying a large AppView surface will spill
 
 ## Frontend
 
