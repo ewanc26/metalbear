@@ -112,9 +112,26 @@ verifying, and nothing reaching a relay. Check the wire, not the API.
   full-repo export grows with the account and silently passes the limit, so a
   validating relay drops the event on exactly the accounts big enough to need
   it.
+- **Frames must be canonical DAG-CBOR.** Three defects of this kind each made
+  the PDS unfederatable while every test passed, because our decoder tolerates
+  exactly what the encoder got wrong: CID links missing the `0x00` multibase
+  prefix, map keys out of canonical order, and integers encoded wider than
+  necessary. The last blocked federation for days — every integer was built at
+  64 bits, so the frame header's `op: 1` took eight bytes where one is
+  canonical, and a strict consumer failed on the header and dropped the
+  connection before reading a single event. From outside that is
+  indistinguishable from a relay refusing to talk to you.
 - When diagnosing, capture a `#commit` from `bsky.network` and one from the PDS
-  and compare them field by field. That is what found the missing CID prefix
-  after a great deal of guessing did not.
+  and compare them field by field **and byte by byte**. That is what found all
+  three, after a great deal of guessing did not.
+- **A relay that connects and leaves is not a relay that never came.** indigo
+  logs a validation failure and advances its cursor anyway, so a cursor stuck
+  at `-1` means the frame never decoded — not that it decoded and was
+  rejected. That distinction rules out every semantic check at once and points
+  straight at the encoding. Read the consumer's source before theorising.
+- Measurements need checking before conclusions do. "No requests from the
+  relay" was drawn from a log grep that could never have matched, because
+  traffic arrives through a tunnel and nginx logs the tunnel's address.
 - `tools/firehose_probe.py <host>` subscribes over the public ingress and
   checks the frames a strict reader would reject. Like `verify_repo_car.py` it
   is stdlib-only and shares no code with Wolfram — verifying our encoder with
