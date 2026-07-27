@@ -195,17 +195,23 @@ wf_status metalbear_sequencer_account_status(metalbear_sequencer *s,
     return append_event(s, &event);
 }
 
-wf_status metalbear_sequencer_account_activation(
-        metalbear_sequencer *s, const char *did, const char *handle,
-        metalbear_repo_store *repo) {
-    if (!s || !did || !handle || !repo) return WF_ERR_INVALID_ARG;
+wf_status metalbear_sequencer_identity(metalbear_sequencer *s, const char *did,
+                                       const char *handle) {
+    if (!s || !did || !handle || !handle[0]) return WF_ERR_INVALID_ARG;
     wf_subscribe_event identity = {.type = WF_SUBSCRIBE_EVENT_IDENTITY};
     snprintf(identity.data.identity.did, sizeof(identity.data.identity.did),
              "%s", did);
     snprintf(identity.data.identity.handle,
              sizeof(identity.data.identity.handle), "%s", handle);
     identity.data.identity.has_handle = 1;
-    wf_status status = append_event(s, &identity);
+    return append_event(s, &identity);
+}
+
+wf_status metalbear_sequencer_account_activation(
+        metalbear_sequencer *s, const char *did, const char *handle,
+        metalbear_repo_store *repo) {
+    if (!s || !did || !handle || !repo) return WF_ERR_INVALID_ARG;
+    wf_status status = metalbear_sequencer_identity(s, did, handle);
     if (status != WF_OK) return status;
     status = metalbear_sequencer_account_status(s, did, 1, NULL);
     if (status != WF_OK) return status;
