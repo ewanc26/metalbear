@@ -83,7 +83,10 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF \
             -DMETALBEAR_BUILD_TESTS=OFF \
             -DWOLFRAM_SOURCE_DIR=${{ github.workspace }}/wolfram
-          cmake --build build --parallel
+          # Only the binary this release ships. Building `all` also builds
+          # Wolfram's own CLI, which links c-ares and so failed the macOS build
+          # on a dependency nothing in the artifact uses.
+          cmake --build build --parallel --target metalbear
 
       - name: Smoke test the binary
         working-directory: MetalBear
