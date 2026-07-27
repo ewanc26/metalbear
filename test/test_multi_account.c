@@ -23,6 +23,7 @@
 
 #include <cJSON.h>
 #include <ftw.h>
+#include <openssl/evp.h>
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -186,6 +187,27 @@ static int count_events_mentioning(const char *seq_path, const char *did) {
         sqlite3_stmt *stmt = NULL;
         if (sqlite3_prepare_v2(db,
                 "SELECT COUNT(*) FROM events WHERE instr(frame, ?) > 0;",
+                -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, did, -1, SQLITE_STATIC);
+            if (sqlite3_step(stmt) == SQLITE_ROW)
+                found = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+    return found;
+}
+
+/* #account frames naming `did` and carrying the `deleted` status. */
+static int count_deleted_events_for(const char *seq_path, const char *did) {
+    sqlite3 *db = NULL;
+    int found = 0;
+    if (sqlite3_open(seq_path, &db) == SQLITE_OK) {
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(db,
+                "SELECT COUNT(*) FROM events "
+                "WHERE instr(frame, '#account') > 0 AND instr(frame, ?) > 0 "
+                "AND instr(frame, 'deleted') > 0;",
                 -1, &stmt, NULL) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, did, -1, SQLITE_STATIC);
             if (sqlite3_step(stmt) == SQLITE_ROW)
@@ -828,6 +850,63 @@ int main(void) {
         CHECK(body_contains(&response, "carol.example.com"));
         CHECK(body_contains(&response, "did:plc:carol"));
         wf_response_free(&response);
+    }
+
+    /*
+     * Deleting an account takes its history off the firehose too.
+     *
+     * The data directory was already removed, but the commits stayed in the
+     * host log with the record contents inside them, so a consumer
+     * backfilling from an old cursor was still handed the repository of
+     * somebody who had asked to be gone — a deletion that removes the copy
+     * nobody reads and keeps the copy the network does.
+     *
+     * Exactly one event must survive: the `deleted` #account announcement. A
+     * consumer that never sees it cannot tell a deleted account from a host
+     * that simply went quiet.
+     */
+    {
+        char *token_dave = create_account(client, "dave.example.com",
+                                          "did:plc:dave", "davesecret");
+        CHECK(token_dave != NULL);
+        if (token_dave) {
+            wf_xrpc_client_set_auth(client, token_dave);
+            CHECK(create_record(client, "did:plc:dave", "d1", "one") == 200);
+            CHECK(create_record(client, "did:plc:dave", "d2", "two") == 200);
+            wf_xrpc_client_set_auth(client, NULL);
+            /* Creation, identity and two commits at least. */
+            CHECK(count_events_mentioning(shared_seq, "did:plc:dave") > 2);
+
+            int64_t others_before = count_all_events(shared_seq) -
+                count_events_mentioning(shared_seq, "did:plc:dave");
+            wf_response response = {0};
+            char url[256];
+            snprintf(url, sizeof(url),
+                     "%s/xrpc/com.atproto.admin.deleteAccount", base);
+            char cred[64];
+            int n = snprintf(cred, sizeof(cred), "admin:%s", "secret-admin");
+            char b64[128];
+            int len = EVP_EncodeBlock((unsigned char *)b64,
+                                      (const unsigned char *)cred, n);
+            b64[len] = '\0';
+            char auth[160];
+            snprintf(auth, sizeof(auth), "Basic %s", b64);
+            wf_http_header hdr = {"Authorization", auth};
+            CHECK(wf_http_post(client, url, "application/json",
+                               "{\"did\":\"did:plc:dave\"}", &hdr, 1,
+                               &response) == WF_OK);
+            CHECK(response.status == 200);
+            wf_response_free(&response);
+
+            CHECK(count_events_mentioning(shared_seq, "did:plc:dave") == 1);
+            /* The one left is the deletion, and no other account's events
+             * were caught by the sweep. */
+            CHECK(count_deleted_events_for(shared_seq, "did:plc:dave") == 1);
+            CHECK(count_all_events(shared_seq) -
+                  count_events_mentioning(shared_seq, "did:plc:dave") ==
+                  others_before);
+            free(token_dave);
+        }
     }
 
     free(token_bob);
