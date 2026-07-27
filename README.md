@@ -142,6 +142,38 @@ The `pdsadmin/metalbear-admin.sh` script mirrors the reference PDS admin tooling
 - Automatic firehose event retention
 - Dynamic landing page at `/` listing hosted accounts and version
 
+## Install
+
+### Container
+
+```sh
+docker run -d --name metalbear -p 2583:2583 -v metalbear-data:/data \
+  -e METALBEAR_SERVICE_DID=did:web:pds.example.com \
+  -e METALBEAR_USER_DOMAIN=.pds.example.com \
+  ghcr.io/ewanc26/metalbear:latest
+```
+
+Built for `linux/amd64` and `linux/arm64`. Mount a `config.toml` and set
+`METALBEAR_CONFIG` to configure it as a file instead; environment variables
+override whatever the file says.
+
+### Prebuilt binaries
+
+Each [release](https://github.com/ewanc26/metalbear/releases) carries archives
+for Linux (x86_64, aarch64) and macOS (arm64, x86_64), containing the binary,
+the lexicon corpus, and an example configuration. They link the system's TLS,
+HTTP, SQLite and crypto libraries, so those must be installed:
+
+```sh
+apt install libsqlite3-0 libcurl4 libssl3 libsecp256k1-1 libmicrohttpd12 \
+            libzstd1 zlib1g                                    # Debian/Ubuntu
+brew install openssl@3 sqlite libmicrohttpd secp256k1 zstd     # macOS
+```
+
+MetalBear does not terminate TLS. Bind it to loopback and put a reverse proxy
+in front, forwarding WebSocket upgrades — without those the firehose will not
+serve and the host will never federate.
+
 ## Build and test
 
 Wolfram's server dependencies are required (`libmicrohttpd`, SQLite,
