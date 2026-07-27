@@ -44,3 +44,9 @@ CMake defaults to the sibling `../wolfram` checkout. Set
 - Never commit secrets, live credentials, signing keys, or PDS data.
 - Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
   Do not open a public issue for a security defect.
+
+## Support the project
+
+Code is the most useful contribution, but not the only one. If you would rather
+fund the work than write it, MetalBear and Wolfram are both supported through
+[github.com/sponsors/ewanc26](https://github.com/sponsors/ewanc26).
