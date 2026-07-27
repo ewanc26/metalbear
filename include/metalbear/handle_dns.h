@@ -28,8 +28,8 @@ extern "C" {
 typedef struct metalbear_handle_dns metalbear_handle_dns;
 
 /*
- * Open a publisher. `provider` is "cloudflare", "digitalocean" or "desec", or
- * NULL/empty for none.
+ * Open a publisher. `provider` is "cloudflare", "digitalocean", "desec" or
+ * "rfc2136", or NULL/empty for none.
  *
  * `zone_id` is whatever the provider uses to name the zone: Cloudflare's
  * opaque zone id, or the domain name itself for the other two.
@@ -48,6 +48,20 @@ typedef struct metalbear_handle_dns metalbear_handle_dns;
 wf_status metalbear_handle_dns_open(const char *provider, const char *api_token,
                                     const char *zone_id, int ttl,
                                     metalbear_handle_dns **out);
+
+/*
+ * As above, with the nameserver the `rfc2136` provider updates — `host` or
+ * `host:port`. The HTTP providers ignore it; rfc2136 refuses to open without
+ * it, since it has nowhere else to learn where to send an update.
+ *
+ * For rfc2136 `api_token` is the TSIG key as `<name>:<base64 secret>`, the
+ * form nsupdate, certbot and a BIND key stanza all write.
+ */
+wf_status metalbear_handle_dns_open_ex(const char *provider,
+                                       const char *api_token,
+                                       const char *zone_id,
+                                       const char *server, int ttl,
+                                       metalbear_handle_dns **out);
 
 void metalbear_handle_dns_free(metalbear_handle_dns *dns);
 

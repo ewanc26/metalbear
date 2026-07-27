@@ -7445,14 +7445,18 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
      * long after the accounts exist.
      */
     if (config->dns_provider && config->dns_provider[0]) {
-        if (metalbear_handle_dns_open(config->dns_provider,
-                                      config->dns_api_token,
-                                      config->dns_zone_id,
-                                      (int)config->dns_record_ttl,
-                                      &server->handle_dns) != WF_OK) {
-            LOG_ERROR("dns: provider '%s' is configured but unusable; it needs "
-                      "an api_token and a zone_id, and 'cloudflare' is the only "
-                      "provider implemented", config->dns_provider);
+        if (metalbear_handle_dns_open_ex(config->dns_provider,
+                                         config->dns_api_token,
+                                         config->dns_zone_id,
+                                         config->dns_server,
+                                         (int)config->dns_record_ttl,
+                                         &server->handle_dns) != WF_OK) {
+            LOG_ERROR("dns: provider '%s' is configured but unusable. It needs "
+                      "an api_token and a zone_id; 'rfc2136' additionally "
+                      "needs a server, and its api_token is the TSIG key as "
+                      "'<name>:<base64 secret>'. Known providers are "
+                      "cloudflare, digitalocean, desec and rfc2136",
+                      config->dns_provider);
             metalbear_server_free(server);
             return NULL;
         }
