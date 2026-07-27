@@ -170,6 +170,22 @@ static int count_events_mentioning(const char *seq_path, const char *did) {
     return found;
 }
 
+/* Total events in the shared log, whatever their type. */
+static int64_t count_all_events(const char *seq_path) {
+    sqlite3 *db = NULL;
+    int64_t count = -1;
+    if (sqlite3_open(seq_path, &db) == SQLITE_OK) {
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM events;", -1, &stmt,
+                               NULL) == SQLITE_OK &&
+            sqlite3_step(stmt) == SQLITE_ROW)
+            count = sqlite3_column_int64(stmt, 0);
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+    return count;
+}
+
 /* createRecord as the currently-authenticated client. Returns HTTP status. */
 static long create_record(wf_xrpc_client *client, const char *repo,
                           const char *rkey, const char *text) {
@@ -649,6 +665,29 @@ int main(void) {
     free(token_carol);
     wf_xrpc_client_free(client);
     metalbear_server_free(server);
+
+    /*
+     * Restarting a host with several accounts must not publish anything.
+     *
+     * Startup reconciliation heals a tail event lost to a crash, and decides
+     * that by looking for the account's newest commit/sync in the log. The log
+     * is host-wide, so it used to stop at the newest event of the right *type*
+     * whoever it belonged to — almost always another account — conclude this
+     * account's state disagreed, and re-announce it. Every restart therefore
+     * emitted a redundant #sync per repo and a redundant #account per account,
+     * which consumers see as real events.
+     */
+    {
+        int64_t events_before = count_all_events(shared_seq);
+        CHECK(events_before > 0);
+        metalbear_server *restarted = metalbear_server_start(&config);
+        CHECK(restarted != NULL);
+        if (restarted) {
+            metalbear_server_free(restarted);
+            CHECK(count_all_events(shared_seq) == events_before);
+        }
+    }
+
     rmtree(directory);
 
     if (failures == 0) {
