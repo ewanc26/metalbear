@@ -424,15 +424,13 @@ static bool account_is_taken_down(metalbear_server *server, const char *did);
 static wf_status authenticate_request(wf_xrpc_request *req, void *ctx);
 
 /*
- * Wraps the auth callback purely to count. It is the one place every XRPC
- * request passes through, public routes included, and wrapping it means a
- * refusal added later cannot forget to be counted — which is the whole value
- * of the rejected/total ratio as a signal.
+ * Wraps the auth callback to count refusals it makes for a reason the status
+ * alone does not carry: the observer sees a 401, but not whether it came from
+ * a missing token, an expired one, or an account that may not act.
  */
 static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
-    metalbear_metrics_inc(METALBEAR_METRIC_XRPC_REQUESTS);
     wf_status status = authenticate_request(req, ctx);
-    if (status != WF_OK) metalbear_metrics_inc(METALBEAR_METRIC_XRPC_REJECTED);
+    if (status != WF_OK) metalbear_metrics_inc(METALBEAR_METRIC_AUTH_REFUSED);
     return status;
 }
 
@@ -6307,6 +6305,58 @@ static wf_status tls_check_handler(void *ctx, const wf_xrpc_request *req,
  * unauthenticated caller an unbounded amount of work per request. Prometheus
  * has had basic_auth in its scrape config for as long as it has existed.
  */
+/* Prometheus label values may not contain a raw quote, backslash or newline;
+ * a route name arrives from the network and could hold any of them, and one
+ * bad character loses the whole exposition rather than one series. */
+static bool append_escaped_label(sb_t *sb, const char *value) {
+    char escaped[256];
+    size_t o = 0;
+    for (const char *p = value; *p && o + 2 < sizeof(escaped); p++) {
+        if (*p == '"' || *p == '\\') escaped[o++] = '\\';
+        else if (*p == '\n') { escaped[o++] = '\\'; escaped[o++] = 'n'; continue; }
+        escaped[o++] = *p;
+    }
+    escaped[o] = '\0';
+    return sb_append(sb, "%s", escaped);
+}
+
+typedef struct route_render {
+    sb_t *sb;
+    bool ok;
+} route_render;
+
+static void render_route(void *ctx, const char *route, uint64_t requests,
+                         uint64_t errors) {
+    route_render *out = ctx;
+    if (!out->ok) return;
+    out->ok = sb_append(out->sb, "metalbear_route_requests_total{route=\"") &&
+              append_escaped_label(out->sb, route) &&
+              sb_append(out->sb, "\"} %llu\n", (unsigned long long)requests) &&
+              sb_append(out->sb, "metalbear_route_errors_total{route=\"") &&
+              append_escaped_label(out->sb, route) &&
+              sb_append(out->sb, "\"} %llu\n", (unsigned long long)errors);
+}
+
+#ifdef WF_XRPC_HAS_REQUEST_OBSERVER
+/*
+ * Every finished request, with the status it answered.
+ *
+ * Counted here rather than in the auth callback, which is where the totals
+ * used to come from: that callback runs before the status is known, never
+ * runs for the plain HTTP routes, and never runs for a request the rate
+ * limiter refused — so the old totals were a subset that could not be named
+ * and carried no outcome at all.
+ */
+static void observe_request(void *ctx, const char *nsid, const char *path,
+                            const char *method, unsigned int status) {
+    (void)ctx;
+    (void)method;
+    metalbear_metrics_inc(METALBEAR_METRIC_REQUESTS);
+    if (status >= 400) metalbear_metrics_inc(METALBEAR_METRIC_REQUESTS_FAILED);
+    metalbear_metrics_record_request(nsid, path, status);
+}
+#endif
+
 static wf_status metrics_handler(void *ctx, const wf_xrpc_request *req,
                                  wf_xrpc_response *resp) {
     metalbear_server *server = ctx;
@@ -6332,6 +6382,24 @@ static wf_status metrics_handler(void *ctx, const wf_xrpc_request *req,
                        "metalbear_%s %llu\n",
                        name, help ? help : "", name, name,
                        (unsigned long long)metalbear_metrics_get(i));
+    }
+
+    /*
+     * Per-route series. The label is escaped because a route name reaches
+     * here from the network — the AppView proxy forwards NSIDs this server
+     * has never heard of — and a quote inside a label value produces an
+     * exposition Prometheus rejects wholesale, losing every other metric with
+     * it.
+     */
+    if (ok) {
+        ok = sb_append(&sb,
+            "# HELP metalbear_route_requests_total Requests per route.\n"
+            "# TYPE metalbear_route_requests_total counter\n"
+            "# HELP metalbear_route_errors_total 4xx and 5xx responses per route.\n"
+            "# TYPE metalbear_route_errors_total counter\n");
+        route_render ctx_render = { &sb, ok };
+        metalbear_metrics_visit_routes(render_route, &ctx_render);
+        ok = ctx_render.ok;
     }
 
     /* Account counts, read from the registry at scrape time. */
@@ -7129,6 +7197,12 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     }
 
     wf_xrpc_server_set_auth_callback(server->xrpc, authenticate, server);
+#ifdef WF_XRPC_HAS_REQUEST_OBSERVER
+    /* Guarded so this still builds against a Wolfram without the observer;
+     * without it the per-route breakdown is simply absent rather than the
+     * build being broken. */
+    wf_xrpc_server_set_request_observer(server->xrpc, observe_request, server);
+#endif
 
     /* Register OAuth HTTP routes (bypass XRPC auth) */
     /* One OAuth store for the host. The account a token speaks for comes from
