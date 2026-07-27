@@ -171,11 +171,11 @@ int main(void) {
         .thread_count = 2,
         .data_directory = directory,
         .service_did = "did:web:pds.example.com",
-        .account_did = "did:plc:metalbeartest",
-        .account_handle = "alice.example.com",
         .user_domain = ".example.com",
-        .password = "correct horse battery staple",
         .admin_password = "secret-admin",
+        /* No account exists until one is created below: the server has no
+         * configured account to be "the" account any more. */
+        .invite_required = false,
     };
     metalbear_server *server = metalbear_server_start(&config);
     CHECK(server != NULL);
@@ -187,12 +187,27 @@ int main(void) {
     wf_xrpc_client *client = wf_xrpc_client_new(base);
     CHECK(client != NULL);
     wf_response response = {0};
+
+    /*
+     * Create the account this test acts as. The server starts with an empty
+     * registry, so nothing exists until createAccount says so — the same path
+     * every other account takes.
+     */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
+        "{\"handle\":\"alice.example.com\","
+        "\"password\":\"correct horse battery staple\","
+        "\"did\":\"did:plc:metalbeartest\","
+        "\"email\":\"alice@example.com\"}", &response) == WF_OK);
+    CHECK(response.status == 200);
+    wf_response_free(&response);
+
     /*
      * Sequence numbers are not guaranteed to start at 1 — a fresh event log is
      * seeded above any value this host may already have issued, so a rebuilt
      * PDS never re-hands-out cursors (see seed_sequence_floor). Read the base
-     * from the seeded events and express every cursor below relative to it,
-     * rather than hard-coding absolutes that are an implementation detail.
+     * from the events the account creation above emitted and express every
+     * cursor below relative to it, rather than hard-coding absolutes that are
+     * an implementation detail.
      */
     int64_t seq_base = 0;
     {
@@ -345,29 +360,22 @@ int main(void) {
     char well_known_url[160];
     snprintf(well_known_url, sizeof(well_known_url),
              "%s/.well-known/atproto-did", base);
-    CHECK(wf_http_get(client, well_known_url, &response) == WF_OK);
-    CHECK(response.status == 200);
-    CHECK(response.body_len == strlen("did:plc:metalbeartest") &&
-          memcmp(response.body, "did:plc:metalbeartest", response.body_len) == 0);
+    /*
+     * The request arrives with Host: 127.0.0.1, which hosts no account. That
+     * must be a miss, not somebody's DID: this used to fall back to the
+     * configured account, so every unknown hostname was answered with that
+     * account's identity — a wrong answer rather than a missing one.
+     */
+    CHECK(wf_http_get(client, well_known_url, &response) == WF_ERR_HTTP);
+    CHECK(response.status == 404);
     wf_response_free(&response);
 
     snprintf(well_known_url, sizeof(well_known_url),
              "%s/.well-known/did.json", base);
-    CHECK(wf_http_get(client, well_known_url, &response) == WF_OK);
-    CHECK(response.status == 200);
-    cJSON *did_document = json_response(&response);
-    cJSON *did_id = cJSON_GetObjectItemCaseSensitive(did_document, "id");
-    cJSON *did_services = cJSON_GetObjectItemCaseSensitive(did_document,
-                                                            "service");
-    cJSON *did_service = cJSON_GetArrayItem(did_services, 0);
-    cJSON *did_endpoint = cJSON_GetObjectItemCaseSensitive(did_service,
-                                                            "serviceEndpoint");
-    CHECK(cJSON_IsString(did_id) &&
-          strcmp(cJSON_IsString(did_id) ? did_id->valuestring : "",
-                 "did:plc:metalbeartest") == 0);
-    CHECK(cJSON_IsString(did_endpoint) &&
-          strcmp(did_endpoint->valuestring, "https://pds.example.com") == 0);
-    cJSON_Delete(did_document);
+    /* Same for the DID document: an unknown hostname is neither the service
+     * identity nor an account here. */
+    CHECK(wf_http_get(client, well_known_url, &response) == WF_ERR_HTTP);
+    CHECK(response.status == 404);
     wf_response_free(&response);
 
     CHECK(wf_xrpc_query(client, "com.atproto.server.describeServer", NULL,
@@ -1309,9 +1317,9 @@ int main(void) {
     wf_xrpc_client_free(client);
     metalbear_server_free(server);
 
-    /* The environment password is bootstrap-only; an existing store keeps its
-     * salted verifier rather than silently replacing credentials on restart. */
-    config.password = "replacement must not overwrite stored credentials";
+    /* Restart on the same data directory: stored credentials survive, and the
+     * account is found through the registry rather than through configuration
+     * naming it. */
     server = metalbear_server_start(&config);
     CHECK(server != NULL);
     if (server) {

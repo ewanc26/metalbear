@@ -110,8 +110,16 @@ static bool admin_authenticated(metalbear_server *server,
 
 struct metalbear_server {
     wf_xrpc_server *xrpc;
-    /* Primary/bootstrap account context (owned for the process lifetime). */
-    metalbear_account_context *bootstrap;
+    /*
+     * The server's own PLC rotation key and OAuth store.
+     *
+     * Both used to be reached through a configured "bootstrap" account, which
+     * made that one account structurally privileged: the host could not exist
+     * before its first user, and anything server-wide that reached through it
+     * acted on the wrong account for everybody else. They belong to the host.
+     */
+    metalbear_key_rotation *plc_rotation;
+    metalbear_oauth_store *oauth;
     metalbear_account_registry *registry;
     wf_rate_limiter *rate_limiter;
     metalbear_email *email;
@@ -293,16 +301,13 @@ static const char *request_account_did(metalbear_server *server,
     return NULL;
 }
 
-/* Return the open context for `did`: the bootstrap context for the primary
- * account (avoids opening a duplicate connection to its stores), or a cached
- * per-account context otherwise. The returned context is owned by the
- * server/cache and must NOT be freed by the caller. Returns NULL when the DID
- * is unknown / cannot be opened. */
+/* Return the cached context for `did`. The returned context is owned by the
+ * cache and must NOT be freed by the caller. Returns NULL when the DID is
+ * unknown / cannot be opened. Every account resolves the same way — there is
+ * no account the server holds open in preference to the others. */
 static metalbear_account_context *context_for_did(metalbear_server *server,
                                                   const char *did) {
     if (!did) return NULL;
-    if (server->bootstrap && strcmp(did, server->bootstrap->did) == 0)
-        return server->bootstrap;
     metalbear_account_context *acct = metalbear_account_cache_get(server->account_cache, server->registry,
                                                                   did);
     if (!acct)
@@ -324,10 +329,9 @@ static metalbear_account_context *context_for_identifier(
     return acct;
 }
 
-/* Resolve the account context for a request. Returns the bootstrap context for
- * the primary account, or a cached per-account context otherwise. The returned
- * context is owned by the server/cache and must NOT be freed by the caller.
- * Returns NULL when the account cannot be resolved. */
+/* Resolve the account context for a request. The returned context is owned by
+ * the cache and must NOT be freed by the caller. Returns NULL when the account
+ * cannot be resolved. */
 static metalbear_account_context *resolve_request_context(
     metalbear_server *server, const wf_xrpc_request *req) {
     char buf[256];
@@ -337,7 +341,7 @@ static metalbear_account_context *resolve_request_context(
 
 /* wolfram per-request resolver: map a request to the correct account's repo /
  * blob stores. Borrowed pointers remain valid for the request duration because
- * the cache (and the bootstrap context) outlive the request. */
+ * the cache outlives the request. */
 static wf_status metalbear_repo_resolver(void *ctx,
                                          const wf_xrpc_request *req,
                                          metalbear_repo_store **out_repo,
@@ -378,13 +382,31 @@ static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
     if (is_admin_route(req->nsid))
         return admin_authenticated(server, req) ? WF_OK : WF_ERR_PERMISSION;
     if (is_public_route(req->nsid)) {
-        if (!metalbear_account_is_active(server->bootstrap->account) &&
-            (strncmp(req->nsid, "com.atproto.repo.", 17) == 0 ||
-             strcmp(req->nsid, "com.atproto.sync.getLatestCommit") == 0 ||
-             strcmp(req->nsid, "com.atproto.sync.getBlob") == 0 ||
-             strcmp(req->nsid, "com.atproto.sync.getRepo") == 0 ||
-             strcmp(req->nsid, "com.atproto.sync.getBlocks") == 0))
-            return WF_ERR_CONFLICT;
+        /*
+         * A deactivated account's repo is not readable. Resolve which account
+         * the request names rather than consulting a single privileged one:
+         * checking the configured account's state meant one user deactivating
+         * took every other account's public reads down with them, and left a
+         * deactivated user's own repo readable.
+         */
+        if (strncmp(req->nsid, "com.atproto.repo.", 17) == 0 ||
+            strcmp(req->nsid, "com.atproto.sync.getLatestCommit") == 0 ||
+            strcmp(req->nsid, "com.atproto.sync.getBlob") == 0 ||
+            strcmp(req->nsid, "com.atproto.sync.getRepo") == 0 ||
+            strcmp(req->nsid, "com.atproto.sync.getBlocks") == 0) {
+            const cJSON *repo = req->params
+                ? cJSON_GetObjectItemCaseSensitive(req->params, "repo") : NULL;
+            const cJSON *did = req->params
+                ? cJSON_GetObjectItemCaseSensitive(req->params, "did") : NULL;
+            const cJSON *target = cJSON_IsString(repo) ? repo :
+                                  (cJSON_IsString(did) ? did : NULL);
+            if (target) {
+                metalbear_account_context *acct =
+                    context_for_identifier(server, target->valuestring);
+                if (acct && !metalbear_account_is_active(acct->account))
+                    return WF_ERR_CONFLICT;
+            }
+        }
         return WF_OK;
     }
     if (req->params && cJSON_IsObject(req->params)) {
@@ -414,7 +436,7 @@ static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
     /* Route to the account named by the token's `sub` claim, then verify the
      * token against THAT account's auth store. The signature is server-wide,
      * so verification proves the token is genuine and `sub` is the identity
-     * we bind the request to (never the bootstrap account). */
+     * we bind the request to. */
     char *sub = jwt_subject(provided);
     if (!sub) {
         LOG_DEBUG("authenticate: invalid JWT for nsid=%s host=%s",
@@ -992,15 +1014,41 @@ static wf_status refresh_identity(void *ctx,
     return identity_info_response(server, identifier->valuestring, response);
 }
 
+/*
+ * Resolve an OAuth `login_hint` (handle or DID) to the account's DID.
+ *
+ * Handed to the OAuth routes so an authorization names a real account hosted
+ * here. Returning 0 for an unknown hint is what keeps the endpoint from
+ * issuing a token for an identity this server does not host.
+ */
+static int resolve_oauth_subject(void *ctx, const char *hint, char *out,
+                                 size_t out_len) {
+    metalbear_server *server = ctx;
+    if (!server || !hint || !hint[0] || !out || out_len == 0) return 0;
+    metalbear_account_context *acct = context_for_identifier(server, hint);
+    if (!acct || !acct->did || !acct->did[0]) return 0;
+    if (strlen(acct->did) >= out_len) return 0;
+    snprintf(out, out_len, "%s", acct->did);
+    return 1;
+}
+
 /* ---- com.atproto.identity.getRecommendedDidCredentials (query) ---- */
 static wf_status get_recommended_did_credentials(void *ctx,
         const wf_xrpc_request *request, wf_xrpc_response *response) {
-    (void)request;
     metalbear_server *server = ctx;
     char *didkey = NULL;
     wf_signing_key key;
     memset(&key, 0, sizeof(key));
-    if (metalbear_key_rotation_current_key(server->bootstrap->key_rotation, &key) != WF_OK ||
+    /* These are credentials for the account making the request. Reading them
+     * from one configured account handed every caller the same identity. */
+    metalbear_account_context *acct =
+        context_for_did(server, request->authed_subject);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "AuthRequired",
+                                   "Authentication required");
+        return WF_OK;
+    }
+    if (metalbear_key_rotation_current_key(acct->key_rotation, &key) != WF_OK ||
         wf_signing_key_public_didkey(&key, &didkey) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not derive signing key");
@@ -1010,9 +1058,9 @@ static wf_status get_recommended_did_credentials(void *ctx,
     if (!root) { free(didkey); return WF_ERR_ALLOC; }
     cJSON *also_known_as = cJSON_CreateArray();
     if (!also_known_as) { cJSON_Delete(root); free(didkey); return WF_ERR_ALLOC; }
-    if (server->bootstrap->handle && server->bootstrap->handle[0]) {
+    if (acct->handle && acct->handle[0]) {
         char aka[256];
-        snprintf(aka, sizeof(aka), "at://%s", server->bootstrap->handle);
+        snprintf(aka, sizeof(aka), "at://%s", acct->handle);
         cJSON_AddItemToArray(also_known_as, cJSON_CreateString(aka));
     }
     cJSON_AddItemToObject(root, "alsoKnownAs", also_known_as);
@@ -2327,8 +2375,9 @@ static wf_status proxy_appview(metalbear_server *server,
     return WF_OK;
 }
 
-/* Generic fallback for unmatched NSIDs (runs before auth). Uses bootstrap
- * account's service-auth; public AppViews may reject unknown DIDs. */
+/* Generic fallback for unmatched NSIDs (runs before auth). Service-auth is
+ * signed by the account the request resolves to; public AppViews may reject
+ * unknown DIDs. */
 static wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
                                 wf_xrpc_response *resp) {
     metalbear_server *server = ctx;
@@ -2904,8 +2953,10 @@ static char *mint_plc_did(metalbear_server *server, const char *handle,
         goto fail;
     }
 
-    /* 2. Load the PDS bootstrap rotation key to sign the genesis operation. */
-    if (metalbear_key_rotation_current_key(server->bootstrap->key_rotation,
+    /* 2. Load the server's PLC rotation key to sign the genesis operation.
+     * It belongs to the host, so minting a DID no longer depends on some
+     * other account existing first. */
+    if (metalbear_key_rotation_current_key(server->plc_rotation,
                                            &rotation_key) != WF_OK) {
         LOG_ERROR("failed to get rotation key");
         goto fail;
@@ -3659,7 +3710,11 @@ static wf_status reserve_signing_key(void *ctx,
     (void)request;
     metalbear_server *server = ctx;
     char *didkey = NULL;
-    if (metalbear_key_rotation_reserve(server->bootstrap->key_rotation, &didkey) != WF_OK) {
+    /* Unauthenticated, matching the reference: this is called during account
+     * migration for a DID that has no account here yet, so there is no
+     * session to authenticate and no account store to reserve against. The
+     * reservation lives in the server's key store. */
+    if (metalbear_key_rotation_reserve(server->plc_rotation, &didkey) != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not reserve signing key");
         return WF_OK;
@@ -5695,12 +5750,12 @@ static metalbear_account_entry *resolve_hostname_to_account(metalbear_server *se
     }
     if (status == WF_OK && entry) return entry;
     metalbear_account_entry_free(entry);
-    if (server->bootstrap && server->bootstrap->handle) {
-        status = metalbear_account_registry_find_by_handle(
-            server->registry, server->bootstrap->handle, &entry);
-    }
-    if (status == WF_OK && entry) return entry;
-    metalbear_account_entry_free(entry);
+    /*
+     * No fallback account. A hostname that matches no registered handle
+     * resolves to nothing — falling back to a configured account answered
+     * every unknown hostname with that account's identity, which is a wrong
+     * answer rather than a missing one.
+     */
     return NULL;
 }
 
@@ -5999,10 +6054,10 @@ static wf_status register_identity_documents(metalbear_server *server) {
 }
 
 static bool valid_config(const metalbear_config *config) {
+    /* No account is required to start: a host exists before its first user,
+     * and accounts arrive through createAccount. */
     return config && config->listen_address && config->data_directory &&
-           config->service_did && config->account_did &&
-           config->account_handle && config->user_domain && config->password &&
-           config->password[0];
+           config->service_did && config->user_domain;
 }
 
 metalbear_server *metalbear_server_start(const metalbear_config *config) {
@@ -6023,46 +6078,69 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
 
-    /* Resolve the primary account's dedicated data directory and open its
-     * full store bundle as the bootstrap context. */
-    char *primary_dir = NULL;
-    if (metalbear_account_dir_for_did(config->data_directory,
-                                      config->account_did, &primary_dir) != WF_OK
-        || !primary_dir) {
-        LOG_ERROR("cannot compute primary account directory");
+    /* Derive the public URL before anything needs it: the OAuth store below
+     * uses it as its token issuer, and it was previously computed late, during
+     * route registration. */
+    if (!server->public_url)
+        server->public_url = public_url_from_service_did(server->service_did);
+    if (!server->public_url) {
+        LOG_ERROR("cannot determine public URL from service DID");
         goto fail;
     }
+
     /* One event log for the host, at the data root — not inside any account's
      * directory. A relay subscribes to the server, not to an account. */
     char *seq_path = NULL;
     if (asprintf(&seq_path, "%s/sequencer.sqlite3",
                  config->data_directory) < 0 || !seq_path) {
         LOG_ERROR("cannot compute sequencer path");
-        free(primary_dir);
         goto fail;
     }
-    if (metalbear_sequencer_open(seq_path, config->account_did,
-                                 config->account_handle,
-                                 &server->sequencer) != WF_OK) {
+    if (metalbear_sequencer_open(seq_path, &server->sequencer) != WF_OK) {
         LOG_ERROR("cannot open sequencer at %s", seq_path);
         free(seq_path);
-        free(primary_dir);
         goto fail;
     }
     free(seq_path);
 
-    if (metalbear_account_context_open_shared(config->service_did,
-                                              server->public_url,
-                                              config->account_did,
-                                              config->account_handle,
-                                              primary_dir, config->password,
-                                              NULL, server->sequencer,
-                                              &server->bootstrap) != WF_OK) {
-        LOG_ERROR("cannot open primary account context");
-        free(primary_dir);
+    /*
+     * The server's PLC rotation key: the authority that signs DID operations
+     * for every account this host mints. Kept at the data root because it
+     * belongs to the host — taking it from a configured account made that
+     * account impossible to delete and impossible to do without.
+     */
+    char *rotation_path = join_path(config->data_directory,
+                                    "server_keys.sqlite3");
+    if (!rotation_path ||
+        metalbear_key_rotation_open(rotation_path,
+                                    &server->plc_rotation) != WF_OK) {
+        LOG_ERROR("cannot open server key store");
+        free(rotation_path);
         goto fail;
     }
-    free(primary_dir);
+    free(rotation_path);
+    if (config->plc_rotation_key && config->plc_rotation_key[0] &&
+        metalbear_key_rotation_import(server->plc_rotation,
+                                      config->plc_rotation_key) != WF_OK) {
+        /* A configured key that cannot be adopted must not be quietly
+         * replaced by a generated one: every DID minted with the wrong key is
+         * unrecoverable without the operator's real key. */
+        LOG_ERROR("METALBEAR_PLC_ROTATION_KEY is not a usable secp256k1 key");
+        goto fail;
+    }
+
+    /* One OAuth store for the host. Its signing key is the server's; the
+     * account a token speaks for is carried in the token, not in the store. */
+    char *oauth_path = join_path(config->data_directory,
+                                 "server_oauth.sqlite3");
+    if (!oauth_path ||
+        metalbear_oauth_store_open(oauth_path, server->public_url,
+                                   &server->oauth) != WF_OK) {
+        LOG_ERROR("cannot open server OAuth store");
+        free(oauth_path);
+        goto fail;
+    }
+    free(oauth_path);
 
     /* Open account registry */
     char *registry_path = join_path(config->data_directory, "accounts.sqlite3");
@@ -6074,25 +6152,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
     free(registry_path);
-    /* Seed the registry with the primary account if not already present.
-     * The data_directory stored is the account's dedicated subdirectory. */
-    metalbear_account_entry *existing = NULL;
-    if (metalbear_account_registry_find_by_did(
-            server->registry, config->account_did, &existing) != WF_OK) {
-        char *primary_dir = NULL;
-        if (metalbear_account_dir_for_did(config->data_directory,
-                                           config->account_did,
-                                           &primary_dir) == WF_OK &&
-            primary_dir) {
-            metalbear_account_registry_add(server->registry,
-                                           config->account_did,
-                                           config->account_handle,
-                                           "", primary_dir);
-            free(primary_dir);
-        }
-    } else {
-        metalbear_account_entry_free(existing);
-    }
+    /* The registry starts empty. There is no account to seed: every account,
+     * including the first, is created through com.atproto.server.createAccount
+     * and registers itself there. */
 
     /* Create rate limiter: 100 requests per 60 seconds */
     server->rate_limiter = wf_rate_limiter_new(100, 60, 0);
@@ -6120,10 +6182,8 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
 
-    /* Cache of open per-account store bundles, keyed by DID. The per-request
-     * repo/blob resolver and the auth callback route non-bootstrap accounts
-     * through this cache. public_url is resolved by register_identity_documents
-     * above, so the cache opens secondary accounts with the same config. */
+    /* Cache of open per-account store bundles, keyed by DID. Every account
+     * resolves through this cache — there is no account held open beside it. */
     server->account_cache = metalbear_account_cache_new(
         server->service_did, server->public_url, server->data_directory);
     /* Every account the cache opens publishes into the one stream
@@ -6262,10 +6322,13 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     wf_xrpc_server_set_auth_callback(server->xrpc, authenticate, server);
 
     /* Register OAuth HTTP routes (bypass XRPC auth) */
-    if (metalbear_oauth_routes_register(server->xrpc, server->bootstrap->oauth,
+    /* One OAuth store for the host. The account a token speaks for comes from
+     * the token itself, so no account DID is bound in at registration. */
+    if (metalbear_oauth_routes_register(server->xrpc, server->oauth,
                                          server->public_url,
                                          server->service_did,
-                                         server->bootstrap->did) != WF_OK) {
+                                         resolve_oauth_subject,
+                                         server) != WF_OK) {
         LOG_ERROR("cannot register OAuth routes");
         goto fail;
     }
@@ -6520,10 +6583,8 @@ void metalbear_server_free(metalbear_server *server) {
     if (!server) return;
     wf_xrpc_server_free(server->xrpc);
     metalbear_account_cache_free(server->account_cache);
-    if (server->bootstrap) {
-        metalbear_repo_store_set_event_callback(server->bootstrap->repo, NULL, NULL);
-        metalbear_account_context_close(server->bootstrap);
-    }
+    metalbear_oauth_store_free(server->oauth);
+    metalbear_key_rotation_free(server->plc_rotation);
     /* Freed after the account contexts, which borrow it. */
     metalbear_sequencer_free(server->sequencer);
     metalbear_account_registry_free(server->registry);

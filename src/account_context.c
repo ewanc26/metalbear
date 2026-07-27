@@ -86,14 +86,14 @@ wf_status metalbear_account_context_open_shared(
     if (metalbear_auth_store_open(auth_path, service_did, did,
                                   &ctx->auth) != WF_OK)
         goto cleanup;
+    (void)public_url;   /* OAuth moved to the server; nothing here needs it. */
     if (metalbear_account_store_open(account_path, password ? password : "",
                                      &ctx->account) != WF_OK)
         goto cleanup;
     if (sequencer) {
         ctx->sequencer = sequencer;      /* borrowed: the PDS-wide log */
         ctx->owns_sequencer = false;
-    } else if (metalbear_sequencer_open(seq_path, did, handle,
-                                        &ctx->sequencer) == WF_OK) {
+    } else if (metalbear_sequencer_open(seq_path, &ctx->sequencer) == WF_OK) {
         ctx->owns_sequencer = true;
     } else {
         goto cleanup;
@@ -113,9 +113,9 @@ wf_status metalbear_account_context_open_shared(
     metalbear_repo_store_set_event_callback(ctx->repo,
                                             metalbear_sequencer_repo_event,
                                             ctx->sequencer);
-    if (metalbear_oauth_store_open(oauth_path, public_url ? public_url : "",
-                                   did, &ctx->oauth) != WF_OK)
-        goto cleanup;
+    /* No per-account OAuth store: OAuth is a server concern, and one store
+     * per account meant each held its own signing key and its own idea of who
+     * tokens belong to. The host's store lives on the server. */
     if (metalbear_key_rotation_open(key_path, &ctx->key_rotation) != WF_OK)
         goto cleanup;
 
@@ -138,7 +138,6 @@ void metalbear_account_context_close(metalbear_account_context *ctx) {
     if (ctx->account) metalbear_account_store_free(ctx->account);
     if (ctx->sequencer && ctx->owns_sequencer)
         metalbear_sequencer_free(ctx->sequencer);
-    if (ctx->oauth) metalbear_oauth_store_free(ctx->oauth);
     if (ctx->key_rotation) metalbear_key_rotation_free(ctx->key_rotation);
     free(ctx->did);
     free(ctx->handle);

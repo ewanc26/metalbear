@@ -29,8 +29,12 @@ typedef struct metalbear_oauth_grant {
 
 void metalbear_oauth_grant_free(metalbear_oauth_grant *grant);
 
+/*
+ * Open the host's OAuth store. Takes no account: the store holds one signing
+ * key for the server, and the account a token speaks for travels with the
+ * grant. Binding a single subject here could only ever admit one account.
+ */
 wf_status metalbear_oauth_store_open(const char *path, const char *issuer,
-                                     const char *subject,
                                      metalbear_oauth_store **out);
 void metalbear_oauth_store_free(metalbear_oauth_store *store);
 
@@ -46,9 +50,12 @@ wf_status metalbear_oauth_create_par(metalbear_oauth_store *store,
                                      int64_t *out_expires_in);
 
 /* Consume a PAR and issue a five-minute, one-time authorization code. */
+/* `subject` is the account DID the issued code (and every token minted from
+ * it) speaks for. */
 wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
                                     const char *request_uri,
                                     const char *client_id,
+                                    const char *subject,
                                     char **out_code,
                                     char **out_redirect_uri,
                                     char **out_state);
