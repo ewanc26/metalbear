@@ -50,9 +50,25 @@ wf_status metalbear_account_registry_find_by_did(
     metalbear_account_registry *registry,
     const char *did, metalbear_account_entry **out);
 
-/* List all accounts. Caller must free the array and each entry. */
+/* List all accounts, ordered by handle. Caller must free the array and each
+ * entry. For anything a client pages through, use the keyset walk below. */
 wf_status metalbear_account_registry_list(
     metalbear_account_registry *registry,
+    metalbear_account_entry **out_entries, size_t *out_count);
+
+/*
+ * One page of accounts with a DID strictly greater than `after` (NULL or ""
+ * for the first page), ordered by DID, at most `limit` of them. A page that
+ * comes back short is the last one.
+ *
+ * Paged on the DID rather than on a row offset because accounts are created
+ * and deleted while a client walks the list, and an offset counts positions
+ * in a list that has since shifted — the account that moved into the slot
+ * already read is never returned, and the one that moved out is returned
+ * twice. The DID is the only key here that a later operation cannot change.
+ */
+wf_status metalbear_account_registry_list_after(
+    metalbear_account_registry *registry, const char *after, size_t limit,
     metalbear_account_entry **out_entries, size_t *out_count);
 
 void metalbear_account_entry_free(metalbear_account_entry *entry);

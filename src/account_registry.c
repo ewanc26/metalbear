@@ -261,6 +261,56 @@ wf_status metalbear_account_registry_list(
     return status;
 }
 
+wf_status metalbear_account_registry_list_after(
+    metalbear_account_registry *registry, const char *after, size_t limit,
+    metalbear_account_entry **out_entries, size_t *out_count) {
+    if (!registry || !out_entries || !out_count || limit == 0)
+        return WF_ERR_INVALID_ARG;
+    *out_entries = NULL;
+    *out_count = 0;
+    pthread_mutex_lock(&registry->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_OK;
+    size_t capacity = 0;
+    /*
+     * Ordered and resumed by DID, not by handle: a handle can be changed, and
+     * a page boundary that moves under a client walking the list makes it
+     * skip or repeat accounts. A DID never changes once minted.
+     */
+    if (sqlite3_prepare_v2(registry->db,
+            "SELECT did,handle,password_hash,data_directory,active "
+            "FROM accounts WHERE did > ? ORDER BY did LIMIT ?;",
+            -1, &stmt, NULL) != SQLITE_OK) {
+        status = WF_ERR_INTERNAL;
+    } else {
+        sqlite3_bind_text(stmt, 1, after ? after : "", -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, (sqlite3_int64)limit);
+    }
+    while (status == WF_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        if (*out_count == capacity) {
+            size_t next = capacity ? capacity * 2 : 4;
+            void *resized = realloc(*out_entries,
+                                    next * sizeof(**out_entries));
+            if (!resized) { status = WF_ERR_ALLOC; break; }
+            *out_entries = resized;
+            memset(*out_entries + capacity, 0,
+                   (next - capacity) * sizeof(**out_entries));
+            capacity = next;
+        }
+        metalbear_account_entry *item = &(*out_entries)[*out_count];
+        status = read_entry(stmt, item);
+        if (status == WF_OK) (*out_count)++;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&registry->mutex);
+    if (status != WF_OK) {
+        metalbear_account_entries_free(*out_entries, *out_count);
+        *out_entries = NULL;
+        *out_count = 0;
+    }
+    return status;
+}
+
 wf_status metalbear_account_registry_remove(
     metalbear_account_registry *registry,
     const char *did) {
