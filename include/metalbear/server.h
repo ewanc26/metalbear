@@ -119,12 +119,18 @@ typedef struct metalbear_config {
      * route always can, but writing a record per account by hand does not scale
      * past the operator's own account.
      *
-     * `dns_provider` is "cloudflare" or empty. Empty leaves handle resolution
-     * to the operator, which is what every deployment did before this existed.
+     * `dns_provider` is "cloudflare", "digitalocean", "desec", "rfc2136", or
+     * empty. Empty leaves handle resolution to the operator, which is what
+     * every deployment did before this existed.
+     *
+     * `dns_server` is only read by the rfc2136 provider, which talks to a
+     * nameserver rather than to a vendor's API and so needs to be told which
+     * one. `host` or `host:port`.
      */
     const char *dns_provider;
     const char *dns_api_token;
     const char *dns_zone_id;
+    const char *dns_server;
     int64_t dns_record_ttl;
 } metalbear_config;
 

@@ -241,6 +241,7 @@ int main(int argc, char **argv) {
     ENV_STR("METALBEAR_DNS_PROVIDER",      dns_provider);
     ENV_STR("METALBEAR_DNS_API_TOKEN",     dns_api_token);
     ENV_STR("METALBEAR_DNS_ZONE_ID",       dns_zone_id);
+    ENV_STR("METALBEAR_DNS_SERVER",        dns_server);
 
     ENV_I64("METALBEAR_RATE_LIMIT",              rate_limit);
     ENV_I64("METALBEAR_RATE_LIMIT_WINDOW",       rate_limit_window);
