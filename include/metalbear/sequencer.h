@@ -49,6 +49,20 @@ wf_status metalbear_sequencer_account_activation(
     metalbear_sequencer *sequencer, const char *did, const char *handle,
     metalbear_repo_store *repo);
 
+/*
+ * Announce that an account's identity changed — in practice, a new handle.
+ *
+ * Consumers learn a handle from the #identity event emitted when the account
+ * was created and have no reason to re-resolve it afterwards, so a rename that
+ * is not announced is durable here and invisible everywhere else.
+ *
+ * Emit this only once the new handle actually resolves. The event is an
+ * instruction to go and look it up; sending it early means every consumer
+ * looks, fails, and records the account as handle.invalid.
+ */
+wf_status metalbear_sequencer_identity(metalbear_sequencer *sequencer,
+                                       const char *did, const char *handle);
+
 /* Prune events older than max_age_seconds. Keeps at least min_events. */
 /*
  * Called after an event is durably sequenced, so the PDS can tell its relays

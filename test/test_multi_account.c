@@ -144,6 +144,33 @@ static int count_commit_events(const char *seq_path) {
 }
 
 /*
+ * Count #identity frames in the shared log naming `handle`.
+ *
+ * The frame's header carries the event type as the text string "#identity" and
+ * the body carries the handle, so a frame holding both is an identity
+ * announcement for that handle. Searching the stored bytes avoids decoding
+ * DAG-CBOR here, and it is the same approach count_events_mentioning uses.
+ */
+static int count_identity_events_for(const char *seq_path, const char *handle) {
+    sqlite3 *db = NULL;
+    int found = 0;
+    if (sqlite3_open(seq_path, &db) == SQLITE_OK) {
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(db,
+                "SELECT COUNT(*) FROM events "
+                "WHERE instr(frame, '#identity') > 0 AND instr(frame, ?) > 0;",
+                -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, handle, -1, SQLITE_STATIC);
+            if (sqlite3_step(stmt) == SQLITE_ROW)
+                found = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+    return found;
+}
+
+/*
  * Count events in the shared log that mention `did`.
  *
  * createAccount used to open the new account against a private per-account
@@ -334,6 +361,26 @@ int main(void) {
         cJSON_Delete(json);
         wf_response_free(&response);
     }
+
+    /*
+     * The rename must reach the firehose.
+     *
+     * updateHandle used to change the registry, the repo and the in-memory
+     * context and stop there. Consumers learn a handle from the #identity
+     * event emitted when the account was created and have no reason to look
+     * again, so the rename was durable here and invisible everywhere else:
+     * relays and AppViews went on serving bob.example.com indefinitely. Every
+     * local read returned the new handle, which is why nothing caught it.
+     */
+    {
+        char seq_path[512];
+        snprintf(seq_path, sizeof(seq_path), "%s/sequencer.sqlite3", directory);
+        CHECK(count_identity_events_for(seq_path, "robert.example.com") > 0);
+        /* And the original announcement is still there, so this is a second
+         * event rather than the creation one being miscounted. */
+        CHECK(count_identity_events_for(seq_path, "bob.example.com") > 0);
+    }
+
     {
         wf_xrpc_param params[] = {{"repo", "did:plc:bob"}};
         wf_response response = {0};
