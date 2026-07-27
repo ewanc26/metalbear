@@ -1,0 +1,103 @@
+/*
+ * Read-only client for the PDS this page is served from.
+ *
+ * The page is prerendered to static files, so everything here runs in the
+ * browser against the same origin. That keeps the landing page honest: it
+ * reports what the server actually answers right now rather than what was
+ * true when the site was built.
+ */
+
+export interface ServerInfo {
+	did: string;
+	availableUserDomains: string[];
+	inviteCodeRequired?: boolean;
+	contact?: { email?: string };
+}
+
+export interface RepoInfo {
+	did: string;
+	head: string;
+	rev: string;
+	active: boolean;
+	status?: string;
+}
+
+export interface RelayStatus {
+	/** Relay hostname, for display. */
+	name: string;
+	/** null while loading, false when the relay does not know this host. */
+	known: boolean | null;
+	seq: number | null;
+	status: string | null;
+}
+
+/** Relays worth asking about a host's federation state. */
+export const RELAYS = [
+	{ label: 'Bluesky', host: 'bsky.network' },
+	{ label: 'Bluesky West', host: 'relay1.us-west.bsky.network' },
+	{ label: 'Bluesky East', host: 'relay1.us-east.bsky.network' },
+	{ label: 'Microcosm Montreal', host: 'relay.fire.hose.cam' },
+	{ label: 'Microcosm France', host: 'relay3.fr.hose.cam' },
+	{ label: 'Upcloud', host: 'relay.upcloud.world' }
+] as const;
+
+async function xrpc<T>(path: string, params?: Record<string, string>): Promise<T> {
+	const url = new URL(`/xrpc/${path}`, window.location.origin);
+	for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
+	const res = await fetch(url, { headers: { accept: 'application/json' } });
+	if (!res.ok) throw new Error(`${path}: ${res.status}`);
+	return res.json() as Promise<T>;
+}
+
+export function describeServer(): Promise<ServerInfo> {
+	return xrpc<ServerInfo>('com.atproto.server.describeServer');
+}
+
+export async function listRepos(): Promise<RepoInfo[]> {
+	const { repos } = await xrpc<{ repos: RepoInfo[] }>('com.atproto.sync.listRepos', {
+		limit: '100'
+	});
+	return repos ?? [];
+}
+
+export async function health(): Promise<string | null> {
+	try {
+		const { version } = await xrpc<{ version: string }>('_health');
+		return version ?? null;
+	} catch {
+		return null;
+	}
+}
+
+/*
+ * Ask each relay whether it is consuming this host.
+ *
+ * `seq` is the useful number: -1 means the relay knows the host but has never
+ * ingested an event from it, which is what a host that is registered but not
+ * actually federating looks like. A missing host answers HostNotFound.
+ */
+export async function relayStatus(hostname: string): Promise<RelayStatus[]> {
+	return Promise.all(
+		RELAYS.map(async ({ label, host }): Promise<RelayStatus> => {
+			try {
+				const res = await fetch(
+					`https://${host}/xrpc/com.atproto.sync.getHostStatus?hostname=${encodeURIComponent(hostname)}`,
+					{ headers: { accept: 'application/json' } }
+				);
+				if (!res.ok) return { name: label, known: false, seq: null, status: null };
+				const body = (await res.json()) as { seq?: number; status?: string; error?: string };
+				if (body.error) return { name: label, known: false, seq: null, status: null };
+				return {
+					name: label,
+					known: true,
+					seq: body.seq ?? null,
+					status: body.status ?? null
+				};
+			} catch {
+				/* A relay we cannot reach is unknown, not unhealthy: say so rather
+				 * than implying something about this server. */
+				return { name: label, known: false, seq: null, status: null };
+			}
+		})
+	);
+}
