@@ -361,6 +361,43 @@ static const char *request_account_did(metalbear_server *server,
     return NULL;
 }
 
+/*
+ * Split `at://<authority>/<collection>/<rkey>` into its three parts, each
+ * copied into the caller's buffer. Returns false unless all three are present
+ * and fit: a strong reference names exactly one record, and a URI stopping at
+ * the collection names a great many.
+ */
+static bool split_at_uri(const char *uri,
+                         char *authority, size_t authority_sz,
+                         char *collection, size_t collection_sz,
+                         char *rkey, size_t rkey_sz) {
+    if (!uri || strncmp(uri, "at://", 5) != 0) return false;
+    const char *parts[3];
+    size_t lengths[3];
+    const char *p = uri + 5;
+    for (int i = 0; i < 3; i++) {
+        parts[i] = p;
+        size_t n = 0;
+        while (p[n] && p[n] != '/') n++;
+        lengths[i] = n;
+        if (n == 0) return false;
+        p += n;
+        if (i < 2) {
+            if (*p != '/') return false;
+            p++;
+        }
+    }
+    if (*p != '\0') return false;
+    char *outs[3] = { authority, collection, rkey };
+    size_t sizes[3] = { authority_sz, collection_sz, rkey_sz };
+    for (int i = 0; i < 3; i++) {
+        if (lengths[i] >= sizes[i]) return false;
+        memcpy(outs[i], parts[i], lengths[i]);
+        outs[i][lengths[i]] = '\0';
+    }
+    return true;
+}
+
 /* Return the cached context for `did`. The returned context is owned by the
  * cache and must NOT be freed by the caller. Returns NULL when the DID is
  * unknown / cannot be opened. Every account resolves the same way — there is
@@ -429,6 +466,9 @@ static bool full_access_route(const char *nsid) {
            strcmp(nsid, "com.atproto.server.deactivateAccount") == 0;
 }
 
+/* Defined below alongside the other account-status helpers. */
+static bool account_is_taken_down(metalbear_server *server, const char *did);
+
 static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
     metalbear_server *server = ctx;
     LOG_DEBUG("authenticate: nsid=%s method=%s host=%s auth=%s",
@@ -443,17 +483,20 @@ static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
         return admin_authenticated(server, req) ? WF_OK : WF_ERR_PERMISSION;
     if (is_public_route(req->nsid)) {
         /*
-         * A deactivated account's repo is not readable. Resolve which account
+         * An unavailable account's repo is not readable. Resolve which account
          * the request names rather than consulting a single privileged one:
          * checking the configured account's state meant one user deactivating
          * took every other account's public reads down with them, and left a
          * deactivated user's own repo readable.
+         *
+         * Only the `com.atproto.repo` reads are gated here, and only for
+         * deactivation. Everything else — takedowns, and the sync reads —
+         * goes through assert_repo_available in the handlers, because this
+         * gate can report `RepoDeactivated` and nothing else: a takedown
+         * answered under that name tells a consuming relay the account holder
+         * chose to leave, when this host in fact refused to serve them.
          */
-        if (strncmp(req->nsid, "com.atproto.repo.", 17) == 0 ||
-            strcmp(req->nsid, "com.atproto.sync.getLatestCommit") == 0 ||
-            strcmp(req->nsid, "com.atproto.sync.getBlob") == 0 ||
-            strcmp(req->nsid, "com.atproto.sync.getRepo") == 0 ||
-            strcmp(req->nsid, "com.atproto.sync.getBlocks") == 0) {
+        if (strncmp(req->nsid, "com.atproto.repo.", 17) == 0) {
             const cJSON *repo = req->params
                 ? cJSON_GetObjectItemCaseSensitive(req->params, "repo") : NULL;
             const cJSON *did = req->params
@@ -463,7 +506,8 @@ static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
             if (target) {
                 metalbear_account_context *acct =
                     context_for_identifier(server, target->valuestring);
-                if (acct && !metalbear_account_is_active(acct->account))
+                if (acct && !metalbear_account_is_active(acct->account) &&
+                    !account_is_taken_down(server, acct->did))
                     return WF_ERR_CONFLICT;
             }
         }
@@ -531,6 +575,23 @@ static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
         scope != METALBEAR_ACCESS_FULL) {
         LOG_WARN("authenticate: insufficient scope for did=%s nsid=%s scope=%d",
                  sub, req->nsid ? req->nsid : "-", scope);
+        free(sub);
+        return WF_ERR_PERMISSION;
+    }
+    /*
+     * A takedown admits none of the exceptions a deactivation does: the
+     * routes a deactivated account may still reach exist so its holder can
+     * reactivate or export, and a taken-down account reactivating itself
+     * would undo the moderation action. Sessions are revoked when the
+     * takedown is applied, but a token minted before it must not outlive it.
+     *
+     * The refresh pair is left to its handlers, which answer with the
+     * lexicon's `AccountTakedown` rather than a bare authentication failure —
+     * the difference a client needs to stop retrying and tell its user why.
+     */
+    if (!refresh_route && account_is_taken_down(server, sub)) {
+        LOG_WARN("authenticate: taken-down account did=%s nsid=%s", sub,
+                 req->nsid ? req->nsid : "-");
         free(sub);
         return WF_ERR_PERMISSION;
     }
@@ -672,8 +733,11 @@ static wf_status delete_account(void *ctx, const wf_xrpc_request *request,
     metalbear_account_delete(acct->account);
     /* Deactivate the account */
     metalbear_account_deactivate(acct->account, NULL);
-    /* Remove from the account registry */
+    /* Remove from the account registry, moderation state included: a DID
+     * re-registered later must not inherit the old account's takedowns. */
     metalbear_account_registry_remove(server->registry, acct->did);
+    metalbear_account_registry_clear_takedowns_for_did(server->registry,
+                                                       acct->did);
     /* Emit deactivation event to firehose */
     metalbear_sequencer_account_status(acct->sequencer, acct->did, 0,
                                        "deleted");
@@ -781,7 +845,8 @@ static wf_status resolve_handle(void *ctx, const wf_xrpc_request *request,
     metalbear_account_context *acct = cJSON_IsString(handle) &&
         wf_syntax_handle_is_valid(handle->valuestring)
         ? context_for_identifier(server, handle->valuestring) : NULL;
-    if (!acct || !metalbear_account_is_active(acct->account)) {
+    if (!acct || !metalbear_account_is_active(acct->account) ||
+        account_is_taken_down(server, acct->did)) {
         wf_xrpc_response_set_error(response, 400, "HandleNotFound",
                                    "Unable to resolve handle");
         return WF_OK;
@@ -1013,13 +1078,14 @@ static bool did_doc_matches_service(metalbear_server *server,
 
 /* Build (local) or fetch (remote) the DID document for `did` as a cJSON
  * tree. Caller must cJSON_Delete the result. Sets *deactivated when the
- * local account exists but is deactivated. */
+ * local account exists but is unavailable — deactivated or taken down. */
 static cJSON *did_doc_for_did(metalbear_server *server, const char *did,
                               bool *deactivated) {
     *deactivated = false;
     metalbear_account_context *acct = context_for_did(server, did);
     if (acct) {
-        if (!metalbear_account_is_active(acct->account)) {
+        if (!metalbear_account_is_active(acct->account) ||
+            account_is_taken_down(server, acct->did)) {
             *deactivated = true;
             return NULL;
         }
@@ -1599,6 +1665,120 @@ static metalbear_credential_kind valid_login(
     return credential;
 }
 
+/*
+ * `com.atproto.admin.defs#statusAttr` — `applied` is required, so a status
+ * that is not applied is reported as `applied: false` rather than by omitting
+ * the field. A moderator reading an omitted key cannot tell "not taken down"
+ * from "this server does not track takedowns".
+ */
+static cJSON *status_attr(bool applied, const char *ref) {
+    cJSON *attr = cJSON_CreateObject();
+    if (!attr) return NULL;
+    cJSON_AddBoolToObject(attr, "applied", applied);
+    if (applied && ref && ref[0])
+        cJSON_AddStringToObject(attr, "ref", ref);
+    return attr;
+}
+
+/* The takedown ref recorded against an account, or NULL. Caller frees. */
+static char *account_takedown_ref(metalbear_server *server, const char *did) {
+    char *ref = NULL;
+    if (!did || !did[0]) return NULL;
+    metalbear_account_registry_get_takedown(server->registry, did, NULL, NULL,
+                                            &ref);
+    return ref;
+}
+
+/*
+ * The account status the lexicons report, mirroring the reference PDS's
+ * formatAccountStatus: a takedown outranks a deactivation, and an active
+ * account carries no `status` at all. Returns NULL when active, and writes
+ * the accompanying `active` boolean through `out_active`.
+ */
+static const char *account_status_string(metalbear_server *server,
+                                         metalbear_account_context *acct,
+                                         bool *out_active) {
+    char *ref = account_takedown_ref(server, acct->did);
+    bool taken_down = ref != NULL;
+    free(ref);
+    bool active = !taken_down && metalbear_account_is_active(acct->account);
+    if (out_active) *out_active = active;
+    if (taken_down) return "takendown";
+    return active ? NULL : "deactivated";
+}
+
+/* Whether the account is taken down, which no bearer token may act through. */
+static bool account_is_taken_down(metalbear_server *server, const char *did) {
+    char *ref = account_takedown_ref(server, did);
+    bool taken_down = ref != NULL;
+    free(ref);
+    return taken_down;
+}
+
+/*
+ * The reference PDS's assertRepoAvailability, which every sync read runs
+ * before touching the repository. A taken-down repository reports a different
+ * error from a deactivated one because the two mean opposite things to a
+ * consumer: one is a moderation action by this host, the other the account
+ * holder's own choice, and a relay backfilling decides whether to retry on
+ * exactly that distinction. Returns false with the response already filled in.
+ */
+static bool assert_repo_available(metalbear_server *server,
+                                  metalbear_account_context *acct,
+                                  const wf_xrpc_request *request,
+                                  wf_xrpc_response *response) {
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 400, "RepoNotFound",
+                                   "Could not find repo");
+        return false;
+    }
+    /* The account itself always sees its own repository. */
+    if (request->authed_subject && acct->did &&
+        strcmp(request->authed_subject, acct->did) == 0)
+        return true;
+    char *ref = account_takedown_ref(server, acct->did);
+    if (ref) {
+        free(ref);
+        wf_xrpc_response_set_error(response, 400, "RepoTakendown",
+                                   "Repo has been takendown");
+        return false;
+    }
+    if (!metalbear_account_is_active(acct->account)) {
+        wf_xrpc_response_set_error(response, 400, "RepoDeactivated",
+                                   "Repo has been deactivated");
+        return false;
+    }
+    return true;
+}
+
+/*
+ * The repository layer's access guard, consulted by every route registered
+ * through metalbear_xrpc_server_register_pds_repo_resolver_ex. A read of the
+ * repository as a whole reports the availability errors; a single record
+ * reads as absent, which is both what the reference answers and the only
+ * thing `com.atproto.repo.getRecord` can say about a moderated record.
+ */
+static bool repo_access_guard(void *ctx, const wf_xrpc_request *req,
+                              const char *record_uri,
+                              wf_xrpc_response *resp) {
+    metalbear_server *server = ctx;
+    if (record_uri) {
+        char *ref = NULL;
+        metalbear_account_registry_get_takedown(server->registry, NULL,
+                                                record_uri, NULL, &ref);
+        if (!ref) return true;
+        free(ref);
+        wf_xrpc_response_set_error(resp, 404, "RecordNotFound",
+                                   "Could not locate record");
+        return false;
+    }
+    metalbear_account_context *acct = resolve_request_context(server, req);
+    /* An unresolvable account is the handler's own error to report, in the
+     * terms its lexicon uses. */
+    if (!acct) return true;
+    return assert_repo_available(server, acct, req, resp);
+}
+
 static cJSON *build_did_doc(metalbear_server *server,
                             metalbear_account_context *acct) {
     const char *signing_didkey =
@@ -1618,9 +1798,10 @@ static cJSON *session_json(metalbear_server *server,
     }
     cJSON_AddStringToObject(root, "handle", acct->handle);
     cJSON_AddStringToObject(root, "did", acct->did);
-    bool active = metalbear_account_is_active(acct->account);
+    bool active = false;
+    const char *status = account_status_string(server, acct, &active);
     cJSON_AddBoolToObject(root, "active", active);
-    if (!active) cJSON_AddStringToObject(root, "status", "deactivated");
+    if (status) cJSON_AddStringToObject(root, "status", status);
     char *email = NULL;
     int confirmed = 0;
     bool email_auth_factor = false;
@@ -1654,6 +1835,18 @@ static wf_status create_session(void *ctx, const wf_xrpc_request *request,
                  request->host_header ? request->host_header : "(unknown)");
         wf_xrpc_response_set_error(response, 401, "AuthenticationRequired",
                                    "Invalid identifier or password");
+        return WF_OK;
+    }
+    /*
+     * Credentials are checked before the takedown so the error does not
+     * distinguish a taken-down account from a wrong password to anyone who
+     * does not already hold the password.
+     */
+    if (account_is_taken_down(server, acct->did)) {
+        free(app_password_name);
+        LOG_WARN("create_session: refused taken-down account did=%s", acct->did);
+        wf_xrpc_response_set_error(response, 401, "AccountTakedown",
+                                   "Account has been taken down");
         return WF_OK;
     }
     metalbear_access_scope scope = credential == METALBEAR_CREDENTIAL_ACCOUNT
@@ -1694,6 +1887,11 @@ static wf_status refresh_session(void *ctx, const wf_xrpc_request *request,
     metalbear_server *server = ctx;
     metalbear_account_context *acct = resolve_request_context(server, request);
     const char *token = bearer_token(request->auth_header);
+    if (acct && account_is_taken_down(server, acct->did)) {
+        wf_xrpc_response_set_error(response, 401, "AccountTakedown",
+                                   "Account has been taken down");
+        return WF_OK;
+    }
     metalbear_session_tokens tokens = {0};
     if (!acct || metalbear_auth_rotate_refresh(acct->auth, token, &tokens) != WF_OK) {
         wf_xrpc_response_set_error(response, 401, "ExpiredToken",
@@ -2719,11 +2917,8 @@ static wf_status get_repo(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     metalbear_account_context *acct = resolve_request_context(server, request);
-    if (!acct) {
-        wf_xrpc_response_set_error(response, 400, "RepoNotFound",
-                                   "Repository is not hosted here");
+    if (!assert_repo_available(server, acct, request, response))
         return WF_OK;
-    }
     unsigned char *data = NULL;
     size_t length = 0;
     wf_status status = metalbear_repo_store_export(
@@ -2748,11 +2943,8 @@ static wf_status get_blocks(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     metalbear_account_context *acct = resolve_request_context(server, request);
-    if (!acct) {
-        wf_xrpc_response_set_error(response, 400, "RepoNotFound",
-                                   "Repository is not hosted here");
+    if (!assert_repo_available(server, acct, request, response))
         return WF_OK;
-    }
     const char **cids = NULL;
     size_t cid_count = 0;
     for (cJSON *item = request->params->child; item; item = item->next) {
@@ -2801,9 +2993,10 @@ static wf_status get_repo_status(void *ctx, const wf_xrpc_request *request,
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     cJSON_AddStringToObject(root, "did", acct->did);
-    bool active = metalbear_account_is_active(acct->account);
+    bool active = false;
+    const char *status = account_status_string(server, acct, &active);
     cJSON_AddBoolToObject(root, "active", active);
-    if (!active) cJSON_AddStringToObject(root, "status", "deactivated");
+    if (status) cJSON_AddStringToObject(root, "status", status);
     char *rev = NULL, *cid = NULL;
     if (active && metalbear_repo_store_get_head(acct->repo, &rev, &cid) == WF_OK)
         cJSON_AddStringToObject(root, "rev", rev);
@@ -2820,11 +3013,8 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
         ? cJSON_GetObjectItemCaseSensitive(request->params, "did") : NULL;
     metalbear_account_context *acct = cJSON_IsString(did)
         ? resolve_request_context(server, request) : NULL;
-    if (!acct) {
-        wf_xrpc_response_set_error(response, 400, "RepoNotFound",
-                                   "Repository is not hosted here");
+    if (!assert_repo_available(server, acct, request, response))
         return WF_OK;
-    }
     /* 'since' is accepted for lexicon compatibility; MetalBear's blob store
      * does not track per-blob revisions, so all available blobs are listed. */
     int limit = query_param_int(request->params, "limit", 500, 1, 1000);
@@ -3113,11 +3303,8 @@ static wf_status get_record(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     metalbear_account_context *acct = resolve_request_context(server, request);
-    if (!acct) {
-        wf_xrpc_response_set_error(response, 400, "RepoNotFound",
-                                   "Repository is not hosted here");
+    if (!assert_repo_available(server, acct, request, response))
         return WF_OK;
-    }
     unsigned char *data = NULL;
     size_t length = 0;
     wf_status status = metalbear_repo_store_get_record_car(
@@ -4163,58 +4350,91 @@ static wf_status admin_get_subject_status(void *ctx,
                                    "at least one of did, uri, or blob is required");
         return WF_OK;
     }
+    /* A CID names content, not an upload, so a blob subject is only
+     * identifiable together with the account that holds it. */
+    if (blob && !did) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "Must provide a did to request blob state");
+        return WF_OK;
+    }
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
-
-    /* Build subject union. */
     cJSON *subject = cJSON_CreateObject();
     if (!subject) { cJSON_Delete(root); return WF_ERR_ALLOC; }
-    if (did) {
+    cJSON_AddItemToObject(root, "subject", subject);
+
+    /*
+     * Blob first, then record, then account. A blob subject carries a DID as
+     * well as a CID, so testing `did` first would answer about the account
+     * that holds the blob instead of about the blob.
+     */
+    char *takedown_ref = NULL;
+    if (blob) {
+        metalbear_account_registry_get_takedown(server->registry, did, NULL,
+                                                blob, &takedown_ref);
+        if (!takedown_ref) {
+            cJSON_Delete(root);
+            wf_xrpc_response_set_error(response, 400, "NotFound",
+                                       "Subject not found");
+            return WF_OK;
+        }
+        cJSON_AddStringToObject(subject, "$type",
+                                "com.atproto.admin.defs#repoBlobRef");
+        cJSON_AddStringToObject(subject, "did", did);
+        cJSON_AddStringToObject(subject, "cid", blob);
+    } else if (uri) {
+        /* `com.atproto.repo.strongRef` requires `cid`, so the record is
+         * resolved to supply one; a strict client rejects a reference that
+         * carries only the URI. */
+        char authority[256], collection[256], rkey[256];
+        char *record_cid = NULL;
+        if (split_at_uri(uri, authority, sizeof authority,
+                         collection, sizeof collection, rkey, sizeof rkey)) {
+            metalbear_account_context *acct =
+                context_for_identifier(server, authority);
+            char *record_json = NULL;
+            if (acct && metalbear_repo_store_get_record(
+                    acct->repo, collection, rkey,
+                    &record_json, &record_cid) != WF_OK)
+                record_cid = NULL;
+            free(record_json);
+        }
+        if (record_cid)
+            metalbear_account_registry_get_takedown(server->registry, NULL, uri,
+                                                    NULL, &takedown_ref);
+        if (!record_cid || !takedown_ref) {
+            free(record_cid);
+            free(takedown_ref);
+            cJSON_Delete(root);
+            wf_xrpc_response_set_error(response, 400, "NotFound",
+                                       "Subject not found");
+            return WF_OK;
+        }
+        cJSON_AddStringToObject(subject, "$type", "com.atproto.repo.strongRef");
+        cJSON_AddStringToObject(subject, "uri", uri);
+        cJSON_AddStringToObject(subject, "cid", record_cid);
+        free(record_cid);
+    } else {
+        metalbear_account_entry *entry = NULL;
+        if (metalbear_account_registry_find_by_did(
+                server->registry, did, &entry) != WF_OK || !entry) {
+            cJSON_Delete(root);
+            wf_xrpc_response_set_error(response, 400, "NotFound",
+                                       "Subject not found");
+            return WF_OK;
+        }
+        metalbear_account_registry_get_takedown(server->registry, did, NULL,
+                                                NULL, &takedown_ref);
         cJSON_AddStringToObject(subject, "$type",
                                 "com.atproto.admin.defs#repoRef");
         cJSON_AddStringToObject(subject, "did", did);
-    } else if (uri) {
-        cJSON_AddStringToObject(subject, "$type",
-                                "com.atproto.repo.strongRef");
-        cJSON_AddStringToObject(subject, "uri", uri);
-    } else {
-        cJSON_AddStringToObject(subject, "$type",
-                                "com.atproto.admin.defs#repoBlobRef");
-        /* repoBlobRef requires did+cid; extract from blob CID or require did. */
-        cJSON_AddStringToObject(subject, "did", did ? did : "");
-        cJSON_AddStringToObject(subject, "cid", blob);
+        cJSON_AddItemToObject(root, "deactivated",
+                              status_attr(!entry->active, NULL));
+        metalbear_account_entry_free(entry);
     }
-    cJSON_AddItemToObject(root, "subject", subject);
-
-    /* Check takedown status. */
-    char *takedown_ref = NULL;
-    if (metalbear_account_registry_get_takedown(
-            server->registry, did, uri, blob, &takedown_ref) == WF_OK &&
-        takedown_ref) {
-        cJSON *td = cJSON_CreateObject();
-        if (td) {
-            cJSON_AddBoolToObject(td, "applied", true);
-            cJSON_AddStringToObject(td, "ref", takedown_ref);
-            cJSON_AddItemToObject(root, "takedown", td);
-        }
-        free(takedown_ref);
-    }
-
-    /* Check deactivation status (accounts only). */
-    if (did) {
-        metalbear_account_entry *entry = NULL;
-        if (metalbear_account_registry_find_by_did(
-                server->registry, did, &entry) == WF_OK && entry) {
-            if (!entry->active) {
-                cJSON *deact = cJSON_CreateObject();
-                if (deact) {
-                    cJSON_AddBoolToObject(deact, "applied", true);
-                    cJSON_AddItemToObject(root, "deactivated", deact);
-                }
-            }
-            metalbear_account_entry_free(entry);
-        }
-    }
+    cJSON_AddItemToObject(root, "takedown",
+                          status_attr(takedown_ref != NULL, takedown_ref));
+    free(takedown_ref);
     return set_json(response, root);
 }
 
@@ -4278,37 +4498,70 @@ static wf_status admin_update_subject_status(void *ctx,
         return WF_OK;
     }
 
+    bool account_subject = did && !uri && !blob_cid;
+    cJSON *takedown_applied = takedown
+        ? cJSON_GetObjectItemCaseSensitive(takedown, "applied") : NULL;
+    cJSON *deactivated_applied = deactivated
+        ? cJSON_GetObjectItemCaseSensitive(deactivated, "applied") : NULL;
+
+    /* The two would race to decide the account's status and the event that
+     * announces it, so the reference refuses the pair outright. */
+    if (cJSON_IsTrue(takedown_applied) && deactivated &&
+        !cJSON_IsTrue(deactivated_applied)) {
+        wf_xrpc_response_set_error(
+            response, 400, "InvalidRequest",
+            "Cannot activate and takedown an account at the same time");
+        return WF_OK;
+    }
+
     /* Apply takedown if present. */
     if (takedown) {
-        cJSON *applied = cJSON_GetObjectItemCaseSensitive(takedown, "applied");
         cJSON *ref = cJSON_GetObjectItemCaseSensitive(takedown, "ref");
         const char *ref_str = cJSON_IsString(ref) ? ref->valuestring : "admin";
-        if (cJSON_IsTrue(applied)) {
-            metalbear_account_registry_set_takedown(
-                server->registry, did, uri, blob_cid, ref_str);
-        } else {
-            metalbear_account_registry_set_takedown(
-                server->registry, did, uri, blob_cid, NULL);
+        bool applying = cJSON_IsTrue(takedown_applied);
+        metalbear_account_registry_set_takedown(
+            server->registry, did, uri, blob_cid,
+            applying ? ref_str : NULL);
+        /*
+         * Every session the account holds is revoked, so a takedown takes
+         * effect on the tokens already issued rather than only on new logins.
+         * Lifting it does not restore them: the holder logs in again.
+         */
+        if (account_subject && applying) {
+            metalbear_account_context *acct = context_for_did(server, did);
+            if (acct) metalbear_auth_delete_all(acct->auth);
+            LOG_INFO("takedown: applied to did=%s ref=%s", did, ref_str);
+        } else if (account_subject) {
+            LOG_INFO("takedown: lifted from did=%s", did);
         }
     }
 
     /* Handle account deactivation (repoRef only). */
-    if (deactivated && did && !uri && !blob_cid) {
-        cJSON *applied = cJSON_GetObjectItemCaseSensitive(deactivated, "applied");
-        if (cJSON_IsTrue(applied)) {
-            metalbear_account_context *acct = context_for_did(server, did);
-            if (acct) {
+    if (deactivated && account_subject) {
+        metalbear_account_context *acct = context_for_did(server, did);
+        if (acct) {
+            if (cJSON_IsTrue(deactivated_applied))
                 metalbear_account_deactivate(acct->account, NULL);
-                metalbear_sequencer_account_status(
-                    acct->sequencer, did, 0, "deactivated");
-            }
-        } else {
-            metalbear_account_context *acct = context_for_did(server, did);
-            if (acct) {
+            else
                 metalbear_account_activate(acct->account);
-                metalbear_sequencer_account_status(
-                    acct->sequencer, did, 1, NULL);
-            }
+        }
+    }
+
+    /*
+     * Announce the resulting status once, whatever changed. Sequenced against
+     * the server's own log rather than a resolved context's, so the event is
+     * not silently skipped for an account that happens not to be cached —
+     * and computed after both changes have been applied, so an account that
+     * is deactivated *and* taken down is announced as taken down rather than
+     * as whichever call ran last.
+     */
+    if (account_subject) {
+        metalbear_account_context *acct = context_for_did(server, did);
+        if (acct) {
+            bool active = false;
+            const char *status = account_status_string(server, acct, &active);
+            metalbear_sequencer_account_status(server->sequencer, did,
+                                               active ? 1 : 0, status);
         }
     }
 
@@ -4802,6 +5055,10 @@ static wf_status admin_delete_account(void *ctx,
                                        "deleted");
 
     metalbear_account_registry_remove(server->registry, did->valuestring);
+    /* Moderation state goes with it: a DID re-registered later must not
+     * inherit the deleted account's takedowns. */
+    metalbear_account_registry_clear_takedowns_for_did(server->registry,
+                                                       did->valuestring);
 
     /* Drop the handle's TXT record: leaving it would keep pointing resolvers
      * at a DID this host no longer serves. */
@@ -5492,6 +5749,21 @@ static wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
                                     "failed to encode blob CID");
         return WF_OK;
     }
+    /*
+     * Checked after hashing, because the CID is what a takedown names and it
+     * is not known until the body has been read. A takedown that blocked only
+     * reads would be undone by re-uploading the same bytes.
+     */
+    char *blob_takedown = NULL;
+    metalbear_account_registry_get_takedown(server->registry, acct->did, NULL,
+                                            cid_str, &blob_takedown);
+    if (blob_takedown) {
+        free(blob_takedown);
+        free(cid_str);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "Blob has been takendown, cannot re-upload");
+        return WF_OK;
+    }
     if (metalbear_blob_store_put(acct->blobs, cid_str, mime,
                            request->body, request->body_len) != WF_OK) {
         free(cid_str);
@@ -5542,6 +5814,19 @@ static wf_status get_blob(void *ctx, const wf_xrpc_request *request,
     if (!acct) {
         wf_xrpc_response_set_error(response, 404, "BlobNotFound",
                                     "account is not hosted here");
+        return WF_OK;
+    }
+    if (!assert_repo_available(server, acct, request, response))
+        return WF_OK;
+    /* A taken-down blob reads as absent: the lexicon has no code for a
+     * moderated blob, and BlobNotFound is what the reference answers. */
+    char *blob_takedown = NULL;
+    metalbear_account_registry_get_takedown(server->registry, acct->did, NULL,
+                                            cid->valuestring, &blob_takedown);
+    if (blob_takedown) {
+        free(blob_takedown);
+        wf_xrpc_response_set_error(response, 404, "BlobNotFound",
+                                    "no blob stored for the given CID");
         return WF_OK;
     }
     unsigned char *data = NULL;
@@ -5759,10 +6044,11 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
         cJSON_AddStringToObject(repo, "did", acct->did);
         cJSON_AddStringToObject(repo, "head", cid);
         cJSON_AddStringToObject(repo, "rev", rev);
-        bool active = metalbear_account_is_active(acct->account);
+        bool active = false;
+        const char *status = account_status_string(server, acct, &active);
         cJSON_AddBoolToObject(repo, "active", active);
-        if (!active)
-            cJSON_AddStringToObject(repo, "status", "deactivated");
+        if (status)
+            cJSON_AddStringToObject(repo, "status", status);
         cJSON_AddItemToArray(repos, repo);
         emitted++;
         free(rev);
@@ -6048,7 +6334,9 @@ static wf_status landing_handler(void *ctx, const wf_xrpc_request *req,
         for (size_t i = 0; i < count; i++) {
             char *handle = html_escape(entries[i].handle);
             char *did = html_escape(entries[i].did);
-            const char *state = entries[i].active ? "active" : "deactivated";
+            const char *state =
+                account_is_taken_down(server, entries[i].did) ? "takendown"
+                : entries[i].active ? "active" : "deactivated";
             bool ok = handle && did &&
                 sb_append(&sb,
                           "<li><code>%s</code> — <code>%s</code> "
@@ -6699,7 +6987,8 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         metalbear_xrpc_server_register_pds_repo_resolver_ex(server->xrpc,
             metalbear_repo_resolver, server,
             server->service_did, server->public_url,
-            resolve_did_doc_json, server, server->lexicons) != WF_OK ||
+            resolve_did_doc_json, server, server->lexicons,
+            repo_access_guard, server) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.repo.uploadBlob", upload_blob, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
