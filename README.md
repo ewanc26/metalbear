@@ -228,6 +228,32 @@ ping_seconds = 20                  # keepalive; must beat the proxy idle timeout
 line number rather than a silent no-op — a configuration file that is half-read
 is worse than one that refuses to load.
 
+### Handle resolution
+
+A handle is verified either over HTTPS at
+`https://<handle>/.well-known/atproto-did`, or by a DNS TXT record at
+`_atproto.<handle>` holding `did=<did>`.
+
+A wildcard certificate covers **one** label. A host minting
+`alice.pds.example.com` under `*.example.com` therefore has no certificate for
+the handle, and the HTTPS route cannot work for it at all — which leaves DNS as
+the only mechanism, and one record per account to write by hand.
+
+Give MetalBear a DNS credential and it writes them itself: on account creation,
+moved on a handle change, removed on deletion.
+
+```toml
+[dns]
+provider  = "cloudflare"
+api_token = "..."   # Zone.DNS:Edit on the zone below
+zone_id   = "..."
+```
+
+Omit the section and handle resolution stays entirely the operator's business.
+A provider named without credentials is refused at startup rather than accepted:
+a host that mints accounts and silently writes no records is only discovered
+when every handle shows as `handle.invalid`, long after the accounts exist.
+
 ## Run
 
 No account is configured. A host exists before its first user, and accounts
