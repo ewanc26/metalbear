@@ -27,6 +27,7 @@
 #include "metalbear/handle_dns_rfc2136.h"
 
 #include <openssl/hmac.h>
+#include <openssl/evp.h>
 
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -150,17 +151,21 @@ static bool tsig_sign(msg *m, const char *key_name,
     put_u16(&vars, 0);                       /* other len */
     if (vars.overflow || m->overflow) return false;
 
+    /*
+     * The digest input is the message followed by the variables, joined here
+     * rather than fed in through the incremental API: the one-shot HMAC is
+     * what the rest of this codebase uses, and the two buffers together are
+     * bounded by the message size.
+     */
+    unsigned char digest_input[sizeof(m->data) + sizeof(vars.data)];
+    memcpy(digest_input, m->data, m->len);
+    memcpy(digest_input + m->len, vars.data, vars.len);
+
     unsigned char mac[EVP_MAX_MD_SIZE];
     unsigned int mac_len = 0;
-    HMAC_CTX *ctx = HMAC_CTX_new();
-    if (!ctx) return false;
-    bool ok = HMAC_Init_ex(ctx, secret, (int)secret_len, EVP_sha256(),
-                           NULL) == 1 &&
-              HMAC_Update(ctx, m->data, m->len) == 1 &&
-              HMAC_Update(ctx, vars.data, vars.len) == 1 &&
-              HMAC_Final(ctx, mac, &mac_len) == 1;
-    HMAC_CTX_free(ctx);
-    if (!ok) return false;
+    if (!HMAC(EVP_sha256(), secret, (int)secret_len, digest_input,
+              m->len + vars.len, mac, &mac_len))
+        return false;
 
     put_name(m, key_name);
     put_u16(m, DNS_TYPE_TSIG);

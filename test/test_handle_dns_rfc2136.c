@@ -144,17 +144,15 @@ static bool verify_tsig(const unsigned char *msg, size_t len) {
     vars[v++] = 0; vars[v++] = 0;                  /* error */
     vars[v++] = 0; vars[v++] = 0;                  /* other len */
 
+    unsigned char digest_input[sizeof(signed_copy) + sizeof(vars)];
+    memcpy(digest_input, signed_copy, tsig_at);
+    memcpy(digest_input + tsig_at, vars, v);
+
     unsigned char expected[EVP_MAX_MD_SIZE];
     unsigned int expected_len = 0;
-    HMAC_CTX *ctx = HMAC_CTX_new();
-    if (!ctx) return false;
-    bool ok = HMAC_Init_ex(ctx, KEY_SECRET, (int)KEY_SECRET_LEN,
-                           EVP_sha256(), NULL) == 1 &&
-              HMAC_Update(ctx, signed_copy, tsig_at) == 1 &&
-              HMAC_Update(ctx, vars, v) == 1 &&
-              HMAC_Final(ctx, expected, &expected_len) == 1;
-    HMAC_CTX_free(ctx);
-    if (!ok) return false;
+    if (!HMAC(EVP_sha256(), KEY_SECRET, (int)KEY_SECRET_LEN, digest_input,
+              tsig_at + v, expected, &expected_len))
+        return false;
     return expected_len == mac_len && memcmp(expected, mac, mac_len) == 0;
 }
 
