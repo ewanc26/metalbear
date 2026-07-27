@@ -55,6 +55,10 @@ target_compile_options(metalbear_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(metalbear src/main.c)
 target_link_libraries(metalbear PRIVATE metalbear_core)
+# metalbear_core keeps the define PRIVATE, so the executable needs its own copy
+# for `--version`.
+target_compile_definitions(metalbear PRIVATE
+    METALBEAR_VERSION="${PROJECT_VERSION}")
 
 if(METALBEAR_BUILD_TESTS)
     enable_testing()
