@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(metalbear VERSION 0.4.1 LANGUAGES C)
+project(metalbear VERSION 0.5.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -32,7 +32,7 @@ set(WOLFRAM_BUILD_CPP OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WOLFRAM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/wolfram")
 get_target_property(METALBEAR_CJSON_SOURCE_DIR cjson SOURCE_DIR)
 
-add_library(metalbear_core src/account.c src/account_registry.c src/account_context.c src/account_cache.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/key_rotation.c src/repo_store.c src/sequencer.c src/server.c src/report.c src/blob_store.c src/blob_store_server.c)
+add_library(metalbear_core src/config_file.c src/account.c src/account_registry.c src/account_context.c src/account_cache.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/key_rotation.c src/repo_store.c src/sequencer.c src/server.c src/report.c src/blob_store.c src/blob_store_server.c)
 target_include_directories(metalbear_core PUBLIC include
     PUBLIC "${METALBEAR_CJSON_SOURCE_DIR}")
 target_link_libraries(metalbear_core PUBLIC wolfram cjson PRIVATE SQLite3::SQLite3 Threads::Threads)
@@ -81,6 +81,14 @@ if(METALBEAR_BUILD_TESTS)
     add_executable(test_metalbear_registry test/test_registry.c)
     target_link_libraries(test_metalbear_registry PRIVATE metalbear_core)
     add_test(NAME metalbear_registry COMMAND test_metalbear_registry)
+
+    add_executable(test_metalbear_config_file test/test_config_file.c)
+    target_link_libraries(test_metalbear_config_file PRIVATE metalbear_core)
+    target_include_directories(test_metalbear_config_file PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}")
+    # Run from the source tree so the shipped config.example.toml is reachable.
+    add_test(NAME metalbear_config_file COMMAND test_metalbear_config_file
+             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
     add_executable(test_metalbear_backup test/test_backup.c)
     target_link_libraries(test_metalbear_backup PRIVATE metalbear_core SQLite3::SQLite3)

@@ -551,6 +551,13 @@ static int read_next_locked(metalbear_sequencer *s, int64_t cursor,
  * idle timeout in a typical deployment path (nginx defaults to 60s). */
 #define METALBEAR_FIREHOSE_PING_SECONDS 20
 
+/* Live value, set from config at startup. */
+static int firehose_ping_seconds = METALBEAR_FIREHOSE_PING_SECONDS;
+
+void metalbear_sequencer_set_ping_seconds(int64_t seconds) {
+    if (seconds > 0) firehose_ping_seconds = (int)seconds;
+}
+
 static void *subscriber_main(void *raw) {
     subscriber_worker *worker = raw;
     metalbear_sequencer *s = worker->sequencer;
@@ -650,7 +657,7 @@ static void *subscriber_main(void *raw) {
             } else {
                 /* Comfortably inside a 60s proxy idle timeout. */
                 time_t now = time(NULL);
-                if (now - last_activity >= METALBEAR_FIREHOSE_PING_SECONDS) {
+                if (now - last_activity >= firehose_ping_seconds) {
                     if (wf_xrpc_server_ws_ping(worker->stream) != WF_OK) break;
                     last_activity = now;
                 }

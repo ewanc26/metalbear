@@ -58,6 +58,45 @@ typedef struct metalbear_config {
     /* Maximum blob upload size in bytes (refpds PDS_BLOB_UPLOAD_LIMIT).
      * 0 => no limit. Enforced in the blob upload path. */
     int64_t blob_upload_limit;
+    /*
+     * Per-client request budget: `rate_limit` requests per `rate_limit_window`
+     * seconds. Both default to the historical 100/60 when zero.
+     *
+     * 100 per minute is under two requests a second, which a single AppView or
+     * a relay backfilling with getRepo will exceed without being abusive, so an
+     * operator serving real traffic needs to be able to raise it.
+     */
+    int64_t rate_limit;
+    int64_t rate_limit_window;
+    /* Resolved DID documents are cached for `did_cache_ttl_seconds` across
+     * `did_cache_entries` slots. Zero uses the defaults (300s, 64). Without a
+     * cache every describeRepo becomes an outbound request to the PLC
+     * directory, which a federating host cannot sustain. */
+    int64_t did_cache_ttl_seconds;
+    int64_t did_cache_entries;
+    /* Throttle between requestCrawl announcements (default 20 minutes) and
+     * firehose keepalive ping interval (default 20 seconds; must stay well
+     * under the tightest idle timeout in the proxy path). Zero uses these. */
+    int64_t crawl_notify_seconds;
+    int64_t firehose_ping_seconds;
+    /*
+     * Who runs this instance, and what to say about it.
+     *
+     * `contact_email` and the two policy links are the fields
+     * com.atproto.server.describeServer already defines, so they go on the
+     * wire where any client can read them. The rest has no standard home and
+     * is served from /operator.json, which is MetalBear's own and named so it
+     * cannot be mistaken for a protocol route.
+     */
+    const char *operator_name;
+    const char *operator_url;
+    const char *support_url;
+    const char *instance_description;
+    const char *privacy_policy_url;
+    const char *terms_of_service_url;
+    /* Marks a testing instance, so the landing page can say plainly that the
+     * accounts on it are not people. */
+    bool development;
     /* PLC directory URL for did:plc account creation. NULL/empty => accounts
      * default to did:key instead of did:plc. */
     const char *plc_url;
