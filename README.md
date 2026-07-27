@@ -10,7 +10,7 @@ MetalBear is an AT Protocol Personal Data Server written in C11 and built on
 MetalBear instance is consumed by Bluesky's relays and its posts are indexed by
 the Bluesky AppView.
 
-**Version:** 0.5.0
+**Version:** 0.6.1
 
 ## Core Features
 
@@ -153,9 +153,38 @@ docker run -d --name metalbear -p 2583:2583 -v metalbear-data:/data \
   ghcr.io/ewanc26/metalbear:latest
 ```
 
-Built for `linux/amd64` and `linux/arm64`. Mount a `config.toml` and set
-`METALBEAR_CONFIG` to configure it as a file instead; environment variables
-override whatever the file says.
+Mount a `config.toml` and set `METALBEAR_CONFIG` to configure it as a file
+instead; environment variables override whatever the file says.
+
+Three variants are published:
+
+| Tag | Base | Size | Platforms |
+| --- | --- | --- | --- |
+| `latest`, `0.6.1` | Debian bookworm-slim | ~168 MB | `amd64`, `arm64` |
+| `latest-alpine`, `0.6.1-alpine` | Alpine 3.21 (musl) | ~40 MB | `amd64`, `arm64`, `arm/v7` |
+| `latest-dev`, `0.6.1-dev` | Debian + toolchain | ~1.2 GB | `amd64`, `arm64` |
+
+The Alpine image is the same server built against musl. Use it to try
+MetalBear out or where image size matters; prefer the Debian one where you
+would rather have glibc, since musl's resolver and its smaller default thread
+stacks differ in ways that are occasionally load-bearing.
+
+The dev image carries the sources, the toolchain and the test suite, for poking
+at the server without setting up a build host:
+
+```sh
+docker run --rm -it ghcr.io/ewanc26/metalbear:latest-dev
+docker run --rm ghcr.io/ewanc26/metalbear:latest-dev \
+  ctest --test-dir build --output-on-failure
+```
+
+Each is also buildable locally from a directory holding both checkouts:
+
+```sh
+docker build -f MetalBear/Dockerfile        -t metalbear .
+docker build -f MetalBear/Dockerfile.alpine -t metalbear:alpine .
+docker build -f MetalBear/Dockerfile --target dev -t metalbear:dev .
+```
 
 ### Prebuilt binaries
 
