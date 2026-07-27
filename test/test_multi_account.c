@@ -622,6 +622,38 @@ int main(void) {
     }
 
     /*
+     * applyWrites is atomic: three writes land as exactly ONE #commit.
+     *
+     * This used to be asserted through the commit's `prev` link, but v3
+     * commits carry a null prev by specification, so that evidence no longer
+     * exists on the wire. Counting commit events in the host log is where the
+     * property is observable, and where a consumer would notice it breaking.
+     */
+    if (token_carol) {
+        int commits_pre = count_commit_events(shared_seq);
+        wf_xrpc_client_set_auth(client, token_carol);
+        wf_response batch = {0};
+        CHECK(wf_xrpc_procedure(client, "com.atproto.repo.applyWrites",
+            "{\"repo\":\"did:plc:carol\",\"writes\":["
+            "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+            "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"b1\","
+            "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"b1\","
+            "\"createdAt\":\"2026-07-20T00:00:00.000Z\"}},"
+            "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+            "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"b2\","
+            "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"b2\","
+            "\"createdAt\":\"2026-07-20T00:00:00.000Z\"}},"
+            "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+            "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"b3\","
+            "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"b3\","
+            "\"createdAt\":\"2026-07-20T00:00:00.000Z\"}}]}",
+            &batch) == WF_OK);
+        CHECK(batch.status == 200);
+        wf_response_free(&batch);
+        CHECK(count_commit_events(shared_seq) == commits_pre + 1);
+    }
+
+    /*
      * Account creation must announce itself on that same host-wide log.
      *
      * Carol was created through createAccount, so the log has to carry her

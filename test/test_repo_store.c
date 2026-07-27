@@ -620,11 +620,17 @@ static int run_unit(void) {
     WF_CHECK(metalbear_repo_store_verify_head(store, &post_verified,
                                               &post_commit) == WF_OK &&
              post_verified == 1);
-    /* Exactly one commit: the new head chains directly off the old one. */
-    WF_CHECK(post_commit.has_prev &&
-             post_commit.prev.len == head_before.len &&
-             memcmp(post_commit.prev.bytes, head_before.bytes,
-                    head_before.len) == 0);
+    /*
+     * The head advanced. Single-commit atomicity used to be asserted through
+     * the commit's `prev` link, but v3 commits carry a null prev by
+     * specification, so that evidence no longer exists on the wire. The
+     * property is now asserted where it is actually observable — one #commit
+     * event carrying all the ops — in test_server's applyWrites case.
+     */
+    WF_CHECK(post_verified == 1);
+    WF_CHECK(!(post_commit.cid.len == head_before.len &&
+               memcmp(post_commit.cid.bytes, head_before.bytes,
+                      head_before.len) == 0));
     /* All three records landed. */
     for (int i = 0; i < 3; i++) {
         static const char *const bkeys[] = {"batchaaa", "batchbbb", "batchccc"};
