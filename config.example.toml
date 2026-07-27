@@ -90,6 +90,26 @@ retention_min_events      = 1000
 url = "https://api.bsky.app"
 did = "did:web:api.bsky.app"
 
+# [dns]
+# Publishes the `_atproto` TXT records that make minted handles resolve.
+#
+# A handle is verified either over HTTPS at
+# `https://<handle>/.well-known/atproto-did` or by a DNS TXT record at
+# `_atproto.<handle>`. A wildcard certificate covers one label, so a host
+# minting `alice.pds.example.com` under `*.example.com` has no certificate for
+# the handle and the HTTPS route cannot work for it at all — leaving DNS as the
+# only mechanism, and one record per account to write by hand.
+#
+# With this set MetalBear writes those records itself on createAccount, moves
+# them on a handle change, and removes them when an account is deleted. Leave it
+# out and handle resolution stays entirely the operator's business, which is
+# what every deployment did before this existed.
+#
+# provider  = "cloudflare"   # the only one implemented
+# api_token = "..."          # needs Zone.DNS:Edit on the zone below
+# zone_id   = "..."          # Cloudflare dashboard, zone overview
+# ttl       = 300            # short: a stale record shows a renamed handle
+
 # [smtp]
 # host         = "smtp.example.com"
 # port         = 587
