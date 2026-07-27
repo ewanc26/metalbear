@@ -110,7 +110,46 @@ static int did_env_is_usable(const char *name, const char *value) {
     return 1;
 }
 
-int main(void) {
+static void print_usage(FILE *out, const char *argv0) {
+    fprintf(out,
+        "MetalBear %s — an AT Protocol Personal Data Server\n"
+        "\n"
+        "Usage: %s [options]\n"
+        "\n"
+        "  -V, --version   print the version and exit\n"
+        "  -h, --help      print this message and exit\n"
+        "\n"
+        "MetalBear is configured entirely through a config file and the\n"
+        "environment, not through flags. Settings are read from ./config.toml or\n"
+        "the path in METALBEAR_CONFIG, and every value can also be given as an\n"
+        "environment variable, which overrides the file.\n"
+        "\n"
+        "METALBEAR_SERVICE_DID and METALBEAR_USER_DOMAIN are required. See\n"
+        "config.example.toml for the full set.\n",
+        METALBEAR_VERSION, argv0);
+}
+
+int main(int argc, char **argv) {
+    /*
+     * Handled before anything else reads configuration: asking a binary what
+     * version it is must work on a host that has none, which is exactly the
+     * situation someone filing a bug report is in.
+     */
+    const char *argv0 = (argc > 0 && argv[0]) ? argv[0] : "metalbear";
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
+            printf("%s\n", METALBEAR_VERSION);
+            return 0;
+        }
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(stdout, argv0);
+            return 0;
+        }
+        fprintf(stderr, "MetalBear [ERROR] unknown argument: %s\n", argv[i]);
+        print_usage(stderr, argv0);
+        return 2;
+    }
+
     const char *port_text = getenv("METALBEAR_PORT");
     char *end = NULL;
     unsigned long port = port_text ? strtoul(port_text, &end, 10) : 2583;
