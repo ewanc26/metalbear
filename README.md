@@ -410,8 +410,9 @@ Still missing or unproven for production use:
   account creation can skip or repeat an entry across pages
 - account deletion does not purge that DID's earlier firehose events
 - no metrics or structured operational logging
-- accounts minted under the host's own subdomain need a `_atproto` DNS TXT
-  record for their handles to resolve; see issue #8
+- automatic `_atproto` record publication is implemented for Cloudflare only;
+  on any other DNS provider the operator writes one TXT record per account by
+  hand, or handles never resolve
 
 ## Frontend
 
@@ -425,6 +426,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the build, test, and commit
 conventions, and [SECURITY.md](SECURITY.md) for how to report a vulnerability
 privately. Bug reports and feature requests go through the
 [issue templates](https://github.com/ewanc26/metalbear/issues/new/choose).
+
+[`docs/multi-account.md`](docs/multi-account.md) is the design record for the
+per-account data layout and the request-scoped resolvers — history rather than
+current documentation, but it explains why accounts are arranged as they are.
 
 ## Sponsor
 
