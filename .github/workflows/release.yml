@@ -71,7 +71,12 @@ jobs:
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos'
-        run: brew install cmake openssl@3 sqlite libmicrohttpd secp256k1 zstd
+        run: |
+          # c-ares explicitly: some formula on the runner ships libcares.pc
+          # without the library, so pkg-config finds the module and the link
+          # then fails. Installing it makes the detection consistent rather
+          # than accidental.
+          brew install cmake openssl@3 sqlite libmicrohttpd secp256k1 zstd c-ares
 
       - name: Build
         working-directory: MetalBear
