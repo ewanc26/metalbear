@@ -2,6 +2,14 @@
   <img src="docs/logo.svg" alt="MetalBear" width="420">
 </p>
 
+<p align="center">
+  <a href="https://github.com/ewanc26/metalbear/actions/workflows/ci.yml"><img src="https://github.com/ewanc26/metalbear/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/ewanc26/metalbear/releases/latest"><img src="https://img.shields.io/github/v/release/ewanc26/metalbear?sort=semver" alt="Latest release"></a>
+  <a href="https://github.com/ewanc26/metalbear/pkgs/container/metalbear"><img src="https://img.shields.io/badge/ghcr.io-ewanc26%2Fmetalbear-blue?logo=docker&logoColor=white" alt="Container image"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/ewanc26/metalbear" alt="AGPL-3.0"></a>
+  <a href="https://github.com/sponsors/ewanc26"><img src="https://img.shields.io/github/sponsors/ewanc26?logo=githubsponsors&logoColor=white&label=sponsors" alt="Sponsor"></a>
+</p>
+
 # MetalBear
 
 MetalBear is an AT Protocol Personal Data Server written in C11 and built on
@@ -189,9 +197,11 @@ docker build -f MetalBear/Dockerfile --target dev -t metalbear:dev .
 ### Prebuilt binaries
 
 Each [release](https://github.com/ewanc26/metalbear/releases) carries archives
-for Linux (x86_64, aarch64) and macOS (arm64, x86_64), containing the binary,
-the lexicon corpus, and an example configuration. They link the system's TLS,
-HTTP, SQLite and crypto libraries, so those must be installed:
+for Linux (x86_64, aarch64) and macOS (arm64), containing the binary, the
+lexicon corpus, and an example configuration. There is no Intel macOS build —
+GitHub's last x86_64 macOS runner is being retired, and Rosetta 2 does not run
+arm64 binaries on Intel — so build from source there. The archives link the
+system's TLS, HTTP, SQLite and crypto libraries, so those must be installed:
 
 ```sh
 apt install libsqlite3-0 libcurl4 libssl3 libsecp256k1-1 libmicrohttpd12 \
@@ -294,6 +304,10 @@ export METALBEAR_USER_DOMAIN='.example.com'
 export METALBEAR_ADMIN_PASSWORD='replace-with-a-strong-password'
 ./build/metalbear
 ```
+
+`metalbear --version` prints the version and `metalbear --help` summarises how
+the server is configured; both work without any environment set. There are no
+other flags — configuration is the file and the environment.
 
 Optional variables are `METALBEAR_LISTEN` (default `127.0.0.1`),
 `METALBEAR_PORT` (default `2583`), `METALBEAR_DATA` (default `data`), and
@@ -398,11 +412,40 @@ Still missing or unproven for production use:
   account creation can skip or repeat an entry across pages
 - account deletion does not purge that DID's earlier firehose events
 - no metrics or structured operational logging
-- accounts minted under the host's own subdomain need a `_atproto` DNS TXT
-  record for their handles to resolve; see issue #8
+- automatic `_atproto` record publication is implemented for Cloudflare only;
+  on any other DNS provider the operator writes one TXT record per account by
+  hand, or handles never resolve
 
 ## Frontend
 
 `frontend/` holds the landing page: SvelteKit, prerendered to static files, and
 the only non-C part of this repository. It reads the server's own XRPC endpoints
 in the browser, so it reports live state rather than build-time state.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the build, test, and commit
+conventions, and [SECURITY.md](SECURITY.md) for how to report a vulnerability
+privately. Bug reports and feature requests go through the
+[issue templates](https://github.com/ewanc26/metalbear/issues/new/choose).
+
+[`docs/multi-account.md`](docs/multi-account.md) is the design record for the
+per-account data layout and the request-scoped resolvers — history rather than
+current documentation, but it explains why accounts are arranged as they are.
+
+## Sponsor
+
+MetalBear is developed in spare time and given away under the AGPL. If it saved
+you the trouble of running a PDS the hard way, or you would like the missing
+pieces under **Status** to arrive sooner, you can fund the work:
+
+**→ [github.com/sponsors/ewanc26](https://github.com/sponsors/ewanc26)**
+
+Sponsorship supports MetalBear and its sibling SDK
+[Wolfram](https://github.com/ewanc26/wolfram) together — the two are developed
+in lockstep, and most of the protocol work lands in Wolfram first.
+
+## License
+
+[GNU AGPL-3.0](LICENSE). Running a modified MetalBear as a public PDS obliges
+you to offer its users the corresponding source.
