@@ -12,8 +12,15 @@ extern "C" {
 
 typedef struct metalbear_sequencer metalbear_sequencer;
 
-wf_status metalbear_sequencer_open(const char *path, const char *did,
-                                   const char *handle,
+/*
+ * Open the host-wide firehose log.
+ *
+ * Takes no account: subscribeRepos is one stream for the server, and the log
+ * exists before any account does. It used to seed the configured bootstrap
+ * account's #identity/#account into a fresh log, which is now emitted by
+ * createAccount for every account alike.
+ */
+wf_status metalbear_sequencer_open(const char *path,
                                    metalbear_sequencer **out);
 void metalbear_sequencer_free(metalbear_sequencer *sequencer);
 

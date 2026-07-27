@@ -67,7 +67,7 @@ verifying, and nothing reaching a relay. Check the wire, not the API.
   elsewhere is invisible however correctly it is recorded.
 - **Every account context must publish into that sequencer.** It is wired in
   `metalbear_account_context_open` so it cannot be forgotten; wiring it at a
-  call site once meant only the primary account ever federated.
+  call site once meant only one account ever federated.
 - **CID links are DAG-CBOR**: tag 42 wrapping a byte string whose first byte is
   `0x00`. Our decoder tolerantly skips leading zeros, so a frame written
   without the prefix round-trips through our own tests perfectly and is
@@ -102,11 +102,34 @@ verifying, and nothing reaching a relay. Check the wire, not the API.
 
 ## Multi-account, with no privileged account
 
-The "bootstrap" account is just the one named in configuration. It is not *the*
-account, and nothing server-wide should reach through it — that assumption
-produced a deleteAccount that destroyed the wrong account, password resets that
-only ever worked for one, and a firehose that served one account's log.
-Resolve the account a request acts on; never substitute the configured one.
+There is no bootstrap account, and configuration names no account at all. A
+host exists before its first user; accounts arrive through
+`com.atproto.server.createAccount`, gated by invite codes unless
+`METALBEAR_INVITE_REQUIRED=false`. Admin endpoints authenticate with HTTP Basic
+against `METALBEAR_ADMIN_PASSWORD` and belong to no account.
+
+Anything server-wide belongs to the server, not to an account:
+
+- **PLC rotation key** — `server->plc_rotation` at `server_keys.sqlite3`,
+  seeded from `METALBEAR_PLC_ROTATION_KEY` when set and generated once
+  otherwise. It signs the genesis operation for every DID this host mints. A
+  configured key that cannot be adopted is fatal at startup: silently
+  substituting a generated one makes every DID minted afterwards
+  unrecoverable with the operator's real key.
+- **OAuth store** — `server->oauth` at `server_oauth.sqlite3`, one signing key
+  for the host. The account a token speaks for is recorded on the grant and
+  carried in the token's `sub`, never bound into the store. `login_hint`
+  names the account being authorized and is required, because with no default
+  identity a missing hint would otherwise hand the client somebody else's
+  session.
+- **The firehose log** — one per host at the data root.
+
+Resolve the account a request acts on, every time. Reaching through a
+configured account produced a deleteAccount that destroyed the wrong account,
+password resets that only ever worked for one, a firehose that served one
+account's log, public reads gated on an unrelated account's active flag, and
+`/.well-known/atproto-did` answering every unknown hostname with one account's
+identity — a wrong answer rather than a missing one.
 
 ## Identity: the signing key is the interop contract
 
@@ -115,9 +138,9 @@ advertises a signing key the repo does not sign with. Relays and AppViews
 reject such commits outright while the PDS reports success, so nothing surfaces
 it locally.
 
-- Whenever this server publishes a DID document (bootstrap minting, PLC
-  operations, `createAccount`), the key it publishes must be the key the repo
-  store actually holds. Pass it explicitly via
+- Whenever this server publishes a DID document (PLC operations,
+  `createAccount`), the key it publishes must be the key the repo store
+  actually holds. Pass it explicitly via
   `metalbear_repo_store_open_with_key` /
   `metalbear_account_context_open_with_key`; never let the repo generate its
   own key after a document naming a different one has been published.
@@ -144,6 +167,9 @@ it locally.
 
 - Run `cmake -S . -B build && cmake --build build && ctest --test-dir build
   --output-on-failure` before declaring a slice done.
+- Test configs name no account: set `invite_required = false` and create every
+  account the test needs through `com.atproto.server.createAccount`, which is
+  the same path a real client takes.
 - Every server route must have an offline end-to-end test in `test/test_server.c`
   or a dedicated test file covering success, auth failure, and schema conformance.
 - Test cleanup must remove all SQLite files (repo, auth, account, sequence,

@@ -114,8 +114,7 @@ static void test_sequencer_retention(void) {
     assert(fd >= 0);
     close(fd);
     metalbear_sequencer *seq = NULL;
-    assert(metalbear_sequencer_open(path, "did:plc:test", "test.example.com",
-                                    &seq) == WF_OK);
+    assert(metalbear_sequencer_open(path, &seq) == WF_OK);
     /* Add some events */
     for (int i = 0; i < 10; i++) {
         assert(metalbear_sequencer_account_status(seq, "did:plc:test", 1,
@@ -170,8 +169,7 @@ static void test_sequencer_prune_watermark(void) {
     close(fd);
 
     metalbear_sequencer *seq = NULL;
-    assert(metalbear_sequencer_open(path, "did:plc:test", "test.example.com",
-                                    &seq) == WF_OK);
+    assert(metalbear_sequencer_open(path, &seq) == WF_OK);
     for (int i = 0; i < 10; i++) {
         assert(metalbear_sequencer_account_status(seq, "did:plc:test", 1,
                                                   NULL) == WF_OK);
@@ -215,8 +213,16 @@ static void test_sequencer_seq_floor(void) {
     close(fd);
 
     metalbear_sequencer *seq = NULL;
-    assert(metalbear_sequencer_open(path, "did:plc:test", "test.example.com",
-                                    &seq) == WF_OK);
+    assert(metalbear_sequencer_open(path, &seq) == WF_OK);
+    /*
+     * The floor is the AUTOINCREMENT watermark, not a row: a fresh log holds
+     * no events, so what matters is the number the first event is given.
+     * (This used to be observable directly because opening a log seeded the
+     * configured account's events into it — nothing is seeded now.)
+     */
+    assert(metalbear_sequencer_current(seq) == 0);
+    assert(metalbear_sequencer_account_status(seq, "did:plc:test", 1, NULL) ==
+           WF_OK);
     int64_t first = metalbear_sequencer_current(seq);
     /* Seeded from wall-clock seconds, so far above any counter a previous
      * incarnation of this host is likely to have reached. */
@@ -225,8 +231,7 @@ static void test_sequencer_seq_floor(void) {
 
     /* Reopening must continue the existing sequence, never reseed it. */
     seq = NULL;
-    assert(metalbear_sequencer_open(path, "did:plc:test", "test.example.com",
-                                    &seq) == WF_OK);
+    assert(metalbear_sequencer_open(path, &seq) == WF_OK);
     int64_t reopened = metalbear_sequencer_current(seq);
     assert(reopened == first);
     assert(metalbear_sequencer_account_status(seq, "did:plc:test", 1, NULL) ==
