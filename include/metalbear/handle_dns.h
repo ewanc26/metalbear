@@ -28,16 +28,22 @@ extern "C" {
 typedef struct metalbear_handle_dns metalbear_handle_dns;
 
 /*
- * Open a publisher. `provider` is "cloudflare" (the only one implemented) or
+ * Open a publisher. `provider` is "cloudflare", "digitalocean" or "desec", or
  * NULL/empty for none.
+ *
+ * `zone_id` is whatever the provider uses to name the zone: Cloudflare's
+ * opaque zone id, or the domain name itself for the other two.
  *
  * Returns WF_OK with *out == NULL when no provider is configured — an absent
  * publisher is the normal case, not a failure. A provider named but missing
  * its credentials is an error, because it means an operator asked for
  * something that will silently not happen.
  *
- * `ttl` of 0 uses the provider default. Short values are better here: a handle
- * changes when a person renames, and a stale record shows the old one.
+ * `ttl` of 0 uses the default. Short values are better here: a handle changes
+ * when a person renames, and a stale record shows the old one. A value below
+ * the provider's own floor is raised to it rather than refused — failing every
+ * write over a number the provider dislikes would take the whole host's handle
+ * resolution down.
  */
 wf_status metalbear_handle_dns_open(const char *provider, const char *api_token,
                                     const char *zone_id, int ttl,
