@@ -105,7 +105,7 @@ did = "did:web:api.bsky.app"
 # out and handle resolution stays entirely the operator's business, which is
 # what every deployment did before this existed.
 #
-# provider  = "cloudflare"   # cloudflare | digitalocean | desec
+# provider  = "cloudflare"   # cloudflare | digitalocean | desec | rfc2136
 # api_token = "..."          # a credential that may edit the zone's records
 # zone_id   = "..."          # cloudflare: the zone id; others: the domain
 # ttl       = 300            # short: a stale record shows a renamed handle
@@ -119,6 +119,14 @@ did = "did:web:api.bsky.app"
 # Each provider enforces its own minimum TTL — 60, 30 and 3600 respectively —
 # and a smaller value here is raised to it rather than refused, since failing
 # every write would take handle resolution down for the whole host.
+#
+# rfc2136 is not a vendor: it speaks the dynamic-update protocol the
+# nameservers themselves implement, so it works against BIND, Knot, PowerDNS,
+# NSD and anything else standards-compliant. It needs `server` as well, and its
+# api_token is the TSIG key as "<name>:<base64 secret>" — the same pair
+# nsupdate -y and a BIND key stanza take.
+#
+# server    = "ns1.example.com"       # or "ns1.example.com:5353"
 
 # [smtp]
 # host         = "smtp.example.com"
