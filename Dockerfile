@@ -1,13 +1,15 @@
-# MetalBear dev/test PDS image.
+# MetalBear — an AT Protocol Personal Data Server in C11.
 #
-# Build context is the parent directory that contains both the MetalBear and
-# Wolfram source trees (see bear/docker-compose.yaml in the server stack). This
-# images compiles MetalBear (C11) and the Wolfram server SDK it depends on,
-# then runs the resulting `metalbear` binary.
+# The build context is the parent directory holding both the MetalBear and
+# Wolfram source trees, so the image always builds the SDK from the same commit
+# rather than against whatever a registry happens to have. The release workflow
+# assembles that layout; locally it is the parent of the two checkouts.
 #
-# Runtime configuration (DID, handle, password, public URL) is supplied through
-# environment variables at container start, so this image is reusable across
-# deployments.
+#   docker build -f MetalBear/Dockerfile -t metalbear .
+#
+# Configuration comes from a config.toml (mount it and set METALBEAR_CONFIG) or
+# from environment variables, which override the file. Nothing is baked in, so
+# one image serves every deployment.
 
 FROM debian:bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -37,13 +39,22 @@ WORKDIR /src
 COPY MetalBear ./MetalBear
 COPY wolfram ./wolfram
 
+# Static internal libraries: the project's own objects link into the binary, so
+# the runtime stage carries one file instead of four shared libraries that have
+# to be kept in step with it.
 RUN cmake -S MetalBear -B build \
-        -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
         -DMETALBEAR_BUILD_TESTS=OFF \
         -DWOLFRAM_SOURCE_DIR=/src/wolfram \
     && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)"
 
 FROM debian:bookworm-slim AS runtime
+
+LABEL org.opencontainers.image.title="MetalBear" \
+      org.opencontainers.image.description="An AT Protocol Personal Data Server written in C11" \
+      org.opencontainers.image.source="https://github.com/ewanc26/metalbear" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 RUN apt-get update     && apt-get install -y --no-install-recommends \
         ca-certificates \
         libsqlite3-0 \
@@ -59,13 +70,6 @@ RUN apt-get update     && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/build/metalbear /usr/local/bin/metalbear
-# The core/wolfram/cjson/libcbor libraries are built as shared objects; ship
-# them all alongside the binary so it loads at runtime.
-COPY --from=build /src/build/libmetalbear_core.so /usr/local/lib/
-COPY --from=build /src/build/wolfram/libwolfram.so /usr/local/lib/
-COPY --from=build /src/build/_deps/cjson-build/libcjson.so* /usr/local/lib/
-COPY --from=build /src/build/_deps/libcbor-build/src/libcbor.so* /usr/local/lib/
-RUN ldconfig
 
 # The lexicon corpus records are validated against on write. Without it every
 # write is stored unchecked and reported as validationStatus "unknown".
@@ -77,6 +81,15 @@ COPY --from=build /src/wolfram/lexicons /usr/local/share/metalbear/lexicons
 # broken mount.
 RUN mkdir -p /data
 WORKDIR /data
-ENV METALBEAR_DATA=/data
+# Bind to 0.0.0.0: the loopback default is right on a host with a reverse proxy
+# beside it, but inside a container it makes the server unreachable from
+# outside, which looks like a crash rather than a binding choice.
+ENV METALBEAR_DATA=/data \
+    METALBEAR_LISTEN=0.0.0.0 \
+    METALBEAR_LEXICON_DIR=/usr/local/share/metalbear/lexicons
 EXPOSE 2583
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:${METALBEAR_PORT:-2583}/xrpc/_health || exit 1
+
 ENTRYPOINT ["/usr/local/bin/metalbear"]
