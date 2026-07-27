@@ -687,9 +687,82 @@ static cJSON *build_did_doc(metalbear_server *server,
 /* Fetch a remote DID document's raw JSON. did:plc goes through the
  * configured PLC directory; did:web through its well-known URL. On WF_OK
  * *out_json is heap-allocated and must be freed by the caller. */
+/*
+ * Small TTL cache of resolved DID documents.
+ *
+ * Every describeRepo, checkAccountStatus and handle check resolves the DID
+ * over the network. Once the host federates that is not a trickle: AppView
+ * and indexer traffic drove 241 describeRepo calls in two minutes, each one
+ * blocking a worker thread on an outbound request to plc.directory, one to
+ * one, until the server stopped answering. Identity documents change rarely,
+ * so a short cache removes the amplification without hiding real changes.
+ *
+ * Deliberately tiny and fixed-size: this is a cache, and a miss is only ever
+ * the current behaviour.
+ */
+#define DID_DOC_CACHE_SLOTS   64
+#define DID_DOC_CACHE_SECONDS 300
+
+typedef struct {
+    char   did[256];
+    char  *json;      /* owned */
+    time_t fetched_at;
+} did_doc_cache_entry;
+
+static did_doc_cache_entry did_doc_cache[DID_DOC_CACHE_SLOTS];
+static pthread_mutex_t did_doc_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Returns an owned copy of the cached document, or NULL on a miss. */
+static char *did_doc_cache_get(const char *did) {
+    if (!did) return NULL;
+    char *copy = NULL;
+    time_t now = time(NULL);
+    pthread_mutex_lock(&did_doc_cache_lock);
+    for (size_t i = 0; i < DID_DOC_CACHE_SLOTS; i++) {
+        did_doc_cache_entry *e = &did_doc_cache[i];
+        if (!e->json || strcmp(e->did, did) != 0) continue;
+        if (now - e->fetched_at > DID_DOC_CACHE_SECONDS) {
+            free(e->json);
+            e->json = NULL;
+            break;
+        }
+        copy = strdup(e->json);
+        break;
+    }
+    pthread_mutex_unlock(&did_doc_cache_lock);
+    return copy;
+}
+
+static void did_doc_cache_put(const char *did, const char *json) {
+    if (!did || !json || strlen(did) >= sizeof(did_doc_cache[0].did)) return;
+    time_t now = time(NULL);
+    pthread_mutex_lock(&did_doc_cache_lock);
+    /* Reuse this DID's slot, else an empty or expired one, else the oldest. */
+    size_t victim = 0;
+    time_t oldest = now + 1;
+    for (size_t i = 0; i < DID_DOC_CACHE_SLOTS; i++) {
+        did_doc_cache_entry *e = &did_doc_cache[i];
+        if (e->json && strcmp(e->did, did) == 0) { victim = i; goto store; }
+        if (!e->json) { victim = i; goto store; }
+        if (e->fetched_at < oldest) { oldest = e->fetched_at; victim = i; }
+    }
+store:
+    free(did_doc_cache[victim].json);
+    did_doc_cache[victim].json = strdup(json);
+    if (did_doc_cache[victim].json) {
+        snprintf(did_doc_cache[victim].did, sizeof(did_doc_cache[victim].did),
+                 "%s", did);
+        did_doc_cache[victim].fetched_at = now;
+    }
+    pthread_mutex_unlock(&did_doc_cache_lock);
+}
+
 static wf_status fetch_remote_did_doc(metalbear_server *server,
                                       const char *did, char **out_json) {
     *out_json = NULL;
+    if (!did) return WF_ERR_INVALID_ARG;
+    char *cached = did_doc_cache_get(did);
+    if (cached) { *out_json = cached; return WF_OK; }
     char url[1024];
     if (strncmp(did, "did:plc:", 8) == 0) {
         if (!server->plc_url) return WF_ERR_NOT_FOUND;
@@ -725,6 +798,7 @@ static wf_status fetch_remote_did_doc(metalbear_server *server,
         return WF_ERR_NOT_FOUND;
     }
     *out_json = strndup(upstream.body, upstream.body_len);
+    if (*out_json) did_doc_cache_put(did, *out_json);
     wf_response_free(&upstream);
     return *out_json ? WF_OK : WF_ERR_ALLOC;
 }
