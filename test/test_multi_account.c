@@ -601,6 +601,27 @@ int main(void) {
     CHECK(count_commit_events(shared_seq) > commits_before);
 
     /*
+     * listRepos must return `limit` repositories, not `limit` registry rows.
+     *
+     * An account with no commits yet has no repo head and is skipped. When a
+     * skipped row still consumed a slot, a small limit returned an empty page
+     * with a cursor even though the host had repos — and a relay enumerating
+     * accounts concludes the host hosts none. Alice was created but never
+     * wrote, so she is exactly that row.
+     */
+    {
+        wf_response response = {0};
+        wf_xrpc_param params[] = {{"limit", "1"}};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.sync.listRepos",
+                                   params, 1, &response) == WF_OK);
+        cJSON *json = json_response(&response);
+        cJSON *repos = cJSON_GetObjectItemCaseSensitive(json, "repos");
+        CHECK(cJSON_IsArray(repos) && cJSON_GetArraySize(repos) == 1);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+
+    /*
      * Account creation must announce itself on that same host-wide log.
      *
      * Carol was created through createAccount, so the log has to carry her
