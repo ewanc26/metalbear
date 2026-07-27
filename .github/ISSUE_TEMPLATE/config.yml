@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: "Security vulnerability"
-    url: https://github.com/ewanc26/metalbear/blob/main/SECURITY.md
-    about: Report privately by email. Do not open a public issue for a security defect.
+    url: https://github.com/ewanc26/metalbear/security/advisories/new
+    about: Report privately. Do not open a public issue for a security defect.
   - name: "AT Protocol reference"
     url: https://github.com/bluesky-social/atproto
     about: Lexicons and wire formats — useful when reporting protocol-level bugs or proposing features.

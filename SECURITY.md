@@ -6,8 +6,16 @@ under — so please report problems privately and give operators time to upgrade
 
 ## Reporting a vulnerability
 
-Email **git@ewancroft.uk** with a description, the affected version, and a
-reproduction if you have one. Do not open a public issue for a security defect.
+Use GitHub's private reporting form:
+
+**→ [Report a vulnerability](https://github.com/ewanc26/metalbear/security/advisories/new)**
+
+That keeps the report private until a fix ships and gives us somewhere to
+discuss it. It needs a GitHub account; without one, email **git@ewancroft.uk**
+instead. Either way, include a description, the affected version, and a
+reproduction if you have one.
+
+Do not open a public issue for a security defect.
 
 You should get an acknowledgement within a few days. MetalBear is maintained by
 one person as a spare-time project, so please treat the timelines below as
