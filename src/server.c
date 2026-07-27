@@ -184,7 +184,17 @@ static bool is_public_route(const char *nsid) {
 /* Admin endpoints (refpds model): gated behind HTTP Basic
  * `admin:<METALBEAR_ADMIN_PASSWORD>`. */
 static bool is_admin_route(const char *nsid) {
-    return strcmp(nsid, "com.atproto.admin.getAccountInfo") == 0 ||
+    /*
+     * Invite creation is admin-authenticated, matching the reference, which
+     * gates both endpoints on `authVerifier.adminToken`. Omitting them left
+     * the only way to mint a code behind a bearer token — and with
+     * `invite_required` set, that made it impossible to create any account at
+     * all: the endpoint that issues the code an account needs could not
+     * itself be reached. The lockout is invisible while registration is open.
+     */
+    return strcmp(nsid, "com.atproto.server.createInviteCode") == 0 ||
+           strcmp(nsid, "com.atproto.server.createInviteCodes") == 0 ||
+           strcmp(nsid, "com.atproto.admin.getAccountInfo") == 0 ||
            strcmp(nsid, "com.atproto.admin.getAccountInfos") == 0 ||
            strcmp(nsid, "com.atproto.admin.getSubjectStatus") == 0 ||
            strcmp(nsid, "com.atproto.admin.updateSubjectStatus") == 0 ||
