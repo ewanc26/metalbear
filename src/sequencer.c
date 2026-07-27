@@ -399,10 +399,21 @@ wf_status metalbear_sequencer_reconcile_repo(metalbear_sequencer *s,
     if (status == WF_ERR_NOT_FOUND) return WF_OK;
     if (status != WF_OK) return status;
 
+    /*
+     * Find this repo's own newest commit/sync, not the log's.
+     *
+     * The log is host-wide, so the newest event carrying a rev almost always
+     * belongs to a different account. Stopping at the first one found compared
+     * somebody else's rev against this head, decided they differed, and
+     * published a redundant #sync for this repo on nearly every startup.
+     * Skip events for other DIDs instead of stopping at them.
+     */
+    const char *repo_did = metalbear_repo_store_did(repo);
     int matched = 0;
     pthread_mutex_lock(&s->mutex);
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(s->db, "SELECT frame FROM events ORDER BY seq DESC;",
+    if (repo_did &&
+        sqlite3_prepare_v2(s->db, "SELECT frame FROM events ORDER BY seq DESC;",
                            -1, &stmt, NULL) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             const unsigned char *frame = sqlite3_column_blob(stmt, 0);
@@ -411,11 +422,16 @@ wf_status metalbear_sequencer_reconcile_repo(metalbear_sequencer *s,
             if (frame && length > 0 &&
                 wf_subscribe_decode_frame(frame, (size_t)length, &event) ==
                     WF_OK) {
-                const char *rev = event.type == WF_SUBSCRIBE_EVENT_COMMIT
-                                      ? event.data.commit.rev
-                                  : event.type == WF_SUBSCRIBE_EVENT_SYNC
-                                      ? event.data.sync.rev : NULL;
-                if (rev) {
+                const char *rev = NULL;
+                const char *event_did = NULL;
+                if (event.type == WF_SUBSCRIBE_EVENT_COMMIT) {
+                    rev = event.data.commit.rev;
+                    event_did = event.data.commit.did;
+                } else if (event.type == WF_SUBSCRIBE_EVENT_SYNC) {
+                    rev = event.data.sync.rev;
+                    event_did = event.data.sync.did;
+                }
+                if (rev && event_did && strcmp(event_did, repo_did) == 0) {
                     matched = strcmp(rev, head_rev) == 0;
                     wf_subscribe_event_free(&event);
                     break;
@@ -466,9 +482,13 @@ wf_status metalbear_sequencer_reconcile_account(metalbear_sequencer *s,
             if (frame && length > 0 &&
                 wf_subscribe_decode_frame(frame, (size_t)length, &event) ==
                     WF_OK) {
-                if (event.type == WF_SUBSCRIBE_EVENT_ACCOUNT) {
-                    matched = strcmp(event.data.account.did, did) == 0 &&
-                              event.data.account.active == (active ? 1 : 0);
+                /* Only this account's own #account events say anything about
+                 * its state. Breaking at the first one of any DID compared
+                 * against a stranger's record and re-announced this account on
+                 * nearly every startup. */
+                if (event.type == WF_SUBSCRIBE_EVENT_ACCOUNT &&
+                    strcmp(event.data.account.did, did) == 0) {
+                    matched = event.data.account.active == (active ? 1 : 0);
                     wf_subscribe_event_free(&event);
                     break;
                 }
