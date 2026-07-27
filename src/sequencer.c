@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "metalbear/sequencer.h"
+#include "metalbear/metrics.h"
 
 #include "wolfram/sync_publish.h"
 
@@ -181,6 +182,10 @@ static wf_status append_event(metalbear_sequencer *s,
     if (sqlite3_exec(s->db, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK)
         goto rollback;
     status = WF_OK;
+    /* Counted after the transaction commits, so a rolled-back append does not
+     * show up as a commit the network was told about. */
+    if (event->type == WF_SUBSCRIBE_EVENT_COMMIT)
+        metalbear_metrics_inc(METALBEAR_METRIC_COMMITS_SEQUENCED);
     pthread_cond_broadcast(&s->changed);
     goto done;
 
@@ -620,6 +625,7 @@ void metalbear_sequencer_set_ping_seconds(int64_t seconds) {
 
 static void *subscriber_main(void *raw) {
     subscriber_worker *worker = raw;
+    metalbear_metrics_inc(METALBEAR_METRIC_FIREHOSE_SUBSCRIBES);
     metalbear_sequencer *s = worker->sequencer;
     if (worker->error) {
         unsigned char *frame = NULL;
@@ -726,6 +732,7 @@ static void *subscriber_main(void *raw) {
     }
     wf_xrpc_server_ws_release(worker->stream);
     free(worker);
+    metalbear_metrics_inc(METALBEAR_METRIC_FIREHOSE_DISCONNECTS);
     return NULL;
 }
 
