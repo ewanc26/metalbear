@@ -16,6 +16,19 @@ MetalBear is a pure C11 AT Protocol PDS built on the sibling Wolfram SDK. It pro
 - `src/key_rotation.c` manages P-256 signing key rotation.
 - `include/metalbear/` contains all public headers.
 
+## Commits
+
+- **Atomic conventional commits**: one logical change per commit, scoped by
+  module — `feat(server)`, `fix(sequencer)`, `docs(agents)`. Never mix
+  unrelated changes; in particular do not combine a code change with a docs
+  update. Split into sequential commits instead.
+- **No AI co-authors**: do not add a `Co-authored-by:` trailer crediting an AI
+  agent. AI assistance is welcome; credit for committed work goes to human
+  authors only. Omit the trailer entirely.
+
+Matches the sibling Wolfram repository's convention, so the two histories read
+the same way.
+
 ## Reuse and safety
 
 - Reuse Wolfram primitives and server infrastructure. Do not copy Wolfram code into this repository or hand-roll cryptography.
