@@ -183,6 +183,41 @@ The `pdsadmin/metalbear-admin.sh` script mirrors the reference PDS admin tooling
 - Automatic firehose event retention
 - Dynamic landing page at `/` listing hosted accounts and version
 
+### Metrics
+
+`GET /metrics` serves the Prometheus text format, behind the same HTTP Basic
+admin credential as the `com.atproto.admin` endpoints — an open endpoint would
+publish a private host's account count and write rate to anyone who asked.
+
+```yaml
+scrape_configs:
+  - job_name: metalbear
+    basic_auth: { username: admin, password: "..." }
+    static_configs:
+      - targets: ["127.0.0.1:2583"]
+```
+
+Counters cover requests and refusals, accounts created and deleted, sessions
+and login failures, commits sequenced, blobs stored, takedowns applied,
+firehose subscribes and disconnects, and DNS and `requestCrawl` failures.
+Gauges report account counts by status, uptime, and the current firehose
+sequence number.
+
+`metalbear_firehose_seq` is the one worth alerting on. A PDS whose sequence has
+stopped advancing while accounts are still writing is indistinguishable, from
+outside, from a PDS that is down.
+
+### Logging
+
+`METALBEAR_LOG_LEVEL` is `debug`, `info` (default), `warn` or `error`, and
+`METALBEAR_LOG_FILE` a path to append to instead of stderr.
+
+`METALBEAR_LOG_FORMAT=json` emits one JSON object per line — `time`, `level`,
+`service`, `message` — for a collector to parse. Anything else keeps the
+human-readable form, which is what a person watching a terminal wants. The
+daemon's own startup and shutdown messages go through the same path, so a JSON
+stream stays parseable even when the server refuses to start.
+
 ## Install
 
 ### Container
@@ -454,11 +489,12 @@ PLC directory, and its posts, profile and media appear on the Bluesky AppView.
 
 Still missing or unproven for production use:
 
-- account deletion does not purge that DID's earlier firehose events
-- no metrics or structured operational logging
-- automatic `_atproto` record publication is implemented for Cloudflare only;
-  on any other DNS provider the operator writes one TXT record per account by
-  hand, or handles never resolve
+- request metrics are counted at the auth callback, so they cover every XRPC
+  route but not the plain HTTP ones, and carry no per-endpoint or per-status
+  breakdown
+- automatic `_atproto` record publication covers Cloudflare, DigitalOcean and
+  deSEC; on any other DNS provider the operator writes one TXT record per
+  account by hand, or handles never resolve
 
 ## Frontend
 
