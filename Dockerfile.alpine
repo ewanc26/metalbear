@@ -1,0 +1,86 @@
+# MetalBear on Alpine — the small image.
+#
+# Same server as the Debian image, built against musl instead of glibc, which
+# is worth roughly a hundred megabytes. Use this one to try MetalBear out or to
+# run it somewhere that counts image size; use the Debian image where you would
+# rather have glibc, because musl's DNS resolver and its stack sizes differ in
+# ways that are occasionally load-bearing.
+#
+# The build context is the parent directory holding both the MetalBear and
+# Wolfram source trees:
+#
+#   docker build -f MetalBear/Dockerfile.alpine -t metalbear:alpine .
+
+FROM alpine:3.21 AS build
+RUN apk add --no-cache \
+        build-base \
+        cmake \
+        git \
+        pkgconf \
+        sqlite-dev \
+        curl-dev \
+        openssl-dev \
+        libsecp256k1-dev \
+        libmicrohttpd-dev \
+        zstd-dev \
+        zlib-dev \
+        c-ares-dev \
+        linux-headers
+
+WORKDIR /src
+COPY MetalBear ./MetalBear
+COPY wolfram ./wolfram
+
+# Static internal libraries, so the runtime stage carries one file rather than
+# a binary plus four shared objects that must be kept in step with it.
+RUN cmake -S MetalBear -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DMETALBEAR_BUILD_TESTS=OFF \
+        -DWOLFRAM_SOURCE_DIR=/src/wolfram \
+    && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)"
+
+FROM alpine:3.21 AS runtime
+
+LABEL org.opencontainers.image.title="MetalBear" \
+      org.opencontainers.image.description="An AT Protocol Personal Data Server written in C11 (Alpine)" \
+      org.opencontainers.image.source="https://github.com/ewanc26/metalbear" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
+
+RUN apk add --no-cache \
+        ca-certificates \
+        sqlite-libs \
+        libcurl \
+        libcrypto3 \
+        libssl3 \
+        libsecp256k1 \
+        libmicrohttpd \
+        zstd-libs \
+        zlib \
+        c-ares
+
+COPY --from=build /src/build/metalbear /usr/local/bin/metalbear
+
+# The lexicon corpus records are validated against on write. Without it every
+# write is stored unchecked and reported as validationStatus "unknown".
+COPY --from=build /src/wolfram/lexicons /usr/local/share/metalbear/lexicons
+
+# Materialise /data in the image itself. It is normally a bind mount, but
+# without it `docker exec` cannot even start a process (it chdirs to WORKDIR
+# first), which is exactly when you need a shell to diagnose a broken mount.
+RUN mkdir -p /data
+WORKDIR /data
+
+# Bind to 0.0.0.0: the loopback default is right on a host with a reverse proxy
+# beside it, but inside a container it makes the server unreachable from
+# outside, which looks like a crash rather than a binding choice.
+ENV METALBEAR_DATA=/data \
+    METALBEAR_LISTEN=0.0.0.0 \
+    METALBEAR_LEXICON_DIR=/usr/local/share/metalbear/lexicons
+EXPOSE 2583
+
+# busybox wget, already present on Alpine.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:${METALBEAR_PORT:-2583}/xrpc/_health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/metalbear"]
