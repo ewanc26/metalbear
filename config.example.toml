@@ -105,10 +105,20 @@ did = "did:web:api.bsky.app"
 # out and handle resolution stays entirely the operator's business, which is
 # what every deployment did before this existed.
 #
-# provider  = "cloudflare"   # the only one implemented
-# api_token = "..."          # needs Zone.DNS:Edit on the zone below
-# zone_id   = "..."          # Cloudflare dashboard, zone overview
+# provider  = "cloudflare"   # cloudflare | digitalocean | desec
+# api_token = "..."          # a credential that may edit the zone's records
+# zone_id   = "..."          # cloudflare: the zone id; others: the domain
 # ttl       = 300            # short: a stale record shows a renamed handle
+#
+# zone_id is whatever the provider uses to name the zone: Cloudflare's opaque
+# id from the dashboard's zone overview, or the domain itself ("example.com")
+# for DigitalOcean and deSEC. api_token is a Cloudflare API token with
+# Zone.DNS:Edit, a DigitalOcean personal access token with write scope, or a
+# deSEC account token.
+#
+# Each provider enforces its own minimum TTL — 60, 30 and 3600 respectively —
+# and a smaller value here is raised to it rather than refused, since failing
+# every write would take handle resolution down for the whole host.
 
 # [smtp]
 # host         = "smtp.example.com"

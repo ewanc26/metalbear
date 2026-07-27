@@ -319,12 +319,27 @@ moved on a handle change, removed on deletion.
 provider  = "cloudflare"
 api_token = "..."   # Zone.DNS:Edit on the zone below
 zone_id   = "..."
+ttl       = 300
 ```
+
+Three providers are supported. `zone_id` is whatever each uses to name the
+zone, and `api_token` a credential that may edit its records:
+
+| `provider` | `zone_id` | `api_token` | Minimum TTL |
+| --- | --- | --- | --- |
+| `cloudflare` | the zone id from the dashboard | API token with `Zone.DNS:Edit` | 60 |
+| `digitalocean` | the domain, e.g. `example.com` | personal access token, write scope | 30 |
+| `desec` | the domain, e.g. `example.com` | account token | 3600 |
+
+A `ttl` below the provider's floor is raised to it rather than refused: failing
+every write over a number the provider dislikes would take handle resolution
+down for the whole host.
 
 Omit the section and handle resolution stays entirely the operator's business.
 A provider named without credentials is refused at startup rather than accepted:
 a host that mints accounts and silently writes no records is only discovered
-when every handle shows as `handle.invalid`, long after the accounts exist.
+when every handle shows as `handle.invalid`, long after the accounts exist. So
+is a provider name that is not one of the three, for the same reason.
 
 ## Run
 
