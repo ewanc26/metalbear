@@ -49,6 +49,25 @@ RUN cmake -S MetalBear -B build \
         -DWOLFRAM_SOURCE_DIR=/src/wolfram \
     && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)"
 
+# A toolchain image with the sources and the test suite, for poking at the
+# server without setting up a build host:
+#
+#   docker build -f MetalBear/Dockerfile --target dev -t metalbear:dev .
+#   docker run --rm -it metalbear:dev            # a shell in the source tree
+#   docker run --rm metalbear:dev ctest --test-dir build --output-on-failure
+#
+# Built Debug with tests, unlike the runtime image, because that is the point
+# of it. Nothing here reaches the shipped image.
+FROM build AS dev
+RUN cmake -S MetalBear -B MetalBear/build \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DMETALBEAR_BUILD_TESTS=ON \
+        -DWOLFRAM_SOURCE_DIR=/src/wolfram \
+    && cmake --build MetalBear/build --parallel "$(nproc 2>/dev/null || echo 4)"
+WORKDIR /src/MetalBear
+ENV METALBEAR_LEXICON_DIR=/src/wolfram/lexicons
+CMD ["/bin/bash"]
+
 FROM debian:bookworm-slim AS runtime
 
 LABEL org.opencontainers.image.title="MetalBear" \
