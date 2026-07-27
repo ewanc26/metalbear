@@ -170,6 +170,7 @@ static bool is_public_route(const char *nsid) {
         "com.atproto.sync.getBlocks",
         "com.atproto.sync.getRepoStatus",
         "com.atproto.sync.listRepos",
+        "com.atproto.sync.listReposByCollection",
         "com.atproto.sync.listBlobs",
         "com.atproto.sync.getRecord",
         "com.atproto.sync.subscribeRepos",
@@ -5349,6 +5350,99 @@ static wf_status get_blob(void *ctx, const wf_xrpc_request *request,
 }
 
 
+/* ---- com.atproto.sync.listReposByCollection (query, public) ----
+ * The accounts on this host holding at least one record in `collection`.
+ * The sync specification names this as the way a consuming service backfills
+ * a collection without walking every repository itself. */
+static wf_status list_repos_by_collection(void *ctx,
+                                          const wf_xrpc_request *request,
+                                          wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    const cJSON *coll = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "collection")
+        : NULL;
+    if (!cJSON_IsString(coll) || !coll->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "collection is required");
+        return WF_OK;
+    }
+    int limit = query_param_int(request->params, "limit", 500, 1, 2000);
+    size_t offset = 0;
+    const cJSON *cursor_param = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor") : NULL;
+    if (cJSON_IsString(cursor_param) && cursor_param->valuestring[0]) {
+        char *end = NULL;
+        long parsed = strtol(cursor_param->valuestring, &end, 10);
+        if (*end == '\0' && parsed >= 0) offset = (size_t)parsed;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *repos = cJSON_CreateArray();
+    if (!root || !repos) {
+        cJSON_Delete(root);
+        cJSON_Delete(repos);
+        return WF_ERR_ALLOC;
+    }
+
+    metalbear_account_entry *entries = NULL;
+    size_t count = 0;
+    if (metalbear_account_registry_list(server->registry, &entries,
+                                        &count) != WF_OK) {
+        entries = NULL;
+        count = 0;
+    }
+    if (offset > count) offset = count;
+
+    /* As in listRepos, `limit` counts accounts returned rather than rows
+     * examined, so accounts without the collection never occupy a slot. */
+    size_t emitted = 0;
+    size_t scanned = offset;
+    for (size_t i = offset; i < count && emitted < (size_t)limit;
+         i++, scanned = i) {
+        metalbear_account_context *acct = context_for_did(server,
+                                                          entries[i].did);
+        if (!acct) continue;
+        char *described = NULL;
+        if (metalbear_repo_store_describe(acct->repo, &described) != WF_OK ||
+            !described)
+            continue;
+        cJSON *desc = cJSON_Parse(described);
+        free(described);
+        if (!desc) continue;
+        bool holds = false;
+        const cJSON *cols = cJSON_GetObjectItemCaseSensitive(desc,
+                                                             "collections");
+        const cJSON *item = NULL;
+        cJSON_ArrayForEach(item, cols) {
+            if (cJSON_IsString(item) &&
+                strcmp(item->valuestring, coll->valuestring) == 0) {
+                holds = true;
+                break;
+            }
+        }
+        cJSON_Delete(desc);
+        if (!holds) continue;
+        cJSON *repo = cJSON_CreateObject();
+        if (!repo) {
+            metalbear_account_entries_free(entries, count);
+            cJSON_Delete(root);
+            cJSON_Delete(repos);
+            return WF_ERR_ALLOC;
+        }
+        cJSON_AddStringToObject(repo, "did", acct->did);
+        cJSON_AddItemToArray(repos, repo);
+        emitted++;
+    }
+    metalbear_account_entries_free(entries, count);
+    cJSON_AddItemToObject(root, "repos", repos);
+    if (scanned < count) {
+        char cursor_buf[32];
+        snprintf(cursor_buf, sizeof(cursor_buf), "%zu", scanned);
+        cJSON_AddStringToObject(root, "cursor", cursor_buf);
+    }
+    return set_json(response, root);
+}
+
 static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
                             wf_xrpc_response *response) {
     metalbear_server *server = ctx;
@@ -6352,6 +6446,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             "com.atproto.sync.listBlobs", list_blobs, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.sync.listRepos", list_repos, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+            "com.atproto.sync.listReposByCollection",
+            list_repos_by_collection, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
             "com.atproto.sync.getRecord", get_record, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
