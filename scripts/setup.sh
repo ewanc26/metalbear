@@ -20,6 +20,9 @@
 #   --operator-url <u>  operator's own page
 #   --support-url <u>   where to support the operator
 #   --description <s>   one line about this instance
+#   --dns-token <t>     Cloudflare API token with Zone.DNS:Edit
+#   --dns-zone <id>     Cloudflare zone ID; with a token, MetalBear writes the
+#                       _atproto TXT records that make minted handles resolve
 #   --no-start          provision only, do not launch
 #
 # Re-running is safe: existing secrets are carried over, so a rebuild never
@@ -37,6 +40,8 @@ OPERATOR_EMAIL=""
 OPERATOR_URL=""
 SUPPORT_URL=""
 INSTANCE_DESC="A personal AT Protocol server."
+DNS_TOKEN=""
+DNS_ZONE=""
 START=1
 
 while [ $# -gt 0 ]; do
@@ -51,8 +56,10 @@ while [ $# -gt 0 ]; do
 		--operator-url) OPERATOR_URL="${2:-}"; shift 2 ;;
 		--support-url)  SUPPORT_URL="${2:-}"; shift 2 ;;
 		--description)  INSTANCE_DESC="${2:-}"; shift 2 ;;
+		--dns-token)    DNS_TOKEN="${2:-}"; shift 2 ;;
+		--dns-zone)     DNS_ZONE="${2:-}"; shift 2 ;;
 		--no-start) START=0; shift ;;
-		-h|--help)  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help)  sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -127,6 +134,9 @@ keep() {
 random_hex() { openssl rand -hex "$1"; }
 random_pw()  { openssl rand -base64 24 | tr -d '/+=' | cut -c1-24; }
 
+[ -n "$DNS_TOKEN" ] || DNS_TOKEN="$(keep METALBEAR_DNS_API_TOKEN api_token)"
+[ -n "$DNS_ZONE" ]  || DNS_ZONE="$(keep METALBEAR_DNS_ZONE_ID zone_id)"
+
 PLC_KEY="$(keep METALBEAR_PLC_ROTATION_KEY plc_rotation_key)"
 ADMIN_PW="$(keep METALBEAR_ADMIN_PASSWORD admin_password)"
 [ -n "$PLC_KEY" ] || { PLC_KEY="$(random_hex 32)"; NEW_PLC=1; }
@@ -197,6 +207,25 @@ url = "https://api.bsky.app"
 did = "did:web:api.bsky.app"
 EOF
 
+# Only with both halves: a provider named without credentials is refused at
+# startup, on purpose, so a half-written section would leave the host unable to
+# boot rather than merely unable to write records.
+if [ -n "$DNS_TOKEN" ] && [ -n "$DNS_ZONE" ]; then
+	cat >> "$CONFIG_FILE" <<EOF
+
+[dns]
+# Writes _atproto.<handle> TXT records on account creation, so handles minted
+# under .${HOSTNAME_ARG} resolve without a record per account by hand.
+provider  = "cloudflare"
+api_token = "${DNS_TOKEN}"
+zone_id   = "${DNS_ZONE}"
+ttl       = 300
+EOF
+	say "Handle DNS records will be published via Cloudflare"
+elif [ -n "$DNS_TOKEN" ] || [ -n "$DNS_ZONE" ]; then
+	warn "Ignoring the DNS credential: --dns-token and --dns-zone are both needed."
+fi
+
 [ "${NEW_PLC:-0}" = 1 ] && warn "Generated a new PLC rotation key. Back up $CONFIG_FILE."
 [ "${NEW_ADMIN:-0}" = 1 ] && say "Admin password: $ADMIN_PW"
 
@@ -224,6 +253,14 @@ if ! curl -sf "http://127.0.0.1:${PORT}/xrpc/_health" >/dev/null 2>&1; then
 	exit 1
 fi
 
+if [ -n "$DNS_TOKEN" ] && [ -n "$DNS_ZONE" ]; then
+	DNS_NOTE="Handle TXT records are written automatically on account creation."
+else
+	DNS_NOTE="Handles under .${HOSTNAME_ARG} need a DNS TXT record to resolve:
+       _atproto.you.${HOSTNAME_ARG}  TXT  \"did=did:plc:...\"
+     Pass --dns-token and --dns-zone to have MetalBear write them."
+fi
+
 say "Healthy: $(curl -s "http://127.0.0.1:${PORT}/xrpc/_health")"
 cat <<EOF
 
@@ -242,8 +279,7 @@ Next steps
          \\"password\\":\\"...\\",\\"inviteCode\\":\\"\$CODE\\"}" \\
        https://${HOSTNAME_ARG}/xrpc/com.atproto.server.createAccount
 
-  3. Handles under .${HOSTNAME_ARG} need a DNS TXT record to resolve:
-       _atproto.you.${HOSTNAME_ARG}  TXT  "did=did:plc:..."
+  3. ${DNS_NOTE}
 
   4. Confirm a relay is consuming the host:
        curl -s "https://bsky.network/xrpc/com.atproto.sync.getHostStatus?hostname=${HOSTNAME_ARG}"
