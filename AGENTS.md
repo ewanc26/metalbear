@@ -5,6 +5,14 @@ MetalBear is a pure C11 AT Protocol PDS built on the sibling Wolfram SDK. It pro
 ## Read first and architecture
 
 - `/Volumes/Storage/Developer/Local/atproto` is the protocol and PDS behavior authority. Inspect its lexicons and PDS implementation before changing endpoint semantics.
+- <https://atproto.com> is the normative specification, and says things the
+  reference source does not spell out — the sync spec's requirements on `rev`
+  ordering, clock-drift rejection, `prevData` chain verification and what a
+  consuming relay may reject are stated there and nowhere in the TypeScript.
+  Read <https://atproto.com/specs/sync> before touching the firehose, and the
+  relevant `specs/` page before any wire-format change. Where the two appear
+  to disagree, the lexicons and reference implementation win for behaviour,
+  but the spec is what other implementations were written against.
 - `src/server.c` is the central file: server lifecycle, XRPC route registration, auth callback, and all protocol handler functions.
 - `src/account.c` manages credential storage, app passwords, email tokens, and account state (active/deactivated) in a per-account SQLite database.
 - `src/auth.c` manages session tokens (access/refresh JWTs) with scrypt-hashed refresh tokens and scope-based access control.
