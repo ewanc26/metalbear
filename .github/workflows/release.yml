@@ -1,0 +1,240 @@
+name: Release
+
+# Prebuilt binaries for Linux and macOS, and a multi-architecture container
+# image. Runs on a version tag, or manually for a dry run that builds and
+# uploads artifacts without publishing a release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build artifacts without creating a release'
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  binaries:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runs-on: ubuntu-24.04
+            os: linux
+            arch: x86_64
+          - name: linux-aarch64
+            runs-on: ubuntu-24.04-arm
+            os: linux
+            arch: aarch64
+          - name: macos-arm64
+            runs-on: macos-15
+            os: macos
+            arch: arm64
+          - name: macos-x86_64
+            runs-on: macos-13
+            os: macos
+            arch: x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: MetalBear
+
+      # Build the SDK from source at a matching commit rather than against
+      # whatever a package manager offers: the two move together.
+      - name: Check out Wolfram
+        uses: actions/checkout@v4
+        with:
+          repository: ewanc26/wolfram
+          path: wolfram
+
+      - name: Install dependencies (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            libsqlite3-dev libcurl4-openssl-dev libssl-dev \
+            libsecp256k1-dev libmicrohttpd-dev libzstd-dev \
+            zlib1g-dev libc-ares-dev libidn2-dev
+
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos'
+        run: brew install cmake openssl@3 sqlite libmicrohttpd secp256k1 zstd
+
+      - name: Build
+        working-directory: MetalBear
+        run: |
+          # Static internal libraries so the artifact is one file rather than a
+          # binary plus four shared objects that must stay in step with it.
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DMETALBEAR_BUILD_TESTS=OFF \
+            -DWOLFRAM_SOURCE_DIR=${{ github.workspace }}/wolfram
+          cmake --build build --parallel
+
+      - name: Smoke test the binary
+        working-directory: MetalBear
+        run: |
+          # A binary that cannot answer _health is not worth shipping, and a
+          # link error against the wrong library only shows up at runtime.
+          mkdir -p /tmp/smoke/data
+          cat > /tmp/smoke/config.toml <<EOF
+          [server]
+          listen      = "127.0.0.1"
+          port        = 2599
+          service_did = "did:web:smoke.example.com"
+          public_url  = "http://127.0.0.1:2599"
+          user_domain = ".smoke.example.com"
+          data        = "/tmp/smoke/data"
+          EOF
+          METALBEAR_CONFIG=/tmp/smoke/config.toml \
+          METALBEAR_LEXICON_DIR=${{ github.workspace }}/wolfram/lexicons \
+            ./build/metalbear &
+          PID=$!
+          for _ in $(seq 1 30); do
+            sleep 1
+            curl -sf http://127.0.0.1:2599/xrpc/_health >/dev/null && break
+          done
+          curl -sf http://127.0.0.1:2599/xrpc/_health || { echo "no response"; exit 1; }
+          echo "healthy: $(curl -s http://127.0.0.1:2599/xrpc/_health)"
+          kill $PID || true
+
+      - name: Package
+        run: |
+          NAME=metalbear-${{ matrix.name }}
+          mkdir -p "dist/$NAME"
+          cp MetalBear/build/metalbear "dist/$NAME/"
+          cp MetalBear/config.example.toml "dist/$NAME/"
+          cp MetalBear/README.md MetalBear/LICENSE "dist/$NAME/" 2>/dev/null || true
+          # Records are validated against this corpus; without it every write is
+          # stored unchecked and reported as validationStatus "unknown".
+          cp -R wolfram/lexicons "dist/$NAME/lexicons"
+
+          cat > "dist/$NAME/RUNNING.md" <<'EOF'
+          # Running this build
+
+          MetalBear links the system's TLS, HTTP, SQLite and crypto libraries,
+          so those must be present:
+
+              Debian/Ubuntu  apt install libsqlite3-0 libcurl4 libssl3 \
+                                 libsecp256k1-1 libmicrohttpd12 libzstd1 zlib1g
+              macOS          brew install openssl@3 sqlite libmicrohttpd \
+                                 secp256k1 zstd
+
+          Copy `config.example.toml` to `config.toml`, set at least
+          `service_did` and `user_domain`, then:
+
+              METALBEAR_LEXICON_DIR=./lexicons ./metalbear
+
+          MetalBear does not terminate TLS. Bind it to loopback and put a
+          reverse proxy in front, forwarding WebSocket upgrades — without those
+          the firehose will not serve and the host will never federate.
+          EOF
+
+          tar -C dist -czf "$NAME.tar.gz" "$NAME"
+          shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metalbear-${{ matrix.name }}
+          path: |
+            metalbear-${{ matrix.name }}.tar.gz
+            metalbear-${{ matrix.name }}.tar.gz.sha256
+
+  image:
+    name: container image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: MetalBear
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ewanc26/wolfram
+          path: wolfram
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=sha,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          # The context is the parent of both checkouts, which is the layout
+          # the Dockerfile expects so the SDK builds from a known commit.
+          context: .
+          file: MetalBear/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ startsWith(github.ref, 'refs/tags/') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    name: publish release
+    needs: [binaries, image]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.sha256
+          generate_release_notes: true
+          body: |
+            ## Container image
+
+            ```sh
+            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ```
+
+            Built for `linux/amd64` and `linux/arm64`.
+
+            ## Binaries
+
+            Prebuilt for Linux (x86_64, aarch64) and macOS (arm64, x86_64).
+            Each archive contains the binary, the lexicon corpus records are
+            validated against, an example configuration, and the runtime
+            libraries it expects. Verify with the accompanying `.sha256`.
+
+            MetalBear does not terminate TLS: bind it to loopback and put a
+            reverse proxy in front, forwarding WebSocket upgrades.
