@@ -162,6 +162,25 @@ static int firehose_read_until(int fd, int type, wf_subscribe_event *event) {
     return 0;
 }
 
+/* POST an admin-gated XRPC method with HTTP Basic `admin:<password>`, which
+ * is how the reference authenticates these. */
+static wf_status admin_post(wf_xrpc_client *client, const char *base,
+                            const char *nsid, const char *body,
+                            wf_response *out) {
+    char cred[64];
+    int n = snprintf(cred, sizeof(cred), "admin:%s", "secret-admin");
+    char b64[128];
+    int len = EVP_EncodeBlock((unsigned char *)b64,
+                              (const unsigned char *)cred, n);
+    b64[len] = '\0';
+    char auth[160];
+    snprintf(auth, sizeof(auth), "Basic %s", b64);
+    wf_http_header hdr = {"Authorization", auth};
+    char url[256];
+    snprintf(url, sizeof(url), "%s/xrpc/%s", base, nsid);
+    return wf_http_post(client, url, "application/json", body, &hdr, 1, out);
+}
+
 int main(void) {
     char directory[] = "/tmp/metalbear-test-XXXXXX";
     CHECK(mkdtemp(directory) != NULL);
@@ -530,27 +549,56 @@ int main(void) {
     wf_response_free(&response);
     wf_xrpc_client_set_auth(client, access_token);
 
-    /* createInviteCode: requires useCount, returns a real code */
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createInviteCode",
-                            "{\"useCount\":5}", &response) == WF_OK);
-    CHECK(response.status == 200);
-    json = json_response(&response);
-    cJSON *code = cJSON_GetObjectItemCaseSensitive(json, "code");
-    CHECK(cJSON_IsString(code) && strlen(code->valuestring) > 0);
-    cJSON_Delete(json);
-    wf_response_free(&response);
+    /*
+     * createInviteCode is admin-gated, matching the reference's
+     * authVerifier.adminToken. A bearer token must not work: when invite codes
+     * are required, an endpoint reachable only with an account token could
+     * never issue the code a first account needs.
+     */
+    {
+        char admin_cred[64];
+        int an = snprintf(admin_cred, sizeof(admin_cred), "admin:%s",
+                          "secret-admin");
+        char admin_b64[128];
+        int alen = EVP_EncodeBlock((unsigned char *)admin_b64,
+                                    (const unsigned char *)admin_cred, an);
+        admin_b64[alen] = '\0';
+        char admin_auth[160];
+        snprintf(admin_auth, sizeof(admin_auth), "Basic %s", admin_b64);
+        wf_http_header admin_hdr = {"Authorization", admin_auth};
+        char invite_url[256];
+        snprintf(invite_url, sizeof(invite_url),
+                 "%s/xrpc/com.atproto.server.createInviteCode", base);
 
-    /* createInviteCode without useCount fails */
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createInviteCode",
-                            "{}", &response) == WF_ERR_HTTP);
-    CHECK(response.status == 400);
-    wf_response_free(&response);
+        /* A bearer token is refused. */
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.createInviteCode",
+                                "{\"useCount\":5}", &response) == WF_ERR_HTTP);
+        CHECK(response.status == 401);
+        wf_response_free(&response);
+
+        /* Admin Basic auth returns a real code. */
+        CHECK(wf_http_post(client, invite_url, "application/json",
+                           "{\"useCount\":5}", &admin_hdr, 1,
+                           &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        cJSON *code = cJSON_GetObjectItemCaseSensitive(json, "code");
+        CHECK(cJSON_IsString(code) && strlen(code->valuestring) > 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* createInviteCode without useCount fails */
+        CHECK(wf_http_post(client, invite_url, "application/json", "{}",
+                           &admin_hdr, 1, &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        wf_response_free(&response);
+    }
 
     /* createInviteCodes: returns per-account code lists */
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createInviteCodes",
-                            "{\"codeCount\":3,\"useCount\":2,"
-                            "\"forAccounts\":[\"did:plc:metalbeartest\"]}",
-                            &response) == WF_OK);
+    CHECK(admin_post(client, base, "com.atproto.server.createInviteCodes",
+                     "{\"codeCount\":3,\"useCount\":2,"
+                     "\"forAccounts\":[\"did:plc:metalbeartest\"]}",
+                     &response) == WF_OK);
     CHECK(response.status == 200);
     json = json_response(&response);
     cJSON *codes = cJSON_GetObjectItemCaseSensitive(json, "codes");
@@ -563,9 +611,10 @@ int main(void) {
     cJSON_Delete(json);
     wf_response_free(&response);
 
-    /* createInviteCodes without codeCount fails */
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createInviteCodes",
-                            "{\"useCount\":2}", &response) == WF_ERR_HTTP);
+    /* createInviteCodes without codeCount fails validation (admin-authed, so
+     * this tests the input check rather than the auth gate). */
+    CHECK(admin_post(client, base, "com.atproto.server.createInviteCodes",
+                     "{\"useCount\":2}", &response) == WF_ERR_HTTP);
     CHECK(response.status == 400);
     wf_response_free(&response);
 
@@ -672,8 +721,7 @@ int main(void) {
 
         /* Create invite codes for bob so we have something to disable. */
         wf_xrpc_client_set_auth(client, access_token);
-        CHECK(wf_xrpc_procedure(client,
-            "com.atproto.server.createInviteCodes",
+        CHECK(admin_post(client, base, "com.atproto.server.createInviteCodes",
             "{\"codeCount\":2,\"useCount\":1,\"forAccounts\":[\"bob\"]}",
             &response) == WF_OK);
         CHECK(response.status == 200);
