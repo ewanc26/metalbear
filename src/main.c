@@ -197,6 +197,9 @@ int main(void) {
     ENV_STR("METALBEAR_SMTP_PASSWORD",     smtp_password);
     ENV_STR("METALBEAR_FROM_ADDRESS",      from_address);
     ENV_STR("METALBEAR_FROM_NAME",         from_name);
+    ENV_STR("METALBEAR_DNS_PROVIDER",      dns_provider);
+    ENV_STR("METALBEAR_DNS_API_TOKEN",     dns_api_token);
+    ENV_STR("METALBEAR_DNS_ZONE_ID",       dns_zone_id);
 
     ENV_I64("METALBEAR_RATE_LIMIT",              rate_limit);
     ENV_I64("METALBEAR_RATE_LIMIT_WINDOW",       rate_limit_window);
@@ -207,6 +210,7 @@ int main(void) {
     ENV_I64("METALBEAR_FIREHOSE_PING_SECONDS",   firehose_ping_seconds);
     ENV_I64("METALBEAR_RETENTION_MAX_AGE",       retention_max_age_seconds);
     ENV_I64("METALBEAR_RETENTION_MIN_EVENTS",    retention_min_events);
+    ENV_I64("METALBEAR_DNS_TTL",                 dns_record_ttl);
     #undef ENV_STR
     #undef ENV_I64
 

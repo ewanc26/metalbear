@@ -32,7 +32,7 @@ set(WOLFRAM_BUILD_CPP OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WOLFRAM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/wolfram")
 get_target_property(METALBEAR_CJSON_SOURCE_DIR cjson SOURCE_DIR)
 
-add_library(metalbear_core src/config_file.c src/account.c src/account_registry.c src/account_context.c src/account_cache.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/key_rotation.c src/repo_store.c src/sequencer.c src/server.c src/report.c src/blob_store.c src/blob_store_server.c)
+add_library(metalbear_core src/config_file.c src/handle_dns.c src/account.c src/account_registry.c src/account_context.c src/account_cache.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/key_rotation.c src/repo_store.c src/sequencer.c src/server.c src/report.c src/blob_store.c src/blob_store_server.c)
 target_include_directories(metalbear_core PUBLIC include
     PUBLIC "${METALBEAR_CJSON_SOURCE_DIR}")
 target_link_libraries(metalbear_core PUBLIC wolfram cjson PRIVATE SQLite3::SQLite3 Threads::Threads)
@@ -89,6 +89,17 @@ if(METALBEAR_BUILD_TESTS)
     # Run from the source tree so the shipped config.example.toml is reachable.
     add_test(NAME metalbear_config_file COMMAND test_metalbear_config_file
              WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    # Runs the publisher against a stand-in for the Cloudflare API, so the
+    # requests it would send to a live zone can be asserted on directly.
+    find_path(MICROHTTPD_INCLUDE_DIR NAMES microhttpd.h REQUIRED)
+    find_library(MICROHTTPD_LIBRARY NAMES microhttpd REQUIRED)
+    add_executable(test_metalbear_handle_dns test/test_handle_dns.c)
+    target_link_libraries(test_metalbear_handle_dns PRIVATE metalbear_core
+        ${MICROHTTPD_LIBRARY} Threads::Threads)
+    target_include_directories(test_metalbear_handle_dns PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}" ${MICROHTTPD_INCLUDE_DIR})
+    add_test(NAME metalbear_handle_dns COMMAND test_metalbear_handle_dns)
 
     add_executable(test_metalbear_backup test/test_backup.c)
     target_link_libraries(test_metalbear_backup PRIVATE metalbear_core SQLite3::SQLite3)

@@ -12,6 +12,7 @@
 #include "metalbear/auth.h"
 #include "metalbear/backup.h"
 #include "metalbear/email.h"
+#include "metalbear/handle_dns.h"
 #include "metalbear/key_rotation.h"
 #include "metalbear/oauth.h"
 #include "metalbear/report.h"
@@ -156,7 +157,46 @@ struct metalbear_server {
      * was found, in which case every write reports validationStatus
      * "unknown" rather than pretending records were checked. */
     wf_lexicon_registry *lexicons;
+    /* Publishes the `_atproto` TXT records that make minted handles resolve.
+     * NULL when no DNS provider is configured, which leaves those records to
+     * the operator. */
+    metalbear_handle_dns *handle_dns;
 };
+
+/*
+ * Point `_atproto.<handle>` at `did`, if a provider is configured.
+ *
+ * Never fatal to the operation that triggered it. The account or the rename is
+ * already durable by the time this runs, and an unresolvable handle is a
+ * recoverable state: the record can be written by hand, and the next handle
+ * change tries again. Failing the request instead would leave the caller
+ * believing nothing happened when the account exists.
+ */
+static void publish_handle_dns(metalbear_server *server, const char *handle,
+                               const char *did) {
+    if (!server->handle_dns || !handle || !did) return;
+    if (metalbear_handle_dns_publish(server->handle_dns, handle, did) != WF_OK) {
+        LOG_ERROR("dns: could not publish _atproto.%s for did=%s: %s; the "
+                  "handle will not resolve until the record exists",
+                  handle, did,
+                  metalbear_handle_dns_last_error(server->handle_dns));
+        return;
+    }
+    LOG_INFO("dns: published _atproto.%s -> %s", handle, did);
+}
+
+/* Drop `_atproto.<handle>`, if a provider is configured. Same rule: a stale
+ * record is a smaller problem than a failed deletion, so this only logs. */
+static void retract_handle_dns(metalbear_server *server, const char *handle) {
+    if (!server->handle_dns || !handle) return;
+    if (metalbear_handle_dns_retract(server->handle_dns, handle) != WF_OK) {
+        LOG_WARN("dns: could not remove _atproto.%s: %s; the record now points "
+                 "at a handle this host no longer serves",
+                 handle, metalbear_handle_dns_last_error(server->handle_dns));
+        return;
+    }
+    LOG_INFO("dns: removed _atproto.%s", handle);
+}
 
 static bool is_public_route(const char *nsid) {
     static const char *const public_routes[] = {
@@ -637,6 +677,9 @@ static wf_status delete_account(void *ctx, const wf_xrpc_request *request,
     /* Emit deactivation event to firehose */
     metalbear_sequencer_account_status(acct->sequencer, acct->did, 0,
                                        "deleted");
+    /* Drop the handle's TXT record: leaving it would keep pointing resolvers
+     * at a DID this host no longer serves. */
+    retract_handle_dns(server, acct->handle);
     return WF_OK;
 }
 
@@ -1296,6 +1339,13 @@ static wf_status update_handle(void *ctx, const wf_xrpc_request *request,
                                    "Could not persist handle");
         return WF_OK;
     }
+    /* Move the TXT record with the handle. Publishing the new one before
+     * dropping the old leaves both resolving for a moment, which is the safe
+     * order: neither points anywhere wrong, and a resolver that has cached the
+     * old name still gets the right DID. */
+    publish_handle_dns(server, new_handle, acct->did);
+    retract_handle_dns(server, old_handle);
+
     free(old_handle);
     free(acct->handle);
     acct->handle = new_handle;
@@ -3424,6 +3474,11 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
                   account_did, handle->valuestring);
     }
 
+    /* Make the handle resolvable. Without a `_atproto` TXT record an AppView
+     * shows the account as handle.invalid, which is what every account minted
+     * under a wildcard-covered subdomain looked like before this. */
+    publish_handle_dns(server, handle->valuestring, account_did);
+
     /* Issue a session scoped to the new account's own auth store. */
     metalbear_session_tokens tokens = {0};
     wf_status session_status = metalbear_auth_create_scoped_session(
@@ -4428,11 +4483,21 @@ static wf_status admin_update_account_handle(void *ctx,
     }
     /* Update the account context if open. */
     metalbear_account_context *acct = context_for_did(server, did->valuestring);
+    char *old_handle = NULL;
     if (acct) {
+        old_handle = strdup(acct->handle);
         metalbear_repo_store_set_handle(acct->repo, handle->valuestring);
         free(acct->handle);
         acct->handle = strdup(handle->valuestring);
     }
+
+    publish_handle_dns(server, handle->valuestring, did->valuestring);
+    /* Only when the old handle was known: the context is the only place it is
+     * held, and guessing at a name to delete risks removing someone else's. */
+    if (old_handle && strcmp(old_handle, handle->valuestring) != 0)
+        retract_handle_dns(server, old_handle);
+    free(old_handle);
+
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     return set_json(response, root);
@@ -4692,8 +4757,10 @@ static wf_status admin_delete_account(void *ctx,
     }
 
     char *data_dir = strdup(entry->data_directory);
+    char *handle = entry->handle ? strdup(entry->handle) : NULL;
     metalbear_account_entry_free(entry);
     if (!data_dir) {
+        free(handle);
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                     "could not copy data directory");
         return WF_OK;
@@ -4712,6 +4779,11 @@ static wf_status admin_delete_account(void *ctx,
                                        "deleted");
 
     metalbear_account_registry_remove(server->registry, did->valuestring);
+
+    /* Drop the handle's TXT record: leaving it would keep pointing resolvers
+     * at a DID this host no longer serves. */
+    retract_handle_dns(server, handle);
+    free(handle);
 
     rmtree(data_dir);
     free(data_dir);
@@ -6877,6 +6949,29 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         };
         metalbear_email_open(&email_cfg, &server->email);
     }
+
+    /*
+     * Open the handle DNS publisher, if one is configured.
+     *
+     * A misconfigured provider is fatal on purpose. The alternative is a host
+     * that starts, mints accounts, and writes no records — and the operator
+     * only finds out when every handle shows as handle.invalid on an AppView,
+     * long after the accounts exist.
+     */
+    if (config->dns_provider && config->dns_provider[0]) {
+        if (metalbear_handle_dns_open(config->dns_provider,
+                                      config->dns_api_token,
+                                      config->dns_zone_id,
+                                      (int)config->dns_record_ttl,
+                                      &server->handle_dns) != WF_OK) {
+            LOG_ERROR("dns: provider '%s' is configured but unusable; it needs "
+                      "an api_token and a zone_id, and 'cloudflare' is the only "
+                      "provider implemented", config->dns_provider);
+            metalbear_server_free(server);
+            return NULL;
+        }
+        LOG_INFO("dns: publishing _atproto records via %s", config->dns_provider);
+    }
     if (config->account_email && config->account_email[0])
         server->account_email = strdup(config->account_email);
     #define COPY_OPT(field) \
@@ -6925,6 +7020,7 @@ void metalbear_server_free(metalbear_server *server) {
     metalbear_sequencer_free(server->sequencer);
     metalbear_account_registry_free(server->registry);
     metalbear_email_free(server->email);
+    metalbear_handle_dns_free(server->handle_dns);
     metalbear_report_store_free(server->reports);
     wf_rate_limiter_free(server->rate_limiter);
     if (log_file) {
