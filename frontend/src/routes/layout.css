@@ -1,0 +1,15 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/typography';
+
+/*
+ * Dark by default: this is a server landing page, and the palette carries over
+ * from the static page it replaces (#0d1117 ground, green accent).
+ */
+:root {
+	color-scheme: dark;
+}
+
+body {
+	background-color: #0d1117;
+	-webkit-font-smoothing: antialiased;
+}
