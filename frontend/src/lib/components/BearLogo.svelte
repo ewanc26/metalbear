@@ -1,42 +1,148 @@
 <script lang="ts">
 	/*
-	 * The bear, carried over verbatim from the static landing page it replaces.
+	 * The MetalBear logo, modelled on the ASCII art it replaces: each block
+	 * character became a rect, with horizontal runs merged, so the shape is the
+	 * same one but rendered as geometry rather than text.
 	 *
-	 * Rendered as a <pre> rather than an image so it costs nothing to load and
-	 * degrades to plain text; aria-hidden because it says nothing a screen
-	 * reader needs, and the heading beside it already names the server.
+	 * As a <pre> it depended on the viewer having a monospace font with the
+	 * expected cell ratio and on a font-size small enough to fit, which broke
+	 * at narrow widths. Inline rather than an <img> so it inherits currentColor
+	 * and costs no extra request.
 	 */
-	const art = `                                   █████████████             ████████████████████
-                             ██████████████████████████████████████████████████████████
-                        ██████████████████████████████████████████████████████████████████
-            ████████████████████████████████████████████████████████████████████████████████
-           ███████████████████████████████████████████████████████████████████████████████████
-         ██████████████████████████████████████████████████████████████████████████████████████
-        ████████████████████████████████████████████████████████████████████████████████████████
-       ██████████████████████████████████████████████████████████████████████████████████████████
-      ███████████████████████████████████████████████████████████████████████████████████████████
-     █████████████████████████████████████████████████████████████████████████████████████████████
-    ██████████████████████████████████████████████████████████████████████████████████████████████
-  ████████████████████████████████████████████████████████████████████████████████████████████████
-█████████████████████████████████████████████████████████████████████████████████████████████████
- ████████████████████████████████████████████████████████████████████████████████████████████████
-  ███████████████████████████████████████████████████████████████████████████████████████████████
-                     ████████████████████████████████████████████████████████████████████████████
-                         ████████████████████████████████████████████████████████████████████████
-                             ████████████████████████████████████████████████████████████████████
-                              ███████████████████████████████████████████████████████████████████
-                               ██████████████████████   █████████████████████████████████████████
-                              ███████████████████████           █████████████████████████████████
-                              ███████████ ███████████              ██████████████████████████████
-                             ███████████   ██████████              ███████████████  █████████████
-                             ██████████     █████████               █████████████    █████████████
-                            ██████████       ████████               ████████████      ████████████
-                            █████████        ████████                ██████████         ██████████
-                           ████████           ███████                 █████████          █████████
-                         █████████         ██████████            █████████████      █████████████
-                     ████████████       █████████████          ██████████████       ███████████`;
 </script>
 
-<pre
-	aria-hidden="true"
-	class="mb-8 overflow-x-auto font-mono text-[5px] leading-none text-emerald-600 select-none sm:text-[7px] md:text-[9px] dark:text-emerald-500">{art}</pre>
+<svg
+	class="mb-8 w-full max-w-2xl text-emerald-500"
+	viewBox="0 0 294 145"
+	fill="currentColor"
+	role="img"
+	aria-label="MetalBear logo"
+	><g shape-rendering="crispEdges"
+		><rect x="105" y="0" width="39" height="5" /><rect x="183" y="0" width="60" height="5" /><rect
+			x="87"
+			y="5"
+			width="174"
+			height="5"
+		/><rect x="72" y="10" width="198" height="5" /><rect
+			x="36"
+			y="15"
+			width="240"
+			height="5"
+		/><rect x="33" y="20" width="249" height="5" /><rect
+			x="27"
+			y="25"
+			width="258"
+			height="5"
+		/><rect x="24" y="30" width="264" height="5" /><rect
+			x="21"
+			y="35"
+			width="270"
+			height="5"
+		/><rect x="18" y="40" width="273" height="5" /><rect
+			x="15"
+			y="45"
+			width="279"
+			height="5"
+		/><rect x="12" y="50" width="282" height="5" /><rect x="6" y="55" width="288" height="5" /><rect
+			x="0"
+			y="60"
+			width="291"
+			height="5"
+		/><rect x="3" y="65" width="288" height="5" /><rect x="6" y="70" width="285" height="5" /><rect
+			x="63"
+			y="75"
+			width="228"
+			height="5"
+		/><rect x="75" y="80" width="216" height="5" /><rect
+			x="87"
+			y="85"
+			width="204"
+			height="5"
+		/><rect x="90" y="90" width="201" height="5" /><rect x="93" y="95" width="66" height="5" /><rect
+			x="168"
+			y="95"
+			width="123"
+			height="5"
+		/><rect x="90" y="100" width="69" height="5" /><rect
+			x="192"
+			y="100"
+			width="99"
+			height="5"
+		/><rect x="90" y="105" width="33" height="5" /><rect
+			x="126"
+			y="105"
+			width="33"
+			height="5"
+		/><rect x="201" y="105" width="90" height="5" /><rect
+			x="87"
+			y="110"
+			width="33"
+			height="5"
+		/><rect x="129" y="110" width="30" height="5" /><rect
+			x="201"
+			y="110"
+			width="45"
+			height="5"
+		/><rect x="252" y="110" width="39" height="5" /><rect
+			x="87"
+			y="115"
+			width="30"
+			height="5"
+		/><rect x="132" y="115" width="27" height="5" /><rect
+			x="204"
+			y="115"
+			width="39"
+			height="5"
+		/><rect x="255" y="115" width="39" height="5" /><rect
+			x="84"
+			y="120"
+			width="30"
+			height="5"
+		/><rect x="135" y="120" width="24" height="5" /><rect
+			x="204"
+			y="120"
+			width="36"
+			height="5"
+		/><rect x="258" y="120" width="36" height="5" /><rect
+			x="84"
+			y="125"
+			width="27"
+			height="5"
+		/><rect x="135" y="125" width="24" height="5" /><rect
+			x="207"
+			y="125"
+			width="30"
+			height="5"
+		/><rect x="264" y="125" width="30" height="5" /><rect
+			x="81"
+			y="130"
+			width="24"
+			height="5"
+		/><rect x="138" y="130" width="21" height="5" /><rect
+			x="210"
+			y="130"
+			width="27"
+			height="5"
+		/><rect x="267" y="130" width="27" height="5" /><rect
+			x="75"
+			y="135"
+			width="27"
+			height="5"
+		/><rect x="129" y="135" width="30" height="5" /><rect
+			x="195"
+			y="135"
+			width="39"
+			height="5"
+		/><rect x="252" y="135" width="39" height="5" /><rect
+			x="63"
+			y="140"
+			width="36"
+			height="5"
+		/><rect x="120" y="140" width="39" height="5" /><rect
+			x="189"
+			y="140"
+			width="42"
+			height="5"
+		/><rect x="252" y="140" width="33" height="5" /></g
+	></svg
+>
