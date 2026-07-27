@@ -2,6 +2,7 @@
 
 #include "metalbear/config_file.h"
 #include "metalbear/server.h"
+#include "metalbear/log.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -71,7 +72,7 @@ static char *path_join(const char *dir, const char *name) {
 static const char *required_env(const char *name) {
     const char *value = getenv(name);
     if (!value || !value[0])
-        fprintf(stderr, "MetalBear [ERROR] missing required %s\n", name);
+        LOG_ERROR("missing required %s", name);
     return value;
 }
 
@@ -93,8 +94,7 @@ static int did_env_is_usable(const char *name, const char *value) {
     if (!value || !value[0]) return 0; /* required_env already complained */
 
     if (!wf_syntax_did_is_valid(value)) {
-        fprintf(stderr, "MetalBear [ERROR] %s is not a valid DID: %s\n",
-                name, value);
+        LOG_ERROR("%s is not a valid DID: %s", name, value);
         return 0;
     }
     if (strncmp(value, "did:plc:", 8) == 0 && !wf_syntax_did_plc_is_valid(value)) {
@@ -130,6 +130,9 @@ static void print_usage(FILE *out, const char *argv0) {
 }
 
 int main(int argc, char **argv) {
+    /* Before any message can be emitted, so configuration errors come out in
+     * the format the operator asked for. */
+    metalbear_log_configure();
     /*
      * Handled before anything else reads configuration: asking a binary what
      * version it is must work on a host that has none, which is exactly the
@@ -145,7 +148,7 @@ int main(int argc, char **argv) {
             print_usage(stdout, argv0);
             return 0;
         }
-        fprintf(stderr, "MetalBear [ERROR] unknown argument: %s\n", argv[i]);
+        LOG_ERROR("unknown argument: %s", argv[i]);
         print_usage(stderr, argv0);
         return 2;
     }
@@ -197,11 +200,10 @@ int main(int argc, char **argv) {
                                        cfg_err, sizeof(cfg_err)) != WF_OK) {
             /* A config file that cannot be read is fatal: starting with
              * defaults would silently ignore what the operator asked for. */
-            fprintf(stderr, "MetalBear [ERROR] %s\n",
-                    cfg_err[0] ? cfg_err : "could not read config file");
+            LOG_ERROR("%s", cfg_err[0] ? cfg_err : "could not read config file");
             return 2;
         }
-        fprintf(stderr, "MetalBear [INFO] loaded config from %s\n", config_path);
+        LOG_INFO("loaded config from %s", config_path);
     }
 
     /* Environment overrides the file, one setting at a time. */
@@ -269,13 +271,11 @@ int main(int argc, char **argv) {
         }
     }
     if (!config.service_did) {
-        fprintf(stderr, "MetalBear [ERROR] METALBEAR_SERVICE_DID or "
-                        "server.service_did is required\n");
+        LOG_ERROR("METALBEAR_SERVICE_DID or server.service_did is required");
         return 2;
     }
     if (!config.user_domain) {
-        fprintf(stderr, "MetalBear [ERROR] METALBEAR_USER_DOMAIN or "
-                        "server.user_domain is required\n");
+        LOG_ERROR("METALBEAR_USER_DOMAIN or server.user_domain is required");
         return 2;
     }
     /* Refuse to start on a malformed service identity rather than bake it into
@@ -318,14 +318,14 @@ int main(int argc, char **argv) {
 
     metalbear_server *server = metalbear_server_start(&config);
     if (!server) {
-        fprintf(stderr, "MetalBear [ERROR] failed to start MetalBear\n");
+        LOG_ERROR("failed to start MetalBear");
         return 1;
     }
 
     signal(SIGINT, stop_handler);
     signal(SIGTERM, stop_handler);
-    fprintf(stderr, "MetalBear [INFO] listening on %s:%u\n",
-            config.listen_address, (unsigned)metalbear_server_port(server));
+    LOG_INFO("listening on %s:%u", config.listen_address,
+             (unsigned)metalbear_server_port(server));
     while (!stopping) pause();
     metalbear_server_free(server);
     return 0;
