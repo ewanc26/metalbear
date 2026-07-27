@@ -27,9 +27,11 @@
  */
 
 #include "metalbear/handle_dns.h"
+#include "metalbear/handle_dns_rfc2136.h"
 
 #include <cJSON.h>
 #include <curl/curl.h>
+#include <openssl/evp.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -48,6 +50,12 @@ struct metalbear_handle_dns {
     char *zone_id;
     int ttl;
     char last_error[256];
+    /* rfc2136 only: the nameserver to update, and the decoded TSIG key. */
+    char *server_host;
+    char *server_port;
+    char *key_name;
+    unsigned char *key_secret;
+    size_t key_secret_len;
 };
 
 /*
@@ -547,6 +555,125 @@ static wf_status desec_retract(metalbear_handle_dns *dns, const char *name,
 }
 
 /* ------------------------------------------------------------------ */
+/* RFC 2136                                                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Not an HTTP API at all: this speaks the update protocol the nameservers
+ * themselves implement, so one implementation covers BIND, Knot, PowerDNS,
+ * NSD and anything else standards-compliant. See handle_dns_rfc2136.c.
+ */
+static void rfc2136_config(metalbear_handle_dns *dns,
+                           metalbear_rfc2136_config *out) {
+    out->server = dns->server_host;
+    out->port = dns->server_port;
+    out->zone = dns->zone_id;
+    out->key_name = dns->key_name;
+    out->secret = dns->key_secret;
+    out->secret_len = dns->key_secret_len;
+}
+
+static wf_status rfc2136_lookup(metalbear_handle_dns *dns, const char *name,
+                                dns_record *out) {
+    metalbear_rfc2136_config config;
+    rfc2136_config(dns, &config);
+    char value[512];
+    bool found = false;
+    char error[256] = "";
+    wf_status st = metalbear_rfc2136_query_txt(&config, name, value,
+                                               sizeof(value), &found,
+                                               error, sizeof(error));
+    if (st != WF_OK) {
+        set_error(dns, "%s", error[0] ? error : "query failed");
+        return st;
+    }
+    if (found) {
+        out->found = true;
+        /* The wire form carries no quotes, so nothing to strip — but it goes
+         * through the same helper so every provider's content compares alike. */
+        out->content = unquote(value);
+        if (!out->content) return WF_ERR_ALLOC;
+    }
+    return WF_OK;
+}
+
+static wf_status rfc2136_publish(metalbear_handle_dns *dns, const char *name,
+                                 const char *content,
+                                 const dns_record *existing) {
+    (void)existing;   /* one message deletes the RRset and adds the new value */
+    metalbear_rfc2136_config config;
+    rfc2136_config(dns, &config);
+    char error[256] = "";
+    wf_status st = metalbear_rfc2136_update_txt(&config, name, content,
+                                                dns->ttl, error,
+                                                sizeof(error));
+    if (st != WF_OK) set_error(dns, "%s", error[0] ? error : "update failed");
+    return st;
+}
+
+static wf_status rfc2136_retract(metalbear_handle_dns *dns, const char *name,
+                                 const dns_record *existing) {
+    (void)existing;
+    metalbear_rfc2136_config config;
+    rfc2136_config(dns, &config);
+    char error[256] = "";
+    wf_status st = metalbear_rfc2136_update_txt(&config, name, NULL, dns->ttl,
+                                                error, sizeof(error));
+    if (st != WF_OK) set_error(dns, "%s", error[0] ? error : "update failed");
+    return st;
+}
+
+/*
+ * Split the credential into a TSIG key name and its secret.
+ *
+ * `<name>:<base64 secret>`, which is how every tool that speaks this protocol
+ * writes it — nsupdate's -y, certbot's rfc2136 plugin, and the key stanza in
+ * a BIND config all use the same pair.
+ */
+static bool parse_tsig_credential(metalbear_handle_dns *dns,
+                                  const char *credential) {
+    const char *colon = strchr(credential, ':');
+    if (!colon || colon == credential || !colon[1]) return false;
+    size_t name_len = (size_t)(colon - credential);
+    dns->key_name = malloc(name_len + 1);
+    if (!dns->key_name) return false;
+    memcpy(dns->key_name, credential, name_len);
+    dns->key_name[name_len] = '\0';
+
+    const char *b64 = colon + 1;
+    size_t b64_len = strlen(b64);
+    dns->key_secret = malloc(b64_len);      /* decoded is always shorter */
+    if (!dns->key_secret) return false;
+    int decoded = EVP_DecodeBlock(dns->key_secret,
+                                  (const unsigned char *)b64, (int)b64_len);
+    if (decoded <= 0) return false;
+    /* EVP_DecodeBlock pads to a multiple of three and counts the padding, so
+     * the trailing '=' have to be subtracted back off. A secret one byte too
+     * long produces a MAC the server rejects with no hint as to why. */
+    size_t len = (size_t)decoded;
+    for (size_t i = b64_len; i > 0 && b64[i - 1] == '='; i--) len--;
+    dns->key_secret_len = len;
+    return len > 0;
+}
+
+/* `host` or `host:port`, defaulting to the standard DNS port. */
+static bool parse_server(metalbear_handle_dns *dns, const char *server) {
+    const char *colon = strrchr(server, ':');
+    if (colon && colon != server && strchr(server, ':') == colon) {
+        size_t host_len = (size_t)(colon - server);
+        dns->server_host = malloc(host_len + 1);
+        if (!dns->server_host) return false;
+        memcpy(dns->server_host, server, host_len);
+        dns->server_host[host_len] = '\0';
+        dns->server_port = strdup(colon + 1);
+    } else {
+        dns->server_host = strdup(server);
+        dns->server_port = strdup("53");
+    }
+    return dns->server_host && dns->server_port;
+}
+
+/* ------------------------------------------------------------------ */
 
 static const dns_provider providers[] = {
     { "cloudflare", "https://api.cloudflare.com/client/v4", "Bearer", 60,
@@ -557,11 +684,23 @@ static const dns_provider providers[] = {
      * than serving a handle change slowly. */
     { "desec", "https://desec.io/api/v1", "Token", 3600,
       desec_lookup, desec_publish, desec_retract },
+    /* No API base and no auth scheme: this one is not HTTP. */
+    { "rfc2136", "", "", 1,
+      rfc2136_lookup, rfc2136_publish, rfc2136_retract },
 };
 
 wf_status metalbear_handle_dns_open(const char *provider, const char *api_token,
                                     const char *zone_id, int ttl,
                                     metalbear_handle_dns **out) {
+    return metalbear_handle_dns_open_ex(provider, api_token, zone_id, NULL,
+                                        ttl, out);
+}
+
+wf_status metalbear_handle_dns_open_ex(const char *provider,
+                                       const char *api_token,
+                                       const char *zone_id,
+                                       const char *server, int ttl,
+                                       metalbear_handle_dns **out) {
     if (!out) return WF_ERR_INVALID_ARG;
     *out = NULL;
 
@@ -594,6 +733,20 @@ wf_status metalbear_handle_dns_open(const char *provider, const char *api_token,
         metalbear_handle_dns_free(dns);
         return WF_ERR_ALLOC;
     }
+    /*
+     * rfc2136 needs a nameserver to talk to and a TSIG key to sign with, and
+     * neither has anywhere else to come from. Refused rather than defaulted:
+     * a host that mints accounts and silently writes no records is only found
+     * when every handle shows as handle.invalid.
+     */
+    if (strcmp(chosen->name, "rfc2136") == 0) {
+        if (!server || !server[0] ||
+            !parse_server(dns, server) ||
+            !parse_tsig_credential(dns, api_token)) {
+            metalbear_handle_dns_free(dns);
+            return WF_ERR_INVALID_ARG;
+        }
+    }
     *out = dns;
     return WF_OK;
 }
@@ -605,6 +758,15 @@ void metalbear_handle_dns_free(metalbear_handle_dns *dns) {
         memset(dns->api_token, 0, strlen(dns->api_token));
         free(dns->api_token);
     }
+    if (dns->key_secret) {
+        /* Cleared for the same reason as the API token: it authorises
+         * updates to the whole zone. */
+        memset(dns->key_secret, 0, dns->key_secret_len);
+        free(dns->key_secret);
+    }
+    free(dns->key_name);
+    free(dns->server_host);
+    free(dns->server_port);
     free(dns->zone_id);
     free(dns->api_base);
     free(dns);
