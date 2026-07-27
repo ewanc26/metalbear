@@ -5379,8 +5379,20 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
         count = 0;
     }
     if (offset > count) offset = count;
-    size_t taken = 0;
-    for (size_t i = offset; i < count && taken < (size_t)limit; i++, taken++) {
+    /*
+     * `limit` counts repos returned, not registry rows examined.
+     *
+     * Incrementing the count on skipped rows let a registry entry with no
+     * repository — a deleted account, say — consume a slot, so `limit=1`
+     * returned an empty page with a cursor while the host did have a repo. A
+     * relay enumerating accounts sees no accounts and concludes the host hosts
+     * nothing. The reference joins against the repo root, so entries without a
+     * repository never occupy a slot at all.
+     */
+    size_t emitted = 0;
+    size_t scanned = offset;
+    for (size_t i = offset; i < count && emitted < (size_t)limit;
+         i++, scanned = i) {
         metalbear_account_context *acct = context_for_did(server,
                                                           entries[i].did);
         if (!acct) continue;
@@ -5407,12 +5419,14 @@ static wf_status list_repos(void *ctx, const wf_xrpc_request *request,
         if (!active)
             cJSON_AddStringToObject(repo, "status", "deactivated");
         cJSON_AddItemToArray(repos, repo);
+        emitted++;
         free(rev);
         free(cid);
     }
     metalbear_account_entries_free(entries, count);
     cJSON_AddItemToObject(root, "repos", repos);
-    size_t next = offset + taken;
+    /* Resume where the scan stopped, so skipped rows are not revisited. */
+    size_t next = scanned;
     if (next < count) {
         char cursor_buf[32];
         snprintf(cursor_buf, sizeof(cursor_buf), "%zu", next);
