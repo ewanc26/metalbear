@@ -100,6 +100,22 @@ static int64_t pruned_through(metalbear_sequencer *s) {
     return pruned;
 }
 
+/*
+ * The account an event belongs to. Every event kind the log stores carries a
+ * DID; the ones that do not (#info, #labels, #error) are never appended here.
+ * Recorded alongside the frame so an account's events can be found without
+ * decoding every frame in the log.
+ */
+static const char *event_did(const wf_subscribe_event *event) {
+    switch (event->type) {
+    case WF_SUBSCRIBE_EVENT_COMMIT:   return event->data.commit.did;
+    case WF_SUBSCRIBE_EVENT_SYNC:     return event->data.sync.did;
+    case WF_SUBSCRIBE_EVENT_IDENTITY: return event->data.identity.did;
+    case WF_SUBSCRIBE_EVENT_ACCOUNT:  return event->data.account.did;
+    default:                          return NULL;
+    }
+}
+
 static wf_status append_event(metalbear_sequencer *s,
                               wf_subscribe_event *event) {
     sqlite3_stmt *stmt = NULL;
@@ -111,12 +127,18 @@ static wf_status append_event(metalbear_sequencer *s,
                                    NULL) != SQLITE_OK)
         goto done;
     if (sqlite3_prepare_v2(s->db,
-            "INSERT INTO events(frame,created_at) VALUES(zeroblob(0),?);",
+            "INSERT INTO events(frame,created_at,did) "
+            "VALUES(zeroblob(0),?,?);",
             -1, &stmt, NULL) != SQLITE_OK)
         goto rollback;
     char now[64];
     timestamp_now(now);
     sqlite3_bind_text(stmt, 1, now, -1, SQLITE_TRANSIENT);
+    const char *did = event_did(event);
+    if (did && did[0])
+        sqlite3_bind_text(stmt, 2, did, -1, SQLITE_TRANSIENT);
+    else
+        sqlite3_bind_null(stmt, 2);
     if (sqlite3_step(stmt) != SQLITE_DONE) goto rollback;
     sqlite3_finalize(stmt);
     stmt = NULL;
@@ -296,6 +318,34 @@ static wf_status seed_sequence_floor(metalbear_sequencer *s) {
     return WF_OK;
 }
 
+/*
+ * Add the `did` column to a log written before it existed. The CREATE above
+ * only applies to a log being made now, and a running host's sequencer file is
+ * the one thing it cannot be asked to discard — its sequence numbers are held
+ * by every consumer that ever subscribed.
+ *
+ * Rows already in the log keep a NULL did. They are still found, by the
+ * substring match in metalbear_sequencer_purge_account, rather than by
+ * backfilling: a backfill would have to decode every frame in a log that can
+ * hold months of commits, at startup, on a host that has no reason to wait.
+ */
+static wf_status add_did_column(metalbear_sequencer *s) {
+    sqlite3_stmt *stmt = NULL;
+    bool present = false;
+    if (sqlite3_prepare_v2(s->db, "PRAGMA table_info(events);", -1, &stmt,
+                           NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *name = (const char *)sqlite3_column_text(stmt, 1);
+        if (name && strcmp(name, "did") == 0) present = true;
+    }
+    sqlite3_finalize(stmt);
+    if (present) return WF_OK;
+    return sqlite3_exec(s->db, "ALTER TABLE events ADD COLUMN did TEXT;",
+                        NULL, NULL, NULL) == SQLITE_OK
+        ? WF_OK : WF_ERR_INTERNAL;
+}
+
 wf_status metalbear_sequencer_open(const char *path,
                                    metalbear_sequencer **out) {
     if (!path || !out) return WF_ERR_INVALID_ARG;
@@ -316,10 +366,14 @@ wf_status metalbear_sequencer_open(const char *path,
             "PRAGMA journal_mode=WAL;"
             "CREATE TABLE IF NOT EXISTS events("
             "seq INTEGER PRIMARY KEY AUTOINCREMENT,"
-            "frame BLOB NOT NULL,created_at TEXT NOT NULL);"
+            "frame BLOB NOT NULL,created_at TEXT NOT NULL,did TEXT);"
             /* Retention's high-water mark lives here: see pruned_through(). */
             "CREATE TABLE IF NOT EXISTS meta("
             "key TEXT PRIMARY KEY,value INTEGER NOT NULL);",
+            NULL, NULL, NULL) != SQLITE_OK ||
+        add_did_column(s) != WF_OK ||
+        sqlite3_exec(s->db,
+            "CREATE INDEX IF NOT EXISTS events_did ON events(did);",
             NULL, NULL, NULL) != SQLITE_OK ||
         seed_sequence_floor(s) != WF_OK) {
         metalbear_sequencer_free(s);
@@ -796,6 +850,52 @@ wf_status metalbear_sequencer_retain(metalbear_sequencer *s,
     }
     pthread_mutex_unlock(&s->mutex);
     return WF_OK;
+}
+
+wf_status metalbear_sequencer_purge_account(metalbear_sequencer *s,
+                                            const char *did,
+                                            int64_t *out_removed) {
+    if (out_removed) *out_removed = 0;
+    if (!s || !did || !did[0]) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&s->mutex);
+    /*
+     * Everything for this DID except its most recent event, which is the
+     * `deleted` #account announcement the caller has just sequenced. Keeping
+     * it is the whole point: a consumer that has never heard of the deletion
+     * would otherwise see the account's history simply stop, which is what a
+     * host going quiet looks like too.
+     *
+     * Identified by the recorded DID, or by the DID appearing in the frame
+     * for rows written before the column existed. The needle is bound as a
+     * blob because the frame is one, and a text needle would be compared
+     * under a different affinity.
+     */
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_OK;
+    if (sqlite3_prepare_v2(s->db,
+            "DELETE FROM events WHERE "
+            "(did = ?1 OR (did IS NULL AND instr(frame, ?2) > 0)) "
+            "AND seq < (SELECT MAX(seq) FROM events WHERE "
+            "  did = ?1 OR (did IS NULL AND instr(frame, ?2) > 0));",
+            -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, did, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_blob(stmt, 2, did, (int)strlen(did), SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) != SQLITE_DONE) status = WF_ERR_INTERNAL;
+    } else {
+        status = WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(stmt);
+    if (status == WF_OK && out_removed)
+        *out_removed = (int64_t)sqlite3_changes(s->db);
+    /*
+     * No pruned_through mark is written. That records where the *start* of
+     * the log was trimmed, so a subscriber resuming from before it can be
+     * told its cursor is outdated. This removes rows from the middle, and a
+     * reader that asks for the next event after a cursor never sees the gap:
+     * sequence numbers are not required to be contiguous, only to increase.
+     */
+    pthread_mutex_unlock(&s->mutex);
+    return status;
 }
 
 void metalbear_sequencer_free(metalbear_sequencer *s) {
