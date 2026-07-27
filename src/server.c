@@ -1346,6 +1346,21 @@ static wf_status update_handle(void *ctx, const wf_xrpc_request *request,
     publish_handle_dns(server, new_handle, acct->did);
     retract_handle_dns(server, old_handle);
 
+    /*
+     * Announce the rename, after the record that makes it resolve.
+     *
+     * Consumers learned this handle from the #identity event at account
+     * creation and have no reason to look again, so without this the rename is
+     * durable here and invisible everywhere else. Not fatal: the handle is
+     * already changed, and reconciliation heals a missing tail event, where
+     * failing the request would report a rename that in fact happened.
+     */
+    if (metalbear_sequencer_identity(server->sequencer, acct->did,
+                                     new_handle) != WF_OK)
+        LOG_ERROR("update_handle: could not sequence #identity for did=%s "
+                  "handle=%s; the rename is durable but unannounced",
+                  acct->did, new_handle);
+
     free(old_handle);
     free(acct->handle);
     acct->handle = new_handle;
@@ -4497,6 +4512,14 @@ static wf_status admin_update_account_handle(void *ctx,
     if (old_handle && strcmp(old_handle, handle->valuestring) != 0)
         retract_handle_dns(server, old_handle);
     free(old_handle);
+
+    /* Same as the self-service path: an unannounced rename leaves every
+     * consumer serving the old handle indefinitely. */
+    if (metalbear_sequencer_identity(server->sequencer, did->valuestring,
+                                     handle->valuestring) != WF_OK)
+        LOG_ERROR("admin_update_account_handle: could not sequence #identity "
+                  "for did=%s handle=%s; the rename is durable but unannounced",
+                  did->valuestring, handle->valuestring);
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
