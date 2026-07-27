@@ -738,9 +738,16 @@ static wf_status delete_account(void *ctx, const wf_xrpc_request *request,
     metalbear_account_registry_remove(server->registry, acct->did);
     metalbear_account_registry_clear_takedowns_for_did(server->registry,
                                                        acct->did);
-    /* Emit deactivation event to firehose */
-    metalbear_sequencer_account_status(acct->sequencer, acct->did, 0,
+    /* Emit deletion event to firehose, against the host log rather than a
+     * resolved context's, then drop everything else this DID ever published:
+     * leaving it there hands the repository of somebody who asked to be gone
+     * to any consumer backfilling from an old cursor. */
+    metalbear_sequencer_account_status(server->sequencer, acct->did, 0,
                                        "deleted");
+    int64_t purged = 0;
+    metalbear_sequencer_purge_account(server->sequencer, acct->did, &purged);
+    LOG_INFO("delete_account: purged %lld firehose events for did=%s",
+             (long long)purged, acct->did);
     /* Drop the handle's TXT record: leaving it would keep pointing resolvers
      * at a DID this host no longer serves. */
     retract_handle_dns(server, acct->handle);
@@ -5053,6 +5060,18 @@ static wf_status admin_delete_account(void *ctx,
      */
     metalbear_sequencer_account_status(server->sequencer, did->valuestring, 0,
                                        "deleted");
+    /*
+     * Then drop everything else this DID ever published. The data directory
+     * is about to be removed, and leaving the same records on the firehose
+     * would keep serving them to any consumer backfilling from an old cursor
+     * — a deletion that removes the copy nobody reads and keeps the copy the
+     * network does.
+     */
+    int64_t purged = 0;
+    metalbear_sequencer_purge_account(server->sequencer, did->valuestring,
+                                      &purged);
+    LOG_INFO("admin_delete_account: purged %lld firehose events for did=%s",
+             (long long)purged, did->valuestring);
 
     metalbear_account_registry_remove(server->registry, did->valuestring);
     /* Moderation state goes with it: a DID re-registered later must not
