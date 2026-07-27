@@ -60,6 +60,16 @@ static cJSON *json_response(wf_response *response) {
                                  response->body_len);
 }
 
+/* Case-sensitive substring search over a length-delimited body. */
+static bool body_has(const wf_response *response, const char *needle) {
+    if (!response || !response->body || !needle) return false;
+    size_t nlen = strlen(needle);
+    if (response->body_len < nlen) return false;
+    for (size_t i = 0; i + nlen <= response->body_len; i++)
+        if (memcmp(response->body + i, needle, nlen) == 0) return true;
+    return false;
+}
+
 /* The `error` name from an XRPC error body, or "" when there is none.
  * Copied into `out` because the parsed tree is freed here. */
 static void error_name(wf_response *response, char *out, size_t out_len) {
@@ -540,6 +550,44 @@ int main(void) {
         CHECK(cJSON_IsString(status) &&
               strcmp(status->valuestring, "takendown") == 0);
         cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+
+    /*
+     * /metrics is admin-gated and reports what actually happened.
+     *
+     * Open, it would publish a private host's account count and write rate to
+     * anyone who asked; Prometheus has had basic_auth in its scrape config for
+     * as long as it has existed. The takedown counter is checked here because
+     * this test is the only one that applies any.
+     */
+    {
+        char url[256];
+        snprintf(url, sizeof(url), "%s/metrics", base);
+        CHECK(wf_http_get(client, url, &response) == WF_ERR_HTTP);
+        CHECK(response.status == 401);
+        wf_response_free(&response);
+
+        char cred[64];
+        int n = snprintf(cred, sizeof(cred), "admin:%s", "secret-admin");
+        char b64[128];
+        int len = EVP_EncodeBlock((unsigned char *)b64,
+                                  (const unsigned char *)cred, n);
+        b64[len] = '\0';
+        char auth[160];
+        snprintf(auth, sizeof(auth), "Basic %s", b64);
+        wf_http_header hdr = {"Authorization", auth};
+        CHECK(wf_http_get_with_headers(client, url, &hdr, 1, &response)
+              == WF_OK);
+        CHECK(response.status == 200);
+        /* Prometheus rejects a counter with no TYPE line, so the exposition
+         * has to carry them and not just the samples. */
+        CHECK(body_has(&response, "# TYPE metalbear_takedowns_applied_total counter"));
+        CHECK(body_has(&response, "metalbear_accounts{status=\"takendown\"} 1"));
+        CHECK(body_has(&response, "metalbear_build_info{version="));
+        /* Four takedowns were applied above: a record, a blob, and the
+         * account twice. Lifting one is not an application. */
+        CHECK(body_has(&response, "metalbear_takedowns_applied_total 4"));
         wf_response_free(&response);
     }
 
