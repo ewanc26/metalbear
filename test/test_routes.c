@@ -76,7 +76,6 @@ int main(void) {
     metalbear_oauth_store *oauth_store = NULL;
     CHECK(metalbear_oauth_store_open(oauth_path,
                                      "https://pds.example.com",
-                                     "did:plc:alice",
                                      &oauth_store) == WF_OK);
     CHECK(oauth_store != NULL);
 
@@ -109,7 +108,7 @@ int main(void) {
     char *redirect_uri = NULL;
     char *state = NULL;
     CHECK(metalbear_oauth_authorize(oauth_store, request_uri,
-                                     request.client_id,
+                                     request.client_id, "did:plc:alice",
                                      &code, &redirect_uri, &state) == WF_OK);
     CHECK(code != NULL && redirect_uri != NULL && state != NULL);
 
