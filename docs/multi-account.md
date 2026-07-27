@@ -1,11 +1,19 @@
 # Multi-account support for MetalBear
 
-Status: **design plan — partially implemented.** Steps 1–3 are complete
-(account context + per-account directory encoding, bootstrap wiring, and
-`createAccount` provisioning a real isolated account). Steps 4–7
-(per-request resolver, switching authenticated/repo/sync handlers, and
-`listRepos`/`updateHandle`) remain. Code changes continue incrementally on
-feature branches and are merged to `main` with `--no-ff`.
+> **Historical design record — implemented and shipped.**
+>
+> This was the plan written before multi-account hosting existed. All seven
+> steps below have landed: per-account directories, `metalbear_account_context`,
+> `createAccount` provisioning isolated accounts, the per-request repo and blob
+> resolvers, `did`/`repo`-scoped `com.atproto.repo.*` and `com.atproto.sync.*`
+> handlers, and registry-backed `listRepos` with `updateHandle`. Several items
+> listed here as out of scope — invite codes, admin endpoints, OAuth — shipped
+> afterwards too.
+>
+> It is kept because it explains *why* the account layout is shaped the way it
+> is, which the code cannot. Read it as history: the present tense throughout
+> describes the single-account server as it stood before the change, not as it
+> is now. For how the server behaves today, see the [README](../README.md).
 
 ## Goal
 
