@@ -128,6 +128,15 @@ struct metalbear_server {
     char *user_domain;
     char *data_directory;
     char *account_email;
+    /* Who runs this instance; surfaced on describeServer where the protocol
+     * defines a field, and on /operator.json where it does not. */
+    char *operator_name;
+    char *operator_url;
+    char *support_url;
+    char *instance_description;
+    char *privacy_policy_url;
+    char *terms_of_service_url;
+    bool development;
     int64_t retention_max_age;
     int64_t retention_min_events;
     /* refpds-mirrored config (METALBEAR_*) */
@@ -652,6 +661,62 @@ static wf_status describe_server(void *ctx, const wf_xrpc_request *request,
     if (server->account_email && server->account_email[0])
         cJSON_AddStringToObject(contact, "email", server->account_email);
     cJSON_AddItemToObject(root, "contact", contact);
+    /* `links` is part of the lexicon, so policy URLs belong here rather than
+     * in anything MetalBear-specific. */
+    if ((server->privacy_policy_url && server->privacy_policy_url[0]) ||
+        (server->terms_of_service_url && server->terms_of_service_url[0])) {
+        cJSON *links = cJSON_CreateObject();
+        if (links) {
+            if (server->privacy_policy_url && server->privacy_policy_url[0])
+                cJSON_AddStringToObject(links, "privacyPolicy",
+                                        server->privacy_policy_url);
+            if (server->terms_of_service_url && server->terms_of_service_url[0])
+                cJSON_AddStringToObject(links, "termsOfService",
+                                        server->terms_of_service_url);
+            cJSON_AddItemToObject(root, "links", links);
+        }
+    }
+    return set_json(response, root);
+}
+
+/* ---- GET /operator.json (MetalBear-specific) ----
+ *
+ * Who runs this instance and what software it is. Deliberately not an XRPC
+ * method: none of this is in any lexicon, and putting it under /xrpc/ would
+ * imply a protocol surface that does not exist. The landing page reads it so
+ * that the operator details have one source of truth — the server config —
+ * rather than being duplicated into a static page that then goes stale.
+ */
+static wf_status operator_info(void *ctx, const wf_xrpc_request *request,
+                               wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    (void)request;
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+
+    cJSON *op = cJSON_CreateObject();
+    if (op) {
+        if (server->operator_name) cJSON_AddStringToObject(op, "name", server->operator_name);
+        if (server->account_email) cJSON_AddStringToObject(op, "email", server->account_email);
+        if (server->operator_url)  cJSON_AddStringToObject(op, "url", server->operator_url);
+        if (server->support_url)   cJSON_AddStringToObject(op, "supportUrl", server->support_url);
+        cJSON_AddItemToObject(root, "operator", op);
+    }
+
+    cJSON *sw = cJSON_CreateObject();
+    if (sw) {
+        cJSON_AddStringToObject(sw, "name", "MetalBear");
+        cJSON_AddStringToObject(sw, "version", METALBEAR_VERSION);
+        cJSON_AddStringToObject(sw, "repository",
+                                "https://github.com/ewanc26/metalbear");
+        cJSON_AddStringToObject(sw, "license", "AGPL-3.0-only");
+        cJSON_AddItemToObject(root, "software", sw);
+    }
+
+    if (server->instance_description)
+        cJSON_AddStringToObject(root, "description", server->instance_description);
+    /* A testing instance says so, so nobody mistakes its accounts for people. */
+    cJSON_AddBoolToObject(root, "development", server->development);
     return set_json(response, root);
 }
 
@@ -710,8 +775,12 @@ static cJSON *build_did_doc(metalbear_server *server,
  * Deliberately tiny and fixed-size: this is a cache, and a miss is only ever
  * the current behaviour.
  */
-#define DID_DOC_CACHE_SLOTS   64
+#define DID_DOC_CACHE_SLOTS   256    /* upper bound; the live size is config */
 #define DID_DOC_CACHE_SECONDS 300
+
+/* Live limits, set from config at startup; the defaults match the constants. */
+static size_t did_doc_cache_slots = 64;
+static time_t did_doc_cache_ttl = DID_DOC_CACHE_SECONDS;
 
 typedef struct {
     char   did[256];
@@ -728,10 +797,10 @@ static char *did_doc_cache_get(const char *did) {
     char *copy = NULL;
     time_t now = time(NULL);
     pthread_mutex_lock(&did_doc_cache_lock);
-    for (size_t i = 0; i < DID_DOC_CACHE_SLOTS; i++) {
+    for (size_t i = 0; i < did_doc_cache_slots; i++) {
         did_doc_cache_entry *e = &did_doc_cache[i];
         if (!e->json || strcmp(e->did, did) != 0) continue;
-        if (now - e->fetched_at > DID_DOC_CACHE_SECONDS) {
+        if (now - e->fetched_at > did_doc_cache_ttl) {
             free(e->json);
             e->json = NULL;
             break;
@@ -750,7 +819,7 @@ static void did_doc_cache_put(const char *did, const char *json) {
     /* Reuse this DID's slot, else an empty or expired one, else the oldest. */
     size_t victim = 0;
     time_t oldest = now + 1;
-    for (size_t i = 0; i < DID_DOC_CACHE_SLOTS; i++) {
+    for (size_t i = 0; i < did_doc_cache_slots; i++) {
         did_doc_cache_entry *e = &did_doc_cache[i];
         if (e->json && strcmp(e->did, did) == 0) { victim = i; goto store; }
         if (!e->json) { victim = i; goto store; }
@@ -4671,6 +4740,9 @@ static wf_status admin_delete_account(void *ctx,
  */
 #define METALBEAR_CRAWLER_NOTIFY_SECONDS (20 * 60)
 
+/* Live value, set from config at startup. */
+static time_t crawler_notify_seconds = METALBEAR_CRAWLER_NOTIFY_SECONDS;
+
 typedef struct crawler_notice {
     char *crawlers;   /* owned copy: comma-separated */
     char *body;       /* owned: {"hostname":"..."} */
@@ -4727,7 +4799,7 @@ static void notify_crawlers(void *ctx) {
     static time_t last = 0;
     time_t now = time(NULL);
     pthread_mutex_lock(&lock);
-    bool due = (last == 0) || (now - last >= METALBEAR_CRAWLER_NOTIFY_SECONDS);
+    bool due = (last == 0) || (now - last >= crawler_notify_seconds);
     if (due) last = now;
     pthread_mutex_unlock(&lock);
     if (!due) return;
@@ -6242,6 +6314,11 @@ static wf_status register_identity_documents(metalbear_server *server) {
     status = wf_xrpc_server_register_http_route(server->xrpc, "GET",
                                                 "/tls-check",
                                                 tls_check_handler, server);
+    if (status != WF_OK) return status;
+
+    status = wf_xrpc_server_register_http_route(server->xrpc, "GET",
+                                                "/operator.json",
+                                                operator_info, server);
     return status;
 }
 
@@ -6383,8 +6460,26 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
      * including the first, is created through com.atproto.server.createAccount
      * and registers itself there. */
 
-    /* Create rate limiter: 100 requests per 60 seconds */
-    server->rate_limiter = wf_rate_limiter_new(100, 60, 0);
+    if (config->did_cache_ttl_seconds > 0)
+        did_doc_cache_ttl = (time_t)config->did_cache_ttl_seconds;
+    if (config->did_cache_entries > 0) {
+        size_t want = (size_t)config->did_cache_entries;
+        did_doc_cache_slots = want > DID_DOC_CACHE_SLOTS ? DID_DOC_CACHE_SLOTS
+                                                         : want;
+    }
+    if (config->crawl_notify_seconds > 0)
+        crawler_notify_seconds = (time_t)config->crawl_notify_seconds;
+    if (config->firehose_ping_seconds > 0)
+        metalbear_sequencer_set_ping_seconds(config->firehose_ping_seconds);
+
+    /* Per-client request budget, configurable; 100 per 60s by default. */
+    {
+        int64_t budget = config->rate_limit > 0 ? config->rate_limit : 100;
+        int64_t window = config->rate_limit_window > 0
+                             ? config->rate_limit_window : 60;
+        server->rate_limiter = wf_rate_limiter_new((size_t)budget,
+                                                   (size_t)window, 0);
+    }
 
     /* Open moderation report store */
     char *reports_path = join_path(config->data_directory, "reports.sqlite3");
@@ -6784,6 +6879,17 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     }
     if (config->account_email && config->account_email[0])
         server->account_email = strdup(config->account_email);
+    #define COPY_OPT(field) \
+        if (config->field && config->field[0]) \
+            server->field = strdup(config->field)
+    COPY_OPT(operator_name);
+    COPY_OPT(operator_url);
+    COPY_OPT(support_url);
+    COPY_OPT(instance_description);
+    COPY_OPT(privacy_policy_url);
+    COPY_OPT(terms_of_service_url);
+    #undef COPY_OPT
+    server->development = config->development;
 
     /* Configure firehose retention */
     server->retention_max_age = config->retention_max_age_seconds > 0

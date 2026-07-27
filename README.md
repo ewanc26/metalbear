@@ -1,10 +1,16 @@
+<p align="center">
+  <img src="docs/logo.svg" alt="MetalBear" width="420">
+</p>
+
 # MetalBear
 
-MetalBear is an AT Protocol Personal Data Server written in C and built on
-[Wolfram](https://github.com/ewanc26/wolfram). It provides a runnable PDS foundation with multi-account
-hosting, admin tooling, and a dynamic landing page.
+MetalBear is an AT Protocol Personal Data Server written in C11 and built on
+[Wolfram](https://github.com/ewanc26/wolfram). It hosts multiple accounts, mints
+`did:plc` identities, serves the firehose, and federates: as of 0.4.1 a
+MetalBear instance is consumed by Bluesky's relays and its posts are indexed by
+the Bluesky AppView.
 
-**Version:** 0.3.0
+**Version:** 0.5.0
 
 ## Core Features
 
@@ -51,7 +57,7 @@ configured admin password:
 - `com.atproto.admin.sendEmail` — send templated email to an account
 - `com.atproto.admin.getInviteCodes` — list invite codes with account/use metadata
 - `com.atproto.admin.disableInviteCodes` — disable invite codes by exact code or
-  by account; rejects attempts to disable the bootstrap admin account
+  by account
 - `com.atproto.admin.deleteAccount` — permanently remove an account, its data
   directory, and its registry entry
 - `com.atproto.admin.updateSubjectStatus` — apply takedown, deactivation, or
@@ -150,16 +156,55 @@ ctest --test-dir build --output-on-failure
 By default CMake uses the sibling `../wolfram` checkout. Set
 `-DWOLFRAM_SOURCE_DIR=/path/to/wolfram` to use another checkout.
 
+Or provision a host end to end — dependencies, build, secrets, `config.toml`,
+and a running daemon:
+
+```sh
+scripts/setup.sh --hostname pds.example.com
+```
+
+Re-running is safe: existing secrets are carried over, so a rebuild never
+changes the identity authority that signed DIDs already minted.
+
+## Configuration
+
+Settings live in a `config.toml`, read from `./config.toml` or the path in
+`METALBEAR_CONFIG`. Every value can also be given as an environment variable,
+and **the environment overrides the file**, so a checked-in config can describe
+the shape of a deployment while secrets and per-host overrides stay outside it.
+
+```toml
+[server]
+service_did = "did:web:pds.example.com"
+user_domain = ".pds.example.com"
+port        = 2583
+
+[accounts]
+admin_password  = "..."
+invite_required = true
+
+[limits]
+rate_limit                = 3000   # per client, per window
+rate_limit_window_seconds = 60
+
+[firehose]
+crawlers     = ["https://bsky.network"]
+ping_seconds = 20                  # keepalive; must beat the proxy idle timeout
+```
+
+`config.example.toml` documents every setting. Unknown keys are an error with a
+line number rather than a silent no-op — a configuration file that is half-read
+is worse than one that refuses to load.
+
 ## Run
 
-Configure the account and start the daemon:
+No account is configured. A host exists before its first user, and accounts
+arrive through `com.atproto.server.createAccount`.
 
 ```sh
 export METALBEAR_SERVICE_DID='did:web:pds.example.com'
-export METALBEAR_ACCOUNT_DID='did:plc:replace-with-your-account-did'
-export METALBEAR_HANDLE='alice.example.com'
 export METALBEAR_USER_DOMAIN='.example.com'
-export METALBEAR_PASSWORD='replace-with-a-strong-password'
+export METALBEAR_ADMIN_PASSWORD='replace-with-a-strong-password'
 ./build/metalbear
 ```
 
@@ -167,6 +212,30 @@ Optional variables are `METALBEAR_LISTEN` (default `127.0.0.1`),
 `METALBEAR_PORT` (default `2583`), `METALBEAR_DATA` (default `data`), and
 `METALBEAR_PUBLIC_URL`. The public URL is derived from a `did:web` service DID
 when omitted and is published as the DID document's PDS service endpoint.
+
+`METALBEAR_PLC_ROTATION_KEY` is a hex-encoded secp256k1 private key that signs
+the genesis PLC operation for every DID this host mints. It is generated and
+persisted on first start when unset; supply it to keep the same identity
+authority across rebuilds. A configured key that cannot be parsed is fatal
+rather than silently replaced, because every DID minted with a substitute key
+would be unrecoverable.
+
+`METALBEAR_INVITE_REQUIRED` defaults to true. Mint a code with admin HTTP Basic
+auth, then create the first account with it:
+
+```sh
+curl -sS -u "admin:$METALBEAR_ADMIN_PASSWORD" -X POST \
+  -H 'Content-Type: application/json' --data '{"useCount":1}' \
+  http://127.0.0.1:2583/xrpc/com.atproto.server.createInviteCode
+
+curl -sS -X POST -H 'Content-Type: application/json' \
+  --data '{"handle":"alice.example.com","email":"alice@example.com",
+           "password":"...","inviteCode":"..."}' \
+  http://127.0.0.1:2583/xrpc/com.atproto.server.createAccount
+```
+
+Set `METALBEAR_CRAWLERS='https://bsky.network'` to announce new data to a relay;
+the PDS sends `requestCrawl` on write, throttled to once every 20 minutes.
 
 ### Email Configuration (Optional)
 
@@ -185,29 +254,68 @@ MetalBear generates its session-signing secret on first start and stores it in
 restarts and are returned only by the session endpoints. Firehose frames and
 their monotonic sequence numbers are stored separately in `sequencer.sqlite3`.
 Account availability is persisted in `account.sqlite3`.
-On first start the configured password is converted to a random-salted scrypt
-verifier in that database; later environment changes do not overwrite it. App
-passwords are also stored there only as random-salted scrypt verifiers.
+Account passwords are stored only as random-salted scrypt verifiers, as are app
+passwords.
 
 Login through XRPC and use the returned access token for writes:
 
 ```sh
 curl -sS http://127.0.0.1:2583/xrpc/com.atproto.server.describeServer
 curl -sS -X POST -H 'Content-Type: application/json' \
-  --data '{"identifier":"alice.example.com","password":"replace-with-a-strong-password"}' \
+  --data '{"identifier":"alice.example.com","password":"..."}' \
   http://127.0.0.1:2583/xrpc/com.atproto.server.createSession
 ```
+
+## Performance
+
+Measured on the development host (Apple M-series, 10 cores, Docker), one
+account, reads over loopback at 8 concurrent connections:
+
+| | |
+|---|---|
+| sustained reads | ~1,000 req/s over 30s (`listRecords`, limit 50) |
+| write throughput | ~200 signed commits/s at 4 concurrent |
+| write latency | p50 19 ms, p99 27 ms |
+| CPU under sustained read load | ~1 core of 10 (94% peak of one core) |
+| RSS under load | 29.5 MiB peak, 21 MiB mean |
+| RSS idle | 12.7 MiB |
+| binary | 79 KB |
+| container image | 176 MB |
+| disk, 1 account with ~30 records and media | ~1 MB |
+
+Writes are bounded by secp256k1 commit signing and the SQLite transaction, not
+by request handling, which is why they sit two orders of magnitude below reads.
+
+The default per-client budget of 100 requests per 60 seconds is under two a
+second; a single AppView or a relay backfilling with `getRepo` exceeds it
+without being abusive, so raise `limits.rate_limit` on a host serving real
+traffic. These numbers were taken with it raised.
 
 ## Security boundary
 
 Session JWTs match the upstream legacy PDS claim structure and are signed with
-a per-installation HS256 secret. The configured account password is only used
-to bootstrap the durable scrypt verifier. Bind to loopback or place MetalBear
-behind a TLS reverse proxy; do not expose this milestone directly to the public
-internet.
+a per-installation HS256 secret. MetalBear does not terminate TLS: bind it to
+loopback and put a reverse proxy in front.
 
 ## Status
 
-This is not yet a production-complete PDS. PLC DID document publication, TLS
-termination, and operational hardening (logging, metrics, monitoring) remain to
-be implemented.
+MetalBear federates. A running instance is consumed by Bluesky's relays and by
+several third-party ones, its commits verify against the key published in the
+PLC directory, and its posts, profile and media appear on the Bluesky AppView.
+
+Still missing or unproven for production use:
+
+- no takedown model, so only `deactivated` and `deleted` account statuses are
+  ever reported
+- `listRepos` paginates on an integer offset rather than a keyset, so concurrent
+  account creation can skip or repeat an entry across pages
+- account deletion does not purge that DID's earlier firehose events
+- no metrics or structured operational logging
+- accounts minted under the host's own subdomain need a `_atproto` DNS TXT
+  record for their handles to resolve; see issue #8
+
+## Frontend
+
+`frontend/` holds the landing page: SvelteKit, prerendered to static files, and
+the only non-C part of this repository. It reads the server's own XRPC endpoints
+in the browser, so it reports live state rather than build-time state.

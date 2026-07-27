@@ -24,6 +24,11 @@ wf_status metalbear_sequencer_open(const char *path,
                                    metalbear_sequencer **out);
 void metalbear_sequencer_free(metalbear_sequencer *sequencer);
 
+/* Keepalive interval for idle firehose connections. Must stay well under the
+ * tightest idle timeout in the proxy path (nginx defaults to 60s), or relays
+ * are disconnected every minute and never stay attached. */
+void metalbear_sequencer_set_ping_seconds(int64_t seconds);
+
 /* Callback installed on metalbear_repo_store; persists a framed firehose event. */
 void metalbear_sequencer_repo_event(const metalbear_repo_store_event *event,
                                     void *context);
