@@ -12,6 +12,7 @@ export interface ServerInfo {
 	availableUserDomains: string[];
 	inviteCodeRequired?: boolean;
 	contact?: { email?: string };
+	links?: { privacyPolicy?: string; termsOfService?: string };
 }
 
 export interface RepoInfo {
@@ -20,6 +21,13 @@ export interface RepoInfo {
 	rev: string;
 	active: boolean;
 	status?: string;
+}
+
+export interface OperatorInfo {
+	operator?: { name?: string; email?: string; url?: string; supportUrl?: string };
+	software?: { name?: string; version?: string; repository?: string; license?: string };
+	description?: string;
+	development?: boolean;
 }
 
 export interface RelayStatus {
@@ -47,6 +55,24 @@ async function xrpc<T>(path: string, params?: Record<string, string>): Promise<T
 	const res = await fetch(url, { headers: { accept: 'application/json' } });
 	if (!res.ok) throw new Error(`${path}: ${res.status}`);
 	return res.json() as Promise<T>;
+}
+
+/*
+ * /operator.json is MetalBear's own, not a protocol route: who runs the
+ * instance and whether it is a testing one have no lexicon field. Reading it
+ * here keeps the server config the single source of truth, rather than
+ * duplicating operator details into this page where they would go stale.
+ */
+export async function operatorInfo(): Promise<OperatorInfo | null> {
+	try {
+		const res = await fetch(new URL('/operator.json', window.location.origin), {
+			headers: { accept: 'application/json' }
+		});
+		if (!res.ok) return null;
+		return (await res.json()) as OperatorInfo;
+	} catch {
+		return null;
+	}
 }
 
 export function describeServer(): Promise<ServerInfo> {
