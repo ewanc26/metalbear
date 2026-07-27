@@ -109,6 +109,23 @@ typedef struct metalbear_config {
      * NULL falls back to the install/source locations; when no corpus is
      * found, writes are stored unvalidated and report "unknown". */
     const char *lexicon_dir;
+    /*
+     * DNS provider for publishing the `_atproto` TXT records that make handles
+     * resolve.
+     *
+     * A wildcard certificate covers one label, so a host minting
+     * `alice.pds.example.com` under `*.example.com` has no certificate for the
+     * handle and the HTTPS resolution route cannot work for it at all. The DNS
+     * route always can, but writing a record per account by hand does not scale
+     * past the operator's own account.
+     *
+     * `dns_provider` is "cloudflare" or empty. Empty leaves handle resolution
+     * to the operator, which is what every deployment did before this existed.
+     */
+    const char *dns_provider;
+    const char *dns_api_token;
+    const char *dns_zone_id;
+    int64_t dns_record_ttl;
 } metalbear_config;
 
 /* Start a single-account AT Protocol PDS. All strings are copied. */
