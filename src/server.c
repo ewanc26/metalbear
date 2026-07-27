@@ -6053,6 +6053,36 @@ static wf_status register_identity_documents(metalbear_server *server) {
     return status;
 }
 
+/*
+ * Parse a 64-character hex secp256k1 private key into a signing key.
+ *
+ * The env var carries hex (refpds PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX);
+ * metalbear_key_rotation_import wants the decoded scalar. Returns false on
+ * anything that is not exactly 32 bytes of hex, so a truncated or mistyped
+ * key is refused rather than padded into a different key.
+ */
+static bool parse_secp256k1_hex(const char *hex, wf_signing_key *out) {
+    if (!hex || !out) return false;
+    size_t len = strlen(hex);
+    if (len != 64) return false;
+    memset(out, 0, sizeof(*out));
+    for (size_t i = 0; i < 32; i++) {
+        unsigned int byte = 0;
+        for (int nibble = 0; nibble < 2; nibble++) {
+            char c = hex[i * 2 + nibble];
+            unsigned int value;
+            if (c >= '0' && c <= '9') value = (unsigned int)(c - '0');
+            else if (c >= 'a' && c <= 'f') value = (unsigned int)(c - 'a' + 10);
+            else if (c >= 'A' && c <= 'F') value = (unsigned int)(c - 'A' + 10);
+            else return false;
+            byte = (byte << 4) | value;
+        }
+        out->bytes[i] = (unsigned char)byte;
+    }
+    out->type = WF_KEY_TYPE_SECP256K1;
+    return true;
+}
+
 static bool valid_config(const metalbear_config *config) {
     /* No account is required to start: a host exists before its first user,
      * and accounts arrive through createAccount. */
@@ -6119,14 +6149,19 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
     free(rotation_path);
-    if (config->plc_rotation_key && config->plc_rotation_key[0] &&
-        metalbear_key_rotation_import(server->plc_rotation,
-                                      config->plc_rotation_key) != WF_OK) {
-        /* A configured key that cannot be adopted must not be quietly
-         * replaced by a generated one: every DID minted with the wrong key is
+    if (config->plc_rotation_key && config->plc_rotation_key[0]) {
+        wf_signing_key configured;
+        memset(&configured, 0, sizeof(configured));
+        /* A configured key that cannot be adopted must not be quietly replaced
+         * by a generated one: every DID minted with the wrong key is
          * unrecoverable without the operator's real key. */
-        LOG_ERROR("METALBEAR_PLC_ROTATION_KEY is not a usable secp256k1 key");
-        goto fail;
+        if (!parse_secp256k1_hex(config->plc_rotation_key, &configured) ||
+            metalbear_key_rotation_import(server->plc_rotation,
+                                          &configured) != WF_OK) {
+            LOG_ERROR("METALBEAR_PLC_ROTATION_KEY is not a usable secp256k1 "
+                      "key (expected 64 hex characters)");
+            goto fail;
+        }
     }
 
     /* One OAuth store for the host. Its signing key is the server's; the
