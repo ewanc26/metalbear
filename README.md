@@ -295,6 +295,10 @@ export METALBEAR_ADMIN_PASSWORD='replace-with-a-strong-password'
 ./build/metalbear
 ```
 
+`metalbear --version` prints the version and `metalbear --help` summarises how
+the server is configured; both work without any environment set. There are no
+other flags — configuration is the file and the environment.
+
 Optional variables are `METALBEAR_LISTEN` (default `127.0.0.1`),
 `METALBEAR_PORT` (default `2583`), `METALBEAR_DATA` (default `data`), and
 `METALBEAR_PUBLIC_URL`. The public URL is derived from a `did:web` service DID
