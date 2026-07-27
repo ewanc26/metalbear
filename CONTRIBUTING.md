@@ -42,3 +42,5 @@ CMake defaults to the sibling `../wolfram` checkout. Set
 ## Security
 
 - Never commit secrets, live credentials, signing keys, or PDS data.
+- Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+  Do not open a public issue for a security defect.
