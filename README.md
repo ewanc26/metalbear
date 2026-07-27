@@ -197,9 +197,11 @@ docker build -f MetalBear/Dockerfile --target dev -t metalbear:dev .
 ### Prebuilt binaries
 
 Each [release](https://github.com/ewanc26/metalbear/releases) carries archives
-for Linux (x86_64, aarch64) and macOS (arm64, x86_64), containing the binary,
-the lexicon corpus, and an example configuration. They link the system's TLS,
-HTTP, SQLite and crypto libraries, so those must be installed:
+for Linux (x86_64, aarch64) and macOS (arm64), containing the binary, the
+lexicon corpus, and an example configuration. There is no Intel macOS build —
+GitHub's last x86_64 macOS runner is being retired, and Rosetta 2 does not run
+arm64 binaries on Intel — so build from source there. The archives link the
+system's TLS, HTTP, SQLite and crypto libraries, so those must be installed:
 
 ```sh
 apt install libsqlite3-0 libcurl4 libssl3 libsecp256k1-1 libmicrohttpd12 \
