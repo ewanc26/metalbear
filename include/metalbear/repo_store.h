@@ -35,6 +35,7 @@
 #define METALBEAR_REPO_STORE_H
 
 #include <cJSON.h>
+#include <stdbool.h>
 
 #include "wolfram/validate.h"
 #include "wolfram/xrpc.h"
@@ -453,13 +454,30 @@ wf_status metalbear_xrpc_server_register_pds_repo_resolver(
  */
 typedef char *(*metalbear_xrpc_did_doc_provider)(void *ctx, const char *did);
 
+/*
+ * Consulted before a repository read is served, so moderation state that the
+ * repository itself does not carry can refuse the request. `record_uri` names
+ * the single record being read, or is NULL when the request is about the
+ * repository as a whole. Return false with `resp` already filled in to refuse;
+ * the handler then returns without touching the store.
+ *
+ * The guard, not the store, is where a takedown lives: a taken-down record
+ * stays in the repository — removing it would rewrite history and break the
+ * commit chain — and is withheld at the point it would be served.
+ */
+typedef bool (*metalbear_xrpc_repo_access_guard)(void *ctx,
+                                                 const wf_xrpc_request *req,
+                                                 const char *record_uri,
+                                                 wf_xrpc_response *resp);
+
 /**
  * As metalbear_xrpc_server_register_pds_repo_resolver, additionally wiring an
  * identity-layer DID document provider and a lexicon registry. Without a
  * provider, describeRepo falls back to a locally derived document and reports
  * handleIsCorrect=false, since the PDS cannot confirm the handle resolves back
  * to the DID on its own. Without a registry, every write reports
- * validationStatus "unknown", since nothing can be checked.
+ * validationStatus "unknown", since nothing can be checked. Without a guard,
+ * every record the store holds is served.
  *
  * The registry is borrowed and must outlive the server.
  */
@@ -467,7 +485,8 @@ wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url,
     metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx,
-    const wf_lexicon_registry *lexicons);
+    const wf_lexicon_registry *lexicons,
+    metalbear_xrpc_repo_access_guard guard, void *guard_ctx);
 
 /** Outcome of checking a record against the lexicon corpus. */
 typedef enum metalbear_validation_status {

@@ -1593,7 +1593,19 @@ typedef struct metalbear_pds_repo_bundle {
     metalbear_xrpc_did_doc_provider did_doc_provider;
     void *did_doc_ctx;
     const wf_lexicon_registry *lexicons; /* borrowed */
+    metalbear_xrpc_repo_access_guard guard;
+    void *guard_ctx;
 } metalbear_pds_repo_bundle;
+
+/* Run the access guard, if one is installed. False means the guard has
+ * already written the refusal into `resp`. */
+static bool repo_access_allowed(metalbear_pds_repo_bundle *b,
+                                const wf_xrpc_request *req,
+                                const char *record_uri,
+                                wf_xrpc_response *resp) {
+    if (!b->guard) return true;
+    return b->guard(b->guard_ctx, req, record_uri, resp);
+}
 
 /*
  * Resolve the repo store for a request from the registration's bundle.
@@ -1616,6 +1628,7 @@ static metalbear_repo_store *resolve_repo(metalbear_pds_repo_bundle *b,
         }
         store = out_repo;
     }
+    if (!repo_access_allowed(b, req, NULL, resp)) return NULL;
     return store;
 }
 
@@ -1956,6 +1969,14 @@ static wf_status h_get_record(void *ctx, const wf_xrpc_request *req,
                                    "collection and rkey required");
         return WF_OK;
     }
+    /* A taken-down record reads as absent. It is still in the repository —
+     * removing it would rewrite history — so the guard is what withholds it. */
+    char *guard_uri = make_uri(s->did, collection->valuestring,
+                               rkey->valuestring);
+    bool allowed = repo_access_allowed((metalbear_pds_repo_bundle *)ctx, req,
+                                       guard_uri, resp);
+    free(guard_uri);
+    if (!allowed) return WF_OK;
     char *rec = NULL, *cid = NULL;
     wf_status st = metalbear_repo_store_get_record(s, collection->valuestring,
                                             rkey->valuestring, &rec, &cid);
@@ -2924,14 +2945,16 @@ wf_status metalbear_xrpc_server_register_pds_repo_resolver(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url) {
     return metalbear_xrpc_server_register_pds_repo_resolver_ex(
-        server, resolver, ctx, service_did, public_url, NULL, NULL, NULL);
+        server, resolver, ctx, service_did, public_url, NULL, NULL, NULL,
+        NULL, NULL);
 }
 
 wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url,
     metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx,
-    const wf_lexicon_registry *lexicons) {
+    const wf_lexicon_registry *lexicons,
+    metalbear_xrpc_repo_access_guard guard, void *guard_ctx) {
     if (!server) return WF_ERR_INVALID_ARG;
     metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
     if (!b) return WF_ERR_ALLOC;
@@ -2941,6 +2964,8 @@ wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
     b->did_doc_provider = did_doc_provider;
     b->did_doc_ctx = did_doc_ctx;
     b->lexicons = lexicons;
+    b->guard = guard;
+    b->guard_ctx = guard_ctx;
     if (service_did) b->service_did = strdup(service_did);
     if (public_url) b->public_url = strdup(public_url);
     wf_xrpc_server_own_ctx(server, b, free);
