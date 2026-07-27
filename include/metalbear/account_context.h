@@ -4,7 +4,6 @@
 #include "metalbear/account.h"
 #include "metalbear/auth.h"
 #include "metalbear/key_rotation.h"
-#include "metalbear/oauth.h"
 #include "metalbear/sequencer.h"
 #include "metalbear/blob_store.h"
 #include "metalbear/repo_store.h"
@@ -39,7 +38,6 @@ typedef struct metalbear_account_context {
      * fallback — see `owns_sequencer`. */
     metalbear_sequencer *sequencer;
     bool owns_sequencer;
-    metalbear_oauth_store *oauth;
     metalbear_key_rotation *key_rotation;
     bool active;
 } metalbear_account_context;

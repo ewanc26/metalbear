@@ -17,10 +17,19 @@ typedef struct metalbear_config {
     const char *data_directory;
     const char *service_did;
     const char *public_url; /* optional; derived from did:web when omitted */
-    const char *account_did;
-    const char *account_handle;
     const char *user_domain;
-    const char *password;
+    /*
+     * Hex-encoded secp256k1 private key used to sign PLC operations
+     * (refpds PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX).
+     *
+     * This is the server's identity authority, not an account's. MetalBear
+     * used to take the rotation key from a configured "bootstrap" account,
+     * which made one account structurally privileged and meant a host could
+     * not exist before its first user. The reference PDS has no such account:
+     * it holds a rotation key and mints DIDs on demand. When unset, the key
+     * is generated once and persisted under the data directory.
+     */
+    const char *plc_rotation_key;
     /* Email configuration (optional) */
     const char *smtp_host;
     uint16_t smtp_port;

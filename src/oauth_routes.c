@@ -10,6 +10,8 @@
 typedef struct oauth_route_ctx {
     metalbear_oauth_store *store;
     char *public_url;
+    metalbear_oauth_subject_resolver resolve_subject;
+    void *resolver_ctx;
 } oauth_route_ctx;
 
 static wf_status json_response(wf_xrpc_response *resp, cJSON *root,
@@ -275,11 +277,39 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
+    /*
+     * Which account is being authorized must be stated, not assumed. The
+     * subject used to come from a single DID baked into the store, so every
+     * token this endpoint issued spoke for that one account no matter who
+     * asked — on a multi-account host that hands the client the wrong
+     * session entirely.
+     */
+    const char *hint = NULL;
+    if (req->params && cJSON_IsObject(req->params)) {
+        cJSON *lh = cJSON_GetObjectItemCaseSensitive(req->params,
+                                                     "login_hint");
+        if (cJSON_IsString(lh)) hint = lh->valuestring;
+    }
+    char subject[256];
+    if (!hint || !hint[0]) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "login_hint is required to identify the "
+                                   "account being authorized");
+        return WF_OK;
+    }
+    if (!rctx->resolve_subject ||
+        !rctx->resolve_subject(rctx->resolver_ctx, hint, subject,
+                               sizeof(subject))) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Unknown account");
+        return WF_OK;
+    }
+
     char *code = NULL;
     char *redirect_uri = NULL;
     char *state = NULL;
     wf_status status = metalbear_oauth_authorize(rctx->store, request_uri,
-                                                  client_id, &code,
+                                                  client_id, subject, &code,
                                                   &redirect_uri, &state);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
@@ -455,9 +485,10 @@ wf_status metalbear_oauth_routes_register(wf_xrpc_server *server,
                                           metalbear_oauth_store *store,
                                           const char *public_url,
                                           const char *service_did,
-                                          const char *account_did) {
+                                          metalbear_oauth_subject_resolver
+                                              resolve_subject,
+                                          void *resolver_ctx) {
     (void)service_did;
-    (void)account_did;
 
     if (!server || !store) return WF_ERR_INVALID_ARG;
 
@@ -465,6 +496,8 @@ wf_status metalbear_oauth_routes_register(wf_xrpc_server *server,
     if (!ctx) return WF_ERR_ALLOC;
     ctx->store = store;
     ctx->public_url = public_url ? strdup(public_url) : NULL;
+    ctx->resolve_subject = resolve_subject;
+    ctx->resolver_ctx = resolver_ctx;
 
     if (wf_xrpc_server_register_http_route(server, "GET",
             "/.well-known/oauth-authorization-server",

@@ -22,7 +22,7 @@ int main(void) {
 
     metalbear_oauth_store *store = NULL;
     CHECK(metalbear_oauth_store_open(path, "https://pds.example.com",
-                                    "did:plc:alice", &store) == WF_OK);
+                                    &store) == WF_OK);
     CHECK(store != NULL);
     if (!store) return 1;
 
@@ -56,7 +56,9 @@ int main(void) {
     char *code = NULL;
     char *redirect_uri = NULL;
     char *state = NULL;
+    /* The account is named per authorization now, not baked into the store. */
     CHECK(metalbear_oauth_authorize(store, request_uri, request.client_id,
+                                    "did:plc:alice",
                                     &code, &redirect_uri, &state) == WF_OK);
     CHECK(code && redirect_uri && state);
     CHECK(redirect_uri && strcmp(redirect_uri, request.redirect_uri) == 0);

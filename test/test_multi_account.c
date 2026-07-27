@@ -220,11 +220,11 @@ int main(void) {
         .thread_count = 2,
         .data_directory = directory,
         .service_did = "did:web:pds.example.com",
-        .account_did = "did:plc:metalbeartest",
-        .account_handle = "alice.example.com",
         .user_domain = ".example.com",
-        .password = "correct horse battery staple",
         .admin_password = "secret-admin",
+        /* Nothing is configured as "the" account: every account below, the
+         * first included, arrives through createAccount. */
+        .invite_required = false,
     };
     metalbear_server *server = metalbear_server_start(&config);
     CHECK(server != NULL);
@@ -236,7 +236,13 @@ int main(void) {
     wf_xrpc_client *client = wf_xrpc_client_new(base);
     CHECK(client != NULL);
 
-    /* (a) Two accounts created via createAccount. */
+    /* (a) Accounts created via createAccount — including the one this test
+     * later expects to see listed. No account exists until one is created. */
+    char *token_alice = create_account(client, "alice.example.com",
+                                       "did:plc:metalbeartest",
+                                       "correct horse battery staple");
+    CHECK(token_alice != NULL);
+    free(token_alice);
     char *token_bob = create_account(client, "bob.example.com", "did:plc:bob",
                                      "bobsecret");
     char *token_carol = create_account(client, "carol.example.com",

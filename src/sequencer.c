@@ -179,24 +179,6 @@ done:
     return status;
 }
 
-static wf_status seed_account(metalbear_sequencer *s, const char *did,
-                              const char *handle) {
-    if (metalbear_sequencer_current(s) != 0) return WF_OK;
-    wf_subscribe_event identity = {.type = WF_SUBSCRIBE_EVENT_IDENTITY};
-    snprintf(identity.data.identity.did, sizeof(identity.data.identity.did),
-             "%s", did);
-    snprintf(identity.data.identity.handle,
-             sizeof(identity.data.identity.handle), "%s", handle);
-    identity.data.identity.has_handle = 1;
-    wf_status status = append_event(s, &identity);
-    if (status != WF_OK) return status;
-    wf_subscribe_event account = {.type = WF_SUBSCRIBE_EVENT_ACCOUNT};
-    snprintf(account.data.account.did, sizeof(account.data.account.did),
-             "%s", did);
-    account.data.account.active = 1;
-    return append_event(s, &account);
-}
-
 wf_status metalbear_sequencer_account_status(metalbear_sequencer *s,
                                              const char *did, int active,
                                              const char *status_text) {
@@ -308,10 +290,9 @@ static wf_status seed_sequence_floor(metalbear_sequencer *s) {
     return WF_OK;
 }
 
-wf_status metalbear_sequencer_open(const char *path, const char *did,
-                                   const char *handle,
+wf_status metalbear_sequencer_open(const char *path,
                                    metalbear_sequencer **out) {
-    if (!path || !did || !handle || !out) return WF_ERR_INVALID_ARG;
+    if (!path || !out) return WF_ERR_INVALID_ARG;
     *out = NULL;
     metalbear_sequencer *s = calloc(1, sizeof(*s));
     if (!s) return WF_ERR_ALLOC;
@@ -334,8 +315,7 @@ wf_status metalbear_sequencer_open(const char *path, const char *did,
             "CREATE TABLE IF NOT EXISTS meta("
             "key TEXT PRIMARY KEY,value INTEGER NOT NULL);",
             NULL, NULL, NULL) != SQLITE_OK ||
-        seed_sequence_floor(s) != WF_OK ||
-        seed_account(s, did, handle) != WF_OK) {
+        seed_sequence_floor(s) != WF_OK) {
         metalbear_sequencer_free(s);
         return WF_ERR_INTERNAL;
     }

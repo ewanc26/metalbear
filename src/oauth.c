@@ -27,7 +27,6 @@ struct metalbear_oauth_store {
     pthread_mutex_t mutex;
     wf_signing_key key;
     char *issuer;
-    char *subject;
     wf_oauth_trusted_keys *trusted_keys;
     wf_oauth_dpop_replay_cache *replay;
 };
@@ -174,16 +173,14 @@ wf_status metalbear_oauth_jwks(metalbear_oauth_store *store, char **out_jwks) {
 }
 
 wf_status metalbear_oauth_store_open(const char *path, const char *issuer,
-                                     const char *subject,
                                      metalbear_oauth_store **out) {
-    if (!path || !issuer || !subject || !out) return WF_ERR_INVALID_ARG;
+    if (!path || !issuer || !out) return WF_ERR_INVALID_ARG;
     *out = NULL;
     metalbear_oauth_store *store = calloc(1, sizeof(*store));
     if (!store) return WF_ERR_ALLOC;
     if (pthread_mutex_init(&store->mutex, NULL) != 0) { free(store); return WF_ERR_INTERNAL; }
     store->issuer = strdup(issuer);
-    store->subject = strdup(subject);
-    if (!store->issuer || !store->subject ||
+    if (!store->issuer ||
         sqlite3_open_v2(path, &store->db, SQLITE_OPEN_READWRITE |
                         SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
                         NULL) != SQLITE_OK)
@@ -199,10 +196,10 @@ wf_status metalbear_oauth_store_open(const char *path, const char *issuer,
             "CREATE TABLE IF NOT EXISTS oauth_code("
             "code_hash BLOB PRIMARY KEY,client_id TEXT NOT NULL,redirect_uri TEXT NOT NULL,"
             "scope TEXT NOT NULL,code_challenge TEXT NOT NULL,dpop_jkt TEXT NOT NULL,"
-            "expires_at INTEGER NOT NULL);"
+            "subject TEXT NOT NULL,expires_at INTEGER NOT NULL);"
             "CREATE TABLE IF NOT EXISTS oauth_refresh("
             "token_hash BLOB PRIMARY KEY,client_id TEXT NOT NULL,scope TEXT NOT NULL,"
-            "dpop_jkt TEXT NOT NULL,expires_at INTEGER NOT NULL);"
+            "dpop_jkt TEXT NOT NULL,subject TEXT NOT NULL,expires_at INTEGER NOT NULL);"
             "CREATE INDEX IF NOT EXISTS oauth_par_expiry ON oauth_par(expires_at);"
             "CREATE INDEX IF NOT EXISTS oauth_code_expiry ON oauth_code(expires_at);"
             "CREATE INDEX IF NOT EXISTS oauth_refresh_expiry ON oauth_refresh(expires_at);") != WF_OK ||
@@ -231,7 +228,6 @@ void metalbear_oauth_store_free(metalbear_oauth_store *store) {
     wf_oauth_dpop_replay_cache_free(store->replay);
     OPENSSL_cleanse(store->key.bytes, sizeof(store->key.bytes));
     free(store->issuer);
-    free(store->subject);
     pthread_mutex_destroy(&store->mutex);
     free(store);
 }
@@ -304,10 +300,11 @@ static char *column_copy(sqlite3_stmt *stmt, int column) {
 wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
                                     const char *request_uri,
                                     const char *client_id,
+                                    const char *subject,
                                     char **out_code,
                                     char **out_redirect_uri,
                                     char **out_state) {
-    if (!store || !request_uri || !client_id || !out_code ||
+    if (!store || !request_uri || !client_id || !subject || !out_code ||
         !out_redirect_uri || !out_state)
         return WF_ERR_INVALID_ARG;
     *out_code = NULL; *out_redirect_uri = NULL; *out_state = NULL;
@@ -352,7 +349,8 @@ wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
     sqlite3_finalize(stmt); stmt = NULL;
     if (status == WF_OK && sqlite3_prepare_v2(store->db,
             "INSERT INTO oauth_code(code_hash,client_id,redirect_uri,scope,"
-            "code_challenge,dpop_jkt,expires_at) VALUES(?,?,?,?,?,?,?);", -1,
+            "code_challenge,dpop_jkt,subject,expires_at) "
+            "VALUES(?,?,?,?,?,?,?,?);", -1,
             &stmt, NULL) == SQLITE_OK) {
         sqlite3_bind_blob(stmt, 1, hash, sizeof(hash), SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 2, stored_client, -1, SQLITE_TRANSIENT);
@@ -360,7 +358,8 @@ wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
         sqlite3_bind_text(stmt, 4, scope, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 5, challenge, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 6, jkt, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int64(stmt, 7, now + CODE_LIFETIME_SECONDS);
+        sqlite3_bind_text(stmt, 7, subject, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 8, now + CODE_LIFETIME_SECONDS);
         if (sqlite3_step(stmt) != SQLITE_DONE) status = WF_ERR_INTERNAL;
     } else if (status == WF_OK) status = WF_ERR_INTERNAL;
     sqlite3_finalize(stmt);
@@ -377,7 +376,8 @@ wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
 
 static char *create_access_jwt(metalbear_oauth_store *store,
                                const char *client_id, const char *scope,
-                               const char *dpop_jkt, int64_t expires_at) {
+                               const char *dpop_jkt, const char *subject,
+                               int64_t expires_at) {
     cJSON *header = cJSON_CreateObject(), *payload = cJSON_CreateObject();
     cJSON *cnf = cJSON_CreateObject();
     char *header_json = NULL, *payload_json = NULL, *header_b64 = NULL;
@@ -390,7 +390,7 @@ static char *create_access_jwt(metalbear_oauth_store *store,
     cJSON_AddStringToObject(header, "alg", "ES256");
     cJSON_AddStringToObject(header, "kid", "metalbear-oauth");
     cJSON_AddStringToObject(payload, "iss", store->issuer);
-    cJSON_AddStringToObject(payload, "sub", store->subject);
+    cJSON_AddStringToObject(payload, "sub", subject);
     cJSON_AddStringToObject(payload, "aud", store->issuer);
     cJSON_AddStringToObject(payload, "scope", scope);
     cJSON_AddStringToObject(payload, "client_id", client_id);
@@ -430,19 +430,21 @@ done:
 static wf_status persist_refresh(metalbear_oauth_store *store,
                                  const char *token, const char *client_id,
                                  const char *scope, const char *jkt,
-                                 int64_t expires_at) {
+                                 const char *subject, int64_t expires_at) {
     unsigned char hash[32];
     if (token_hash(token, hash) != WF_OK) return WF_ERR_CRYPTO;
     sqlite3_stmt *stmt = NULL;
     wf_status status = WF_ERR_INTERNAL;
     if (sqlite3_prepare_v2(store->db,
             "INSERT INTO oauth_refresh(token_hash,client_id,scope,dpop_jkt,"
-            "expires_at) VALUES(?,?,?,?,?);", -1, &stmt, NULL) == SQLITE_OK) {
+            "subject,expires_at) VALUES(?,?,?,?,?,?);", -1, &stmt,
+            NULL) == SQLITE_OK) {
         sqlite3_bind_blob(stmt, 1, hash, sizeof(hash), SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 2, client_id, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 3, scope, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 4, jkt, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int64(stmt, 5, expires_at);
+        sqlite3_bind_text(stmt, 5, subject, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 6, expires_at);
         status = sqlite3_step(stmt) == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
     }
     sqlite3_finalize(stmt);
@@ -452,16 +454,17 @@ static wf_status persist_refresh(metalbear_oauth_store *store,
 
 static wf_status issue_grant(metalbear_oauth_store *store,
                              const char *client_id, const char *scope,
-                             const char *jkt, metalbear_oauth_grant *out) {
+                             const char *jkt, const char *subject,
+                             metalbear_oauth_grant *out) {
     memset(out, 0, sizeof(*out));
     int64_t now = (int64_t)time(NULL);
-    out->access_token = create_access_jwt(store, client_id, scope, jkt,
+    out->access_token = create_access_jwt(store, client_id, scope, jkt, subject,
                                           now + ACCESS_LIFETIME_SECONDS);
     wf_status status = out->access_token
         ? random_value(32, &out->refresh_token) : WF_ERR_CRYPTO;
     if (status == WF_OK)
         status = persist_refresh(store, out->refresh_token, client_id, scope,
-                                 jkt, now + REFRESH_LIFETIME_SECONDS);
+                                 jkt, subject, now + REFRESH_LIFETIME_SECONDS);
     if (status != WF_OK) { metalbear_oauth_grant_free(out); return status; }
     out->expires_in = ACCESS_LIFETIME_SECONDS;
     return WF_OK;
@@ -481,14 +484,15 @@ wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
     wf_oauth_pkce pkce;
     wf_status status = wf_oauth_pkce_from_verifier(code_verifier, &pkce);
     char *stored_client = NULL, *stored_redirect = NULL, *scope = NULL;
-    char *challenge = NULL, *jkt = NULL;
+    char *challenge = NULL, *jkt = NULL, *subject = NULL;
     int64_t now = (int64_t)time(NULL);
     pthread_mutex_lock(&store->mutex);
     prune(store, now);
     sqlite3_stmt *stmt = NULL;
     if (status == WF_OK && sqlite3_prepare_v2(store->db,
-            "SELECT client_id,redirect_uri,scope,code_challenge,dpop_jkt FROM "
-            "oauth_code WHERE code_hash=? AND expires_at>?;", -1, &stmt,
+            "SELECT client_id,redirect_uri,scope,code_challenge,dpop_jkt,"
+            "subject FROM oauth_code WHERE code_hash=? AND expires_at>?;", -1,
+            &stmt,
             NULL) != SQLITE_OK) status = WF_ERR_INTERNAL;
     if (status == WF_OK) {
         sqlite3_bind_blob(stmt, 1, hash, sizeof(hash), SQLITE_TRANSIENT);
@@ -498,8 +502,9 @@ wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
     if (status == WF_OK) {
         stored_client = column_copy(stmt, 0); stored_redirect = column_copy(stmt, 1);
         scope = column_copy(stmt, 2); challenge = column_copy(stmt, 3);
-        jkt = column_copy(stmt, 4);
-        if (!stored_client || !stored_redirect || !scope || !challenge || !jkt)
+        jkt = column_copy(stmt, 4); subject = column_copy(stmt, 5);
+        if (!stored_client || !stored_redirect || !scope || !challenge ||
+            !jkt || !subject)
             status = WF_ERR_ALLOC;
         else if (strcmp(stored_client, client_id) ||
                  strcmp(stored_redirect, redirect_uri) ||
@@ -514,10 +519,12 @@ wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
             status = WF_ERR_PERMISSION;
     } else if (status == WF_OK) status = WF_ERR_INTERNAL;
     sqlite3_finalize(stmt);
-    if (status == WF_OK) status = issue_grant(store, client_id, scope, jkt, out);
+    if (status == WF_OK)
+        status = issue_grant(store, client_id, scope, jkt, subject, out);
     pthread_mutex_unlock(&store->mutex);
     OPENSSL_cleanse(hash, sizeof(hash));
-    free(stored_client); free(stored_redirect); free(scope); free(challenge); free(jkt);
+    free(stored_client); free(stored_redirect); free(scope); free(challenge);
+    free(jkt); free(subject);
     return status;
 }
 
@@ -530,13 +537,13 @@ wf_status metalbear_oauth_refresh(metalbear_oauth_store *store,
         return WF_ERR_INVALID_ARG;
     unsigned char hash[32]; token_hash(refresh_token, hash);
     int64_t now = (int64_t)time(NULL);
-    char *stored_client = NULL, *scope = NULL, *jkt = NULL;
+    char *stored_client = NULL, *scope = NULL, *jkt = NULL, *subject = NULL;
     wf_status status = WF_OK;
     pthread_mutex_lock(&store->mutex);
     prune(store, now);
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(store->db,
-            "SELECT client_id,scope,dpop_jkt FROM oauth_refresh WHERE "
+            "SELECT client_id,scope,dpop_jkt,subject FROM oauth_refresh WHERE "
             "token_hash=? AND expires_at>?;", -1, &stmt, NULL) != SQLITE_OK)
         status = WF_ERR_INTERNAL;
     if (status == WF_OK) {
@@ -546,8 +553,8 @@ wf_status metalbear_oauth_refresh(metalbear_oauth_store *store,
     }
     if (status == WF_OK) {
         stored_client = column_copy(stmt, 0); scope = column_copy(stmt, 1);
-        jkt = column_copy(stmt, 2);
-        if (!stored_client || !scope || !jkt) status = WF_ERR_ALLOC;
+        jkt = column_copy(stmt, 2); subject = column_copy(stmt, 3);
+        if (!stored_client || !scope || !jkt || !subject) status = WF_ERR_ALLOC;
         else if (strcmp(stored_client, client_id) || strcmp(jkt, dpop_jkt))
             status = WF_ERR_PERMISSION;
     }
@@ -560,10 +567,11 @@ wf_status metalbear_oauth_refresh(metalbear_oauth_store *store,
             status = WF_ERR_PERMISSION;
     } else if (status == WF_OK) status = WF_ERR_INTERNAL;
     sqlite3_finalize(stmt);
-    if (status == WF_OK) status = issue_grant(store, client_id, scope, jkt, out);
+    if (status == WF_OK)
+        status = issue_grant(store, client_id, scope, jkt, subject, out);
     pthread_mutex_unlock(&store->mutex);
     OPENSSL_cleanse(hash, sizeof(hash));
-    free(stored_client); free(scope); free(jkt);
+    free(stored_client); free(scope); free(jkt); free(subject);
     return status;
 }
 
@@ -597,7 +605,10 @@ wf_status metalbear_oauth_verify_request(
         store->replay, out);
     pthread_mutex_unlock(&store->mutex);
     if (status != WF_OK) return status;
-    if (!(*out)->sub || strcmp((*out)->sub, store->subject) ||
+    /* The account is whatever the token says; the caller resolves it and
+     * decides whether that account may do what is being asked. A single
+     * subject baked into the store could only ever admit one account. */
+    if (!(*out)->sub || !(*out)->sub[0] ||
         !(*out)->iss || strcmp((*out)->iss, store->issuer) ||
         !(*out)->aud || strcmp((*out)->aud, store->issuer) ||
         !(*out)->scope || !strstr((*out)->scope, "atproto") ||
