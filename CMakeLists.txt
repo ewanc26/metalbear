@@ -32,7 +32,7 @@ set(WOLFRAM_BUILD_CPP OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WOLFRAM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/wolfram")
 get_target_property(METALBEAR_CJSON_SOURCE_DIR cjson SOURCE_DIR)
 
-add_library(metalbear_core src/config_file.c src/handle_dns.c src/account.c src/account_registry.c src/account_context.c src/account_cache.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/key_rotation.c src/repo_store.c src/sequencer.c src/server.c src/report.c src/blob_store.c src/blob_store_server.c)
+add_library(metalbear_core src/config_file.c src/log.c src/metrics.c src/handle_dns.c src/handle_dns_rfc2136.c src/account.c src/account_registry.c src/account_context.c src/account_cache.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/key_rotation.c src/repo_store.c src/sequencer.c src/server.c src/report.c src/blob_store.c src/blob_store_server.c)
 target_include_directories(metalbear_core PUBLIC include
     PUBLIC "${METALBEAR_CJSON_SOURCE_DIR}")
 target_link_libraries(metalbear_core PUBLIC wolfram cjson PRIVATE SQLite3::SQLite3 Threads::Threads)
@@ -104,6 +104,15 @@ if(METALBEAR_BUILD_TESTS)
     target_include_directories(test_metalbear_handle_dns PRIVATE
         "${METALBEAR_CJSON_SOURCE_DIR}" ${MICROHTTPD_INCLUDE_DIR})
     add_test(NAME metalbear_handle_dns COMMAND test_metalbear_handle_dns)
+
+    add_executable(test_metalbear_handle_dns_rfc2136
+        test/test_handle_dns_rfc2136.c)
+    target_link_libraries(test_metalbear_handle_dns_rfc2136 PRIVATE
+        metalbear_core Threads::Threads)
+    target_include_directories(test_metalbear_handle_dns_rfc2136 PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_handle_dns_rfc2136
+        COMMAND test_metalbear_handle_dns_rfc2136)
 
     add_executable(test_metalbear_backup test/test_backup.c)
     target_link_libraries(test_metalbear_backup PRIVATE metalbear_core SQLite3::SQLite3)

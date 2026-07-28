@@ -80,6 +80,21 @@ wf_status metalbear_sequencer_retain(metalbear_sequencer *sequencer,
                                      int64_t max_age_seconds,
                                      int64_t min_events);
 
+/*
+ * Drop a deleted account's history from the log, keeping only its most recent
+ * event — which the caller must have just sequenced as the `deleted`
+ * #account announcement, since a consumer that never sees it cannot tell a
+ * deleted account from a host that went quiet.
+ *
+ * Without this, an account's commits and the record contents inside them stay
+ * on the wire for as long as retention holds them, and any consumer
+ * backfilling from an old cursor is handed the repository of somebody who
+ * asked to be gone. `out_removed` may be NULL.
+ */
+wf_status metalbear_sequencer_purge_account(metalbear_sequencer *sequencer,
+                                            const char *did,
+                                            int64_t *out_removed);
+
 #ifdef __cplusplus
 }
 #endif
