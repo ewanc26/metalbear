@@ -5,6 +5,8 @@
 #endif
 
 #include "metalbear/server.h"
+#include "metalbear/log.h"
+#include "metalbear/metrics.h"
 #include "metalbear/account.h"
 #include "metalbear/account_registry.h"
 #include "metalbear/account_context.h"
@@ -44,61 +46,7 @@
 #include <ftw.h>
 #include <curl/curl.h>
 
-typedef enum metalbear_log_level {
-    METALBEAR_LOG_DEBUG = 0,
-    METALBEAR_LOG_INFO,
-    METALBEAR_LOG_WARN,
-    METALBEAR_LOG_ERROR,
-} metalbear_log_level;
-
-static metalbear_log_level log_level = METALBEAR_LOG_INFO;
-static FILE *log_file = NULL;
-
-static metalbear_log_level metalbear_log_level_from_env(void) {
-    const char *level = getenv("METALBEAR_LOG_LEVEL");
-    if (!level || !level[0]) return METALBEAR_LOG_INFO;
-    if (strcmp(level, "debug") == 0 || strcmp(level, "DEBUG") == 0) return METALBEAR_LOG_DEBUG;
-    if (strcmp(level, "info") == 0 || strcmp(level, "INFO") == 0) return METALBEAR_LOG_INFO;
-    if (strcmp(level, "warn") == 0 || strcmp(level, "WARN") == 0) return METALBEAR_LOG_WARN;
-    if (strcmp(level, "error") == 0 || strcmp(level, "ERROR") == 0) return METALBEAR_LOG_ERROR;
-    char *end = NULL;
-    long v = strtol(level, &end, 10);
-    if (end && *end == '\0' && v >= 0 && v <= 3) return (int)v;
-    return METALBEAR_LOG_INFO;
-}
-
-static FILE *metalbear_log_file_from_env(void) {
-    const char *path = getenv("METALBEAR_LOG_FILE");
-    if (!path || !path[0]) return NULL;
-    return fopen(path, "a");
-}
-
-static void metalbear_log(metalbear_log_level level, const char *fmt, ...) {
-    if (level < log_level) return;
-    static const char *level_names[] = {"DEBUG", "INFO", "WARN", "ERROR"};
-    va_list args;
-    FILE *out = log_file ? log_file : stderr;
-    time_t now = time(NULL);
-    struct tm tm;
-#if defined(__APPLE__)
-    localtime_r(&now, &tm);
-#else
-    localtime_r(&now, &tm);
-#endif
-    char ts[32];
-    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm);
-    fprintf(out, "MetalBear [%s] [%s] ", level_names[level], ts);
-    va_start(args, fmt);
-    vfprintf(out, fmt, args);
-    va_end(args);
-    fprintf(out, "\n");
-    if (log_file) fflush(log_file);
-}
-
-#define LOG_DEBUG(...) metalbear_log(METALBEAR_LOG_DEBUG, __VA_ARGS__)
-#define LOG_INFO(...) metalbear_log(METALBEAR_LOG_INFO, __VA_ARGS__)
-#define LOG_WARN(...) metalbear_log(METALBEAR_LOG_WARN, __VA_ARGS__)
-#define LOG_ERROR(...) metalbear_log(METALBEAR_LOG_ERROR, __VA_ARGS__)
+/* Logging lives in log.c so the daemon shares it: see metalbear/log.h. */
 
 static char *join_path(const char *directory, const char *name);
 
@@ -111,6 +59,8 @@ static bool admin_authenticated(metalbear_server *server,
 
 struct metalbear_server {
     wf_xrpc_server *xrpc;
+    /* When this process began serving, for the uptime gauge at /metrics. */
+    time_t started_at;
     /*
      * The server's own PLC rotation key and OAuth store.
      *
@@ -176,6 +126,7 @@ static void publish_handle_dns(metalbear_server *server, const char *handle,
                                const char *did) {
     if (!server->handle_dns || !handle || !did) return;
     if (metalbear_handle_dns_publish(server->handle_dns, handle, did) != WF_OK) {
+        metalbear_metrics_inc(METALBEAR_METRIC_DNS_FAILURES);
         LOG_ERROR("dns: could not publish _atproto.%s for did=%s: %s; the "
                   "handle will not resolve until the record exists",
                   handle, did,
@@ -190,6 +141,7 @@ static void publish_handle_dns(metalbear_server *server, const char *handle,
 static void retract_handle_dns(metalbear_server *server, const char *handle) {
     if (!server->handle_dns || !handle) return;
     if (metalbear_handle_dns_retract(server->handle_dns, handle) != WF_OK) {
+        metalbear_metrics_inc(METALBEAR_METRIC_DNS_FAILURES);
         LOG_WARN("dns: could not remove _atproto.%s: %s; the record now points "
                  "at a handle this host no longer serves",
                  handle, metalbear_handle_dns_last_error(server->handle_dns));
@@ -469,7 +421,20 @@ static bool full_access_route(const char *nsid) {
 /* Defined below alongside the other account-status helpers. */
 static bool account_is_taken_down(metalbear_server *server, const char *did);
 
+static wf_status authenticate_request(wf_xrpc_request *req, void *ctx);
+
+/*
+ * Wraps the auth callback to count refusals it makes for a reason the status
+ * alone does not carry: the observer sees a 401, but not whether it came from
+ * a missing token, an expired one, or an account that may not act.
+ */
 static wf_status authenticate(wf_xrpc_request *req, void *ctx) {
+    wf_status status = authenticate_request(req, ctx);
+    if (status != WF_OK) metalbear_metrics_inc(METALBEAR_METRIC_AUTH_REFUSED);
+    return status;
+}
+
+static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
     metalbear_server *server = ctx;
     LOG_DEBUG("authenticate: nsid=%s method=%s host=%s auth=%s",
               req->nsid ? req->nsid : "-",
@@ -738,9 +703,17 @@ static wf_status delete_account(void *ctx, const wf_xrpc_request *request,
     metalbear_account_registry_remove(server->registry, acct->did);
     metalbear_account_registry_clear_takedowns_for_did(server->registry,
                                                        acct->did);
-    /* Emit deactivation event to firehose */
-    metalbear_sequencer_account_status(acct->sequencer, acct->did, 0,
+    /* Emit deletion event to firehose, against the host log rather than a
+     * resolved context's, then drop everything else this DID ever published:
+     * leaving it there hands the repository of somebody who asked to be gone
+     * to any consumer backfilling from an old cursor. */
+    metalbear_sequencer_account_status(server->sequencer, acct->did, 0,
                                        "deleted");
+    int64_t purged = 0;
+    metalbear_sequencer_purge_account(server->sequencer, acct->did, &purged);
+    metalbear_metrics_inc(METALBEAR_METRIC_ACCOUNTS_DELETED);
+    LOG_INFO("delete_account: purged %lld firehose events for did=%s",
+             (long long)purged, acct->did);
     /* Drop the handle's TXT record: leaving it would keep pointing resolvers
      * at a DID this host no longer serves. */
     retract_handle_dns(server, acct->handle);
@@ -1833,6 +1806,7 @@ static wf_status create_session(void *ctx, const wf_xrpc_request *request,
     if (credential == METALBEAR_CREDENTIAL_INVALID || !acct) {
         LOG_WARN("create_session: invalid credentials for host=%s",
                  request->host_header ? request->host_header : "(unknown)");
+        metalbear_metrics_inc(METALBEAR_METRIC_LOGIN_FAILURES);
         wf_xrpc_response_set_error(response, 401, "AuthenticationRequired",
                                    "Invalid identifier or password");
         return WF_OK;
@@ -1844,6 +1818,7 @@ static wf_status create_session(void *ctx, const wf_xrpc_request *request,
      */
     if (account_is_taken_down(server, acct->did)) {
         free(app_password_name);
+        metalbear_metrics_inc(METALBEAR_METRIC_LOGIN_FAILURES);
         LOG_WARN("create_session: refused taken-down account did=%s", acct->did);
         wf_xrpc_response_set_error(response, 401, "AccountTakedown",
                                    "Account has been taken down");
@@ -1864,6 +1839,7 @@ static wf_status create_session(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     free(app_password_name);
+    metalbear_metrics_inc(METALBEAR_METRIC_SESSIONS_CREATED);
     LOG_INFO("create_session: issued session for did=%s scope=%d", acct->did, scope);
     wf_status status = set_json(response, session_json(server, acct, &tokens));
     metalbear_session_tokens_free(&tokens);
@@ -3703,6 +3679,7 @@ static wf_status create_account(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
 
+    metalbear_metrics_inc(METALBEAR_METRIC_ACCOUNTS_CREATED);
     LOG_INFO("create_account: created handle=%s did=%s email=%s",
              handle->valuestring, account_did, email->valuestring);
 
@@ -4527,6 +4504,7 @@ static wf_status admin_update_subject_status(void *ctx,
          * effect on the tokens already issued rather than only on new logins.
          * Lifting it does not restore them: the holder logs in again.
          */
+        if (applying) metalbear_metrics_inc(METALBEAR_METRIC_TAKEDOWNS_APPLIED);
         if (account_subject && applying) {
             metalbear_account_context *acct = context_for_did(server, did);
             if (acct) metalbear_auth_delete_all(acct->auth);
@@ -5053,6 +5031,19 @@ static wf_status admin_delete_account(void *ctx,
      */
     metalbear_sequencer_account_status(server->sequencer, did->valuestring, 0,
                                        "deleted");
+    /*
+     * Then drop everything else this DID ever published. The data directory
+     * is about to be removed, and leaving the same records on the firehose
+     * would keep serving them to any consumer backfilling from an old cursor
+     * — a deletion that removes the copy nobody reads and keeps the copy the
+     * network does.
+     */
+    int64_t purged = 0;
+    metalbear_sequencer_purge_account(server->sequencer, did->valuestring,
+                                      &purged);
+    metalbear_metrics_inc(METALBEAR_METRIC_ACCOUNTS_DELETED);
+    LOG_INFO("admin_delete_account: purged %lld firehose events for did=%s",
+             (long long)purged, did->valuestring);
 
     metalbear_account_registry_remove(server->registry, did->valuestring);
     /* Moderation state goes with it: a DID re-registered later must not
@@ -5122,11 +5113,13 @@ static void *crawler_notify_main(void *raw) {
             wf_response up = {0};
             wf_status st = wf_xrpc_procedure(
                 client, "com.atproto.sync.requestCrawl", n->body, &up);
-            if (st != WF_OK || up.status < 200 || up.status >= 300)
+            if (st != WF_OK || up.status < 200 || up.status >= 300) {
+                metalbear_metrics_inc(METALBEAR_METRIC_CRAWL_FAILURES);
                 LOG_WARN("requestCrawl to %s failed (status %ld)", host,
                          (long)up.status);
-            else
+            } else {
                 LOG_INFO("announced new data to %s", host);
+            }
             wf_response_free(&up);
             wf_xrpc_client_free(client);
         }
@@ -5771,6 +5764,7 @@ static wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
                                     "failed to store blob");
         return WF_OK;
     }
+    metalbear_metrics_inc(METALBEAR_METRIC_BLOBS_UPLOADED);
     cJSON *root = cJSON_CreateObject();
     cJSON *blob = cJSON_CreateObject();
     if (!root || !blob) {
@@ -6299,6 +6293,167 @@ static wf_status tls_check_handler(void *ctx, const wf_xrpc_request *req,
     return WF_OK;
 }
 
+/* ---- GET /metrics (Prometheus text format, admin-gated) ----
+ *
+ * Counters come from the metrics table; everything describing the host's
+ * current state is read from the real thing here rather than mirrored into a
+ * gauge, because a mirrored gauge is a second copy of the truth and drifts
+ * from the first.
+ *
+ * Behind the admin password. An open endpoint would publish the account count
+ * and the write rate of a private host to anyone who asked, and hand an
+ * unauthenticated caller an unbounded amount of work per request. Prometheus
+ * has had basic_auth in its scrape config for as long as it has existed.
+ */
+/* Prometheus label values may not contain a raw quote, backslash or newline;
+ * a route name arrives from the network and could hold any of them, and one
+ * bad character loses the whole exposition rather than one series. */
+static bool append_escaped_label(sb_t *sb, const char *value) {
+    char escaped[256];
+    size_t o = 0;
+    for (const char *p = value; *p && o + 2 < sizeof(escaped); p++) {
+        if (*p == '"' || *p == '\\') escaped[o++] = '\\';
+        else if (*p == '\n') { escaped[o++] = '\\'; escaped[o++] = 'n'; continue; }
+        escaped[o++] = *p;
+    }
+    escaped[o] = '\0';
+    return sb_append(sb, "%s", escaped);
+}
+
+typedef struct route_render {
+    sb_t *sb;
+    bool ok;
+} route_render;
+
+static void render_route(void *ctx, const char *route, uint64_t requests,
+                         uint64_t errors) {
+    route_render *out = ctx;
+    if (!out->ok) return;
+    out->ok = sb_append(out->sb, "metalbear_route_requests_total{route=\"") &&
+              append_escaped_label(out->sb, route) &&
+              sb_append(out->sb, "\"} %llu\n", (unsigned long long)requests) &&
+              sb_append(out->sb, "metalbear_route_errors_total{route=\"") &&
+              append_escaped_label(out->sb, route) &&
+              sb_append(out->sb, "\"} %llu\n", (unsigned long long)errors);
+}
+
+#ifdef WF_XRPC_HAS_REQUEST_OBSERVER
+/*
+ * Every finished request, with the status it answered.
+ *
+ * Counted here rather than in the auth callback, which is where the totals
+ * used to come from: that callback runs before the status is known, never
+ * runs for the plain HTTP routes, and never runs for a request the rate
+ * limiter refused — so the old totals were a subset that could not be named
+ * and carried no outcome at all.
+ */
+static void observe_request(void *ctx, const char *nsid, const char *path,
+                            const char *method, unsigned int status) {
+    (void)ctx;
+    (void)method;
+    metalbear_metrics_inc(METALBEAR_METRIC_REQUESTS);
+    if (status >= 400) metalbear_metrics_inc(METALBEAR_METRIC_REQUESTS_FAILED);
+    metalbear_metrics_record_request(nsid, path, status);
+}
+#endif
+
+static wf_status metrics_handler(void *ctx, const wf_xrpc_request *req,
+                                 wf_xrpc_response *resp) {
+    metalbear_server *server = ctx;
+    if (!admin_authenticated(server, req)) {
+        wf_xrpc_response_set_error(resp, 401, "AuthenticationRequired",
+                                   "Authentication required");
+        return WF_OK;
+    }
+
+    sb_t sb = {0};
+    bool ok = sb_append(&sb,
+        "# HELP metalbear_build_info Version of the running server.\n"
+        "# TYPE metalbear_build_info gauge\n"
+        "metalbear_build_info{version=\"%s\"} 1\n", METALBEAR_VERSION);
+
+    for (int i = 0; ok && i < METALBEAR_METRIC_COUNT; i++) {
+        const char *name = metalbear_metric_name(i);
+        const char *help = metalbear_metric_help(i);
+        if (!name) continue;
+        ok = sb_append(&sb,
+                       "# HELP metalbear_%s %s\n"
+                       "# TYPE metalbear_%s counter\n"
+                       "metalbear_%s %llu\n",
+                       name, help ? help : "", name, name,
+                       (unsigned long long)metalbear_metrics_get(i));
+    }
+
+    /*
+     * Per-route series. The label is escaped because a route name reaches
+     * here from the network — the AppView proxy forwards NSIDs this server
+     * has never heard of — and a quote inside a label value produces an
+     * exposition Prometheus rejects wholesale, losing every other metric with
+     * it.
+     */
+    if (ok) {
+        ok = sb_append(&sb,
+            "# HELP metalbear_route_requests_total Requests per route.\n"
+            "# TYPE metalbear_route_requests_total counter\n"
+            "# HELP metalbear_route_errors_total 4xx and 5xx responses per route.\n"
+            "# TYPE metalbear_route_errors_total counter\n");
+        route_render ctx_render = { &sb, ok };
+        metalbear_metrics_visit_routes(render_route, &ctx_render);
+        ok = ctx_render.ok;
+    }
+
+    /* Account counts, read from the registry at scrape time. */
+    size_t total = 0, active = 0, taken_down = 0;
+    metalbear_account_entry *entries = NULL;
+    size_t count = 0;
+    if (metalbear_account_registry_list(server->registry, &entries,
+                                        &count) == WF_OK) {
+        total = count;
+        for (size_t i = 0; i < count; i++) {
+            if (account_is_taken_down(server, entries[i].did)) taken_down++;
+            else if (entries[i].active) active++;
+        }
+        metalbear_account_entries_free(entries, count);
+    }
+    if (ok)
+        ok = sb_append(&sb,
+            "# HELP metalbear_accounts Accounts on this host by status.\n"
+            "# TYPE metalbear_accounts gauge\n"
+            "metalbear_accounts{status=\"active\"} %zu\n"
+            "metalbear_accounts{status=\"inactive\"} %zu\n"
+            "metalbear_accounts{status=\"takendown\"} %zu\n",
+            active, total - active - taken_down, taken_down);
+
+    /*
+     * The firehose cursor. A relay that has stopped consuming shows up as this
+     * climbing while nothing downstream moves, and it is the single number
+     * worth alerting on: a PDS whose sequence has stalled is one nobody can
+     * tell apart from a PDS that is down.
+     */
+    if (ok)
+        ok = sb_append(&sb,
+            "# HELP metalbear_firehose_seq Most recent firehose sequence number.\n"
+            "# TYPE metalbear_firehose_seq gauge\n"
+            "metalbear_firehose_seq %lld\n",
+            (long long)metalbear_sequencer_current(server->sequencer));
+
+    if (ok)
+        ok = sb_append(&sb,
+            "# HELP metalbear_uptime_seconds Seconds since this process began serving.\n"
+            "# TYPE metalbear_uptime_seconds gauge\n"
+            "metalbear_uptime_seconds %lld\n",
+            (long long)(time(NULL) - server->started_at));
+
+    if (!ok) {
+        free(sb.buf);
+        return WF_ERR_ALLOC;
+    }
+    wf_xrpc_response_set_content_type(resp, "text/plain; version=0.0.4");
+    wf_xrpc_response_set_body(resp, sb.buf, sb.len);
+    free(sb.buf);
+    return WF_OK;
+}
+
 static wf_status landing_handler(void *ctx, const wf_xrpc_request *req,
                                  wf_xrpc_response *resp) {
     (void)req;
@@ -6694,6 +6849,9 @@ static wf_status register_identity_documents(metalbear_server *server) {
     status = wf_xrpc_server_register_http_prefix(server->xrpc, "GET", "/acct/",
                                                  handle_account_did_web, server);
     if (status != WF_OK) return status;
+    status = wf_xrpc_server_register_http_route(server->xrpc, "GET", "/metrics",
+                                                metrics_handler, server);
+    if (status != WF_OK) return status;
     status = wf_xrpc_server_register_http_route(server->xrpc, "GET", "/",
                                                 landing_handler, server);
     if (status != WF_OK) return status;
@@ -6753,8 +6911,7 @@ static bool valid_config(const metalbear_config *config) {
 }
 
 metalbear_server *metalbear_server_start(const metalbear_config *config) {
-    log_level = metalbear_log_level_from_env();
-    log_file = metalbear_log_file_from_env();
+    metalbear_log_configure();
     if (!valid_config(config)) {
         LOG_ERROR("invalid server configuration");
         return NULL;
@@ -6765,6 +6922,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     }
 
     metalbear_server *server = calloc(1, sizeof(*server));
+    if (server) server->started_at = time(NULL);
     if (!server || !copy_config(server, config)) {
         LOG_ERROR("cannot initialise server");
         goto fail;
@@ -7039,6 +7197,12 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     }
 
     wf_xrpc_server_set_auth_callback(server->xrpc, authenticate, server);
+#ifdef WF_XRPC_HAS_REQUEST_OBSERVER
+    /* Guarded so this still builds against a Wolfram without the observer;
+     * without it the per-route breakdown is simply absent rather than the
+     * build being broken. */
+    wf_xrpc_server_set_request_observer(server->xrpc, observe_request, server);
+#endif
 
     /* Register OAuth HTTP routes (bypass XRPC auth) */
     /* One OAuth store for the host. The account a token speaks for comes from
@@ -7281,14 +7445,18 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
      * long after the accounts exist.
      */
     if (config->dns_provider && config->dns_provider[0]) {
-        if (metalbear_handle_dns_open(config->dns_provider,
-                                      config->dns_api_token,
-                                      config->dns_zone_id,
-                                      (int)config->dns_record_ttl,
-                                      &server->handle_dns) != WF_OK) {
-            LOG_ERROR("dns: provider '%s' is configured but unusable; it needs "
-                      "an api_token and a zone_id, and 'cloudflare' is the only "
-                      "provider implemented", config->dns_provider);
+        if (metalbear_handle_dns_open_ex(config->dns_provider,
+                                         config->dns_api_token,
+                                         config->dns_zone_id,
+                                         config->dns_server,
+                                         (int)config->dns_record_ttl,
+                                         &server->handle_dns) != WF_OK) {
+            LOG_ERROR("dns: provider '%s' is configured but unusable. It needs "
+                      "an api_token and a zone_id; 'rfc2136' additionally "
+                      "needs a server, and its api_token is the TSIG key as "
+                      "'<name>:<base64 secret>'. Known providers are "
+                      "cloudflare, digitalocean, desec and rfc2136",
+                      config->dns_provider);
             metalbear_server_free(server);
             return NULL;
         }
@@ -7345,10 +7513,7 @@ void metalbear_server_free(metalbear_server *server) {
     metalbear_handle_dns_free(server->handle_dns);
     metalbear_report_store_free(server->reports);
     wf_rate_limiter_free(server->rate_limiter);
-    if (log_file) {
-        fclose(log_file);
-        log_file = NULL;
-    }
+    metalbear_log_close();
     free(server->service_did);
     free(server->public_url);
     free(server->user_domain);
