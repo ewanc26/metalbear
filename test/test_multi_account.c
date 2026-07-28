@@ -669,6 +669,75 @@ int main(void) {
     }
 
     /*
+     * Paging holds when the registry changes underneath it.
+     *
+     * The cursor used to be a row offset, which counts positions in a list
+     * that shifts as accounts are created and deleted: an account moving into
+     * a slot already read is never returned, and one moving out is returned
+     * twice. A relay backfilling a host is exactly the client that walks
+     * every page and exactly the one that must not silently miss a repo.
+     *
+     * Walk one repository at a time, creating an account that sorts before
+     * everything already returned, and check that the accounts seen are
+     * distinct and that the walk still reaches all of them.
+     */
+    {
+        char seen[8][128];
+        size_t seen_count = 0;
+        char cursor[128] = "";
+        bool duplicated = false;
+        for (int page = 0; page < 8; page++) {
+            wf_response response = {0};
+            wf_xrpc_param params[] = {{"limit", "1"}, {"cursor", cursor}};
+            CHECK(wf_xrpc_query_params(client, "com.atproto.sync.listRepos",
+                                       params, cursor[0] ? 2 : 1,
+                                       &response) == WF_OK);
+            cJSON *json = json_response(&response);
+            cJSON *repos = cJSON_GetObjectItemCaseSensitive(json, "repos");
+            cJSON *next = cJSON_GetObjectItemCaseSensitive(json, "cursor");
+            cJSON *repo = NULL;
+            cJSON_ArrayForEach(repo, repos) {
+                cJSON *did = cJSON_GetObjectItemCaseSensitive(repo, "did");
+                if (!cJSON_IsString(did)) continue;
+                for (size_t i = 0; i < seen_count; i++)
+                    if (strcmp(seen[i], did->valuestring) == 0)
+                        duplicated = true;
+                if (seen_count < 8)
+                    snprintf(seen[seen_count++], 128, "%s", did->valuestring);
+            }
+            bool more = cJSON_IsString(next);
+            if (more) snprintf(cursor, sizeof(cursor), "%s", next->valuestring);
+            cJSON_Delete(json);
+            wf_response_free(&response);
+            if (!more) break;
+            /* A new account appears mid-walk. Its DID sorts first, so an
+             * offset cursor would shift every unread row by one. */
+            if (page == 0) {
+                char *token = create_account(client, "aaron.example.com",
+                                             "did:plc:aaron", "aaronsecret");
+                CHECK(token != NULL);
+                if (token) {
+                    wf_xrpc_client_set_auth(client, token);
+                    CHECK(create_record(client, "did:plc:aaron", "hello",
+                                        "hi") == 200);
+                    wf_xrpc_client_set_auth(client, NULL);
+                }
+                free(token);
+            }
+        }
+        CHECK(!duplicated);
+        /* Bob and Carol both have repositories and must both have been seen,
+         * whatever the new account did to the ordering. */
+        bool saw_bob = false, saw_carol = false;
+        for (size_t i = 0; i < seen_count; i++) {
+            if (strcmp(seen[i], "did:plc:bob") == 0) saw_bob = true;
+            if (strcmp(seen[i], "did:plc:carol") == 0) saw_carol = true;
+        }
+        CHECK(saw_bob);
+        CHECK(saw_carol);
+    }
+
+    /*
      * applyWrites is atomic: three writes land as exactly ONE #commit.
      *
      * This used to be asserted through the commit's `prev` link, but v3
