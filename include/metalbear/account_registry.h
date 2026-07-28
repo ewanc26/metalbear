@@ -50,9 +50,25 @@ wf_status metalbear_account_registry_find_by_did(
     metalbear_account_registry *registry,
     const char *did, metalbear_account_entry **out);
 
-/* List all accounts. Caller must free the array and each entry. */
+/* List all accounts, ordered by handle. Caller must free the array and each
+ * entry. For anything a client pages through, use the keyset walk below. */
 wf_status metalbear_account_registry_list(
     metalbear_account_registry *registry,
+    metalbear_account_entry **out_entries, size_t *out_count);
+
+/*
+ * One page of accounts with a DID strictly greater than `after` (NULL or ""
+ * for the first page), ordered by DID, at most `limit` of them. A page that
+ * comes back short is the last one.
+ *
+ * Paged on the DID rather than on a row offset because accounts are created
+ * and deleted while a client walks the list, and an offset counts positions
+ * in a list that has since shifted — the account that moved into the slot
+ * already read is never returned, and the one that moved out is returned
+ * twice. The DID is the only key here that a later operation cannot change.
+ */
+wf_status metalbear_account_registry_list_after(
+    metalbear_account_registry *registry, const char *after, size_t limit,
     metalbear_account_entry **out_entries, size_t *out_count);
 
 void metalbear_account_entry_free(metalbear_account_entry *entry);
@@ -117,20 +133,37 @@ void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
 
 /* --- Subject takedown status -------------------------------------------- */
 
-/* Set or clear a takedown on a subject.  Exactly one of did, uri, or
- * blob_cid must be non-NULL.  Pass ref=NULL to clear the takedown. */
+/*
+ * A takedown subject is one of three exact shapes:
+ *
+ *   account  did alone
+ *   record   uri alone
+ *   blob     did and blob_cid together
+ *
+ * A blob carries its DID because a CID names content rather than an upload:
+ * two accounts storing identical bytes share one CID, and a takedown keyed on
+ * the CID alone would remove the other account's copy. Any other combination
+ * is WF_ERR_INVALID_ARG.
+ */
+
+/* Set or clear a takedown on a subject.  Pass ref=NULL to clear it. */
 wf_status metalbear_account_registry_set_takedown(
     metalbear_account_registry *registry,
     const char *did, const char *uri, const char *blob_cid,
     const char *ref);
 
-/* Get takedown status for a subject.  Exactly one of did, uri, or
- * blob_cid must be non-NULL.  On WF_OK *out_ref is either NULL (no
+/* Get takedown status for a subject.  On WF_OK *out_ref is either NULL (no
  * takedown) or a heap-allocated ref string; caller frees it. */
 wf_status metalbear_account_registry_get_takedown(
     metalbear_account_registry *registry,
     const char *did, const char *uri, const char *blob_cid,
     char **out_ref);
+
+/* Drop every takedown belonging to an account — the account itself, its
+ * records, and its blobs.  Called when the account is deleted, so a DID that
+ * is later re-registered does not inherit the old one's moderation state. */
+wf_status metalbear_account_registry_clear_takedowns_for_did(
+    metalbear_account_registry *registry, const char *did);
 
 #ifdef __cplusplus
 }

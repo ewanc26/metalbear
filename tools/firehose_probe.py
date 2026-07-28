@@ -11,7 +11,12 @@ strict reader (the Go ipld stack a relay runs) applies:
     (the multibase identity prefix)
   - the frame header names a known $type / op
 
-Usage: firehose_probe.py <host> [seconds]
+Usage: firehose_probe.py <host> [seconds] [cursor]
+
+A quiet host publishes nothing while the probe is attached and the run ends
+INCONCLUSIVE, which is indistinguishable from a host whose frames never
+decode. Pass a cursor to replay from a known sequence number instead — every
+frame the host has ever written is checked the same way a live one is.
 """
 import base64
 import os
@@ -25,6 +30,9 @@ import time
 host = sys.argv[1] if len(sys.argv) > 1 else "bear.croft.click"
 budget = float(sys.argv[2]) if len(sys.argv) > 2 else 30.0
 path = "/xrpc/com.atproto.sync.subscribeRepos"
+if len(sys.argv) > 3:
+    path += "?cursor=" + sys.argv[3]
+
 
 
 def connect(host, path):
