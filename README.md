@@ -18,7 +18,7 @@ MetalBear is an AT Protocol Personal Data Server written in C11 and built on
 MetalBear instance is consumed by Bluesky's relays and its posts are indexed by
 the Bluesky AppView.
 
-**Version:** 0.6.1
+**Version:** 0.7.0
 
 ## Core Features
 
@@ -236,9 +236,9 @@ Three variants are published:
 
 | Tag | Base | Size | Platforms |
 | --- | --- | --- | --- |
-| `latest`, `0.6.1` | Debian bookworm-slim | ~168 MB | `amd64`, `arm64` |
-| `latest-alpine`, `0.6.1-alpine` | Alpine 3.21 (musl) | ~40 MB | `amd64`, `arm64`, `arm/v7` |
-| `latest-dev`, `0.6.1-dev` | Debian + toolchain | ~1.2 GB | `amd64`, `arm64` |
+| `latest`, `0.7.0` | Debian bookworm-slim | ~168 MB | `amd64`, `arm64` |
+| `latest-alpine`, `0.7.0-alpine` | Alpine 3.21 (musl) | ~40 MB | `amd64`, `arm64`, `arm/v7` |
+| `latest-dev`, `0.7.0-dev` | Debian + toolchain | ~1.2 GB | `amd64`, `arm64` |
 
 The Alpine image is the same server built against musl. Use it to try
 MetalBear out or where image size matters; prefer the Debian one where you
