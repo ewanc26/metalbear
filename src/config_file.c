@@ -242,6 +242,7 @@ wf_status metalbear_config_file_load(const char *path,
         STR ("dns.provider",  dns_provider)
         STR ("dns.api_token", dns_api_token)
         STR ("dns.zone_id",   dns_zone_id)
+        STR ("dns.server",    dns_server)
         INT ("dns.ttl",       dns_record_ttl)
 
         STR ("smtp.host",         smtp_host)

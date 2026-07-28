@@ -183,6 +183,41 @@ The `pdsadmin/metalbear-admin.sh` script mirrors the reference PDS admin tooling
 - Automatic firehose event retention
 - Dynamic landing page at `/` listing hosted accounts and version
 
+### Metrics
+
+`GET /metrics` serves the Prometheus text format, behind the same HTTP Basic
+admin credential as the `com.atproto.admin` endpoints — an open endpoint would
+publish a private host's account count and write rate to anyone who asked.
+
+```yaml
+scrape_configs:
+  - job_name: metalbear
+    basic_auth: { username: admin, password: "..." }
+    static_configs:
+      - targets: ["127.0.0.1:2583"]
+```
+
+Counters cover requests and refusals, accounts created and deleted, sessions
+and login failures, commits sequenced, blobs stored, takedowns applied,
+firehose subscribes and disconnects, and DNS and `requestCrawl` failures.
+Gauges report account counts by status, uptime, and the current firehose
+sequence number.
+
+`metalbear_firehose_seq` is the one worth alerting on. A PDS whose sequence has
+stopped advancing while accounts are still writing is indistinguishable, from
+outside, from a PDS that is down.
+
+### Logging
+
+`METALBEAR_LOG_LEVEL` is `debug`, `info` (default), `warn` or `error`, and
+`METALBEAR_LOG_FILE` a path to append to instead of stderr.
+
+`METALBEAR_LOG_FORMAT=json` emits one JSON object per line — `time`, `level`,
+`service`, `message` — for a collector to parse. Anything else keeps the
+human-readable form, which is what a person watching a terminal wants. The
+daemon's own startup and shutdown messages go through the same path, so a JSON
+stream stays parseable even when the server refuses to start.
+
 ## Install
 
 ### Container
@@ -319,12 +354,50 @@ moved on a handle change, removed on deletion.
 provider  = "cloudflare"
 api_token = "..."   # Zone.DNS:Edit on the zone below
 zone_id   = "..."
+ttl       = 300
 ```
+
+Four providers are supported. `zone_id` is whatever each uses to name the
+zone, and `api_token` a credential that may edit its records:
+
+| `provider` | `zone_id` | `api_token` | Minimum TTL |
+| --- | --- | --- | --- |
+| `cloudflare` | the zone id from the dashboard | API token with `Zone.DNS:Edit` | 60 |
+| `digitalocean` | the domain, e.g. `example.com` | personal access token, write scope | 30 |
+| `desec` | the domain, e.g. `example.com` | account token | 3600 |
+| `rfc2136` | the zone, e.g. `example.com` | TSIG key as `<name>:<base64 secret>` | 1 |
+
+`rfc2136` is the one that is not a vendor. It speaks the dynamic-update
+protocol (RFC 2136, signed per RFC 8945) that the nameservers themselves
+implement, so it covers BIND, Knot, PowerDNS, NSD and anything else
+standards-compliant — including a nameserver you run. It needs one extra
+setting, the server to send updates to:
+
+```toml
+[dns]
+provider  = "rfc2136"
+server    = "ns1.example.com"   # or "ns1.example.com:5353"
+zone_id   = "example.com"
+api_token = "metalbear-key:c2VjcmV0..."
+```
+
+The credential is the same key name and base64 secret that `nsupdate -y`,
+certbot's rfc2136 plugin and a BIND `key` stanza all take. Updates go over TCP
+and are TSIG-signed; the corresponding grant in BIND looks like
+
+```
+update-policy { grant metalbear-key name _atproto.*.example.com. TXT; };
+```
+
+A `ttl` below the provider's floor is raised to it rather than refused: failing
+every write over a number the provider dislikes would take handle resolution
+down for the whole host.
 
 Omit the section and handle resolution stays entirely the operator's business.
 A provider named without credentials is refused at startup rather than accepted:
 a host that mints accounts and silently writes no records is only discovered
-when every handle shows as `handle.invalid`, long after the accounts exist.
+when every handle shows as `handle.invalid`, long after the accounts exist. So
+is a provider name that is not one of the three, for the same reason.
 
 ## Run
 
@@ -439,11 +512,9 @@ PLC directory, and its posts, profile and media appear on the Bluesky AppView.
 
 Still missing or unproven for production use:
 
-- account deletion does not purge that DID's earlier firehose events
-- no metrics or structured operational logging
-- automatic `_atproto` record publication is implemented for Cloudflare only;
-  on any other DNS provider the operator writes one TXT record per account by
-  hand, or handles never resolve
+- the per-route metric table is bounded at 128 routes, after which traffic is
+  counted under `other` rather than by name — enough for the protocol surface,
+  but a host proxying a large AppView surface will spill
 
 ## Frontend
 
