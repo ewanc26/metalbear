@@ -70,9 +70,42 @@ configured admin password:
   directory, and its registry entry
 - `com.atproto.admin.updateSubjectStatus` — apply takedown, deactivation, or
   reactivation status to a repo, record, or blob subject
+- `com.atproto.admin.getSubjectStatus` — read the takedown and deactivation
+  status of a repo, record, or blob subject
 - `com.atproto.admin.updateAccountPassword` — reset an account password (admin)
 - `com.atproto.admin.enableAccountInvites` / `disableAccountInvites` — toggle
   whether an account may create invite codes
+
+## Moderation
+
+`com.atproto.admin.updateSubjectStatus` takes down an **account**, a single
+**record**, or a single **blob**, and lifts the takedown again. A blob is named
+by the DID that holds it as well as by its CID: a CID names content, so two
+accounts uploading identical bytes share one, and a takedown keyed on the CID
+alone would remove the wrong copy.
+
+```sh
+curl -sS -u "admin:$METALBEAR_ADMIN_PASSWORD" -X POST \
+  -H 'Content-Type: application/json' \
+  --data '{"subject":{"$type":"com.atproto.admin.defs#repoRef",
+                      "did":"did:plc:..."},
+           "takedown":{"applied":true,"ref":"report-123"}}' \
+  http://127.0.0.1:2583/xrpc/com.atproto.admin.updateSubjectStatus
+```
+
+Taking an account down revokes every session it holds, refuses new logins with
+`AccountTakedown`, stops its handle resolving, and announces `takendown` on the
+firehose. Its repository answers `RepoTakendown` — deliberately distinct from
+`RepoDeactivated`, since one is this host refusing to serve and the other the
+account holder's own choice, and a relay decides whether to come back on that
+difference. A taken-down record or blob reads as absent, and the blob cannot be
+re-uploaded to undo the takedown. Nothing is erased: a record stays in the
+repository, because removing it would rewrite history and break the commit
+chain, and it is withheld at the point it would be served.
+
+A takedown outranks a deactivation, so an account that is both reports
+`takendown`. Applying a takedown and a reactivation in one call is refused
+rather than resolved arbitrarily.
 
 ## OAuth Authorization Server
 
@@ -406,10 +439,6 @@ PLC directory, and its posts, profile and media appear on the Bluesky AppView.
 
 Still missing or unproven for production use:
 
-- no takedown model, so only `deactivated` and `deleted` account statuses are
-  ever reported
-- `listRepos` paginates on an integer offset rather than a keyset, so concurrent
-  account creation can skip or repeat an entry across pages
 - account deletion does not purge that DID's earlier firehose events
 - no metrics or structured operational logging
 - automatic `_atproto` record publication is implemented for Cloudflare only;

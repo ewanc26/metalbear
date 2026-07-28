@@ -118,6 +118,13 @@ if(METALBEAR_BUILD_TESTS)
         "${METALBEAR_CJSON_SOURCE_DIR}")
     add_test(NAME metalbear_multi_account COMMAND test_metalbear_multi_account)
 
+    add_executable(test_metalbear_takedown test/test_takedown.c)
+    target_link_libraries(test_metalbear_takedown PRIVATE metalbear_core
+        SQLite3::SQLite3)
+    target_include_directories(test_metalbear_takedown PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_takedown COMMAND test_metalbear_takedown)
+
     add_executable(test_metalbear_repo_store test/test_repo_store.c)
     target_link_libraries(test_metalbear_repo_store PRIVATE metalbear_core)
     target_include_directories(test_metalbear_repo_store PRIVATE
