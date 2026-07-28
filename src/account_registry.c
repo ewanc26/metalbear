@@ -261,6 +261,56 @@ wf_status metalbear_account_registry_list(
     return status;
 }
 
+wf_status metalbear_account_registry_list_after(
+    metalbear_account_registry *registry, const char *after, size_t limit,
+    metalbear_account_entry **out_entries, size_t *out_count) {
+    if (!registry || !out_entries || !out_count || limit == 0)
+        return WF_ERR_INVALID_ARG;
+    *out_entries = NULL;
+    *out_count = 0;
+    pthread_mutex_lock(&registry->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_OK;
+    size_t capacity = 0;
+    /*
+     * Ordered and resumed by DID, not by handle: a handle can be changed, and
+     * a page boundary that moves under a client walking the list makes it
+     * skip or repeat accounts. A DID never changes once minted.
+     */
+    if (sqlite3_prepare_v2(registry->db,
+            "SELECT did,handle,password_hash,data_directory,active "
+            "FROM accounts WHERE did > ? ORDER BY did LIMIT ?;",
+            -1, &stmt, NULL) != SQLITE_OK) {
+        status = WF_ERR_INTERNAL;
+    } else {
+        sqlite3_bind_text(stmt, 1, after ? after : "", -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, (sqlite3_int64)limit);
+    }
+    while (status == WF_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        if (*out_count == capacity) {
+            size_t next = capacity ? capacity * 2 : 4;
+            void *resized = realloc(*out_entries,
+                                    next * sizeof(**out_entries));
+            if (!resized) { status = WF_ERR_ALLOC; break; }
+            *out_entries = resized;
+            memset(*out_entries + capacity, 0,
+                   (next - capacity) * sizeof(**out_entries));
+            capacity = next;
+        }
+        metalbear_account_entry *item = &(*out_entries)[*out_count];
+        status = read_entry(stmt, item);
+        if (status == WF_OK) (*out_count)++;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&registry->mutex);
+    if (status != WF_OK) {
+        metalbear_account_entries_free(*out_entries, *out_count);
+        *out_entries = NULL;
+        *out_count = 0;
+    }
+    return status;
+}
+
 wf_status metalbear_account_registry_remove(
     metalbear_account_registry *registry,
     const char *did) {
@@ -502,12 +552,29 @@ wf_status metalbear_account_registry_disable_invite_codes(
     return touched > 0 ? WF_OK : WF_ERR_NOT_FOUND;
 }
 
-static int count_nonnull(const char *a, const char *b, const char *c) {
-    int n = 0;
-    if (a && a[0]) n++;
-    if (b && b[0]) n++;
-    if (c && c[0]) n++;
-    return n;
+/*
+ * A takedown subject is one of three exact shapes: an account (did alone), a
+ * record (uri alone), or a blob (did *and* cid together). The blob shape is
+ * why the row cannot be keyed on a single populated column: a CID identifies
+ * content, not an upload, so the same bytes stored by two accounts are one CID,
+ * and a takedown keyed on the CID alone would remove another account's copy.
+ */
+static bool takedown_subject_valid(const char *did, const char *uri,
+                                   const char *blob_cid) {
+    bool has_did = did && did[0];
+    bool has_uri = uri && uri[0];
+    bool has_cid = blob_cid && blob_cid[0];
+    if (has_uri) return !has_did && !has_cid;
+    if (has_cid) return has_did;
+    return has_did;
+}
+
+/* Bind an empty-or-NULL string as SQL NULL, so `IS ?` matches the stored row. */
+static void bind_text_or_null(sqlite3_stmt *stmt, int index, const char *value) {
+    if (value && value[0])
+        sqlite3_bind_text(stmt, index, value, -1, SQLITE_TRANSIENT);
+    else
+        sqlite3_bind_null(stmt, index);
 }
 
 wf_status metalbear_account_registry_set_takedown(
@@ -515,23 +582,23 @@ wf_status metalbear_account_registry_set_takedown(
     const char *did, const char *uri, const char *blob_cid,
     const char *ref) {
     if (!registry) return WF_ERR_INVALID_ARG;
-    if (count_nonnull(did, uri, blob_cid) != 1)
+    if (!takedown_subject_valid(did, uri, blob_cid))
         return WF_ERR_INVALID_ARG;
     pthread_mutex_lock(&registry->mutex);
-    /* Remove any existing takedown for this subject. */
+    /*
+     * Match the subject on all three columns at once. Matching whichever
+     * column was populated meant an account's blob takedown also carried
+     * `did`, so a lookup for the account itself found the blob's row and
+     * reported the whole repository taken down.
+     */
     sqlite3_stmt *del = NULL;
     if (sqlite3_prepare_v2(registry->db,
             "DELETE FROM subject_takedown WHERE "
-            "((did IS ? AND ? IS NOT NULL) OR "
-            " (uri IS ? AND ? IS NOT NULL) OR "
-            " (blob_cid IS ? AND ? IS NOT NULL));",
+            "did IS ? AND uri IS ? AND blob_cid IS ?;",
             -1, &del, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(del, 1, did, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(del, 2, did, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(del, 3, uri, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(del, 4, uri, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(del, 5, blob_cid, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(del, 6, blob_cid, -1, SQLITE_TRANSIENT);
+        bind_text_or_null(del, 1, did);
+        bind_text_or_null(del, 2, uri);
+        bind_text_or_null(del, 3, blob_cid);
         sqlite3_step(del);
     }
     sqlite3_finalize(del);
@@ -542,9 +609,9 @@ wf_status metalbear_account_registry_set_takedown(
                 "INSERT INTO subject_takedown(did,uri,blob_cid,"
                 "takedown_ref,created_at) VALUES(?,?,?,?,datetime('now'));",
                 -1, &ins, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(ins, 1, did, -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(ins, 2, uri, -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(ins, 3, blob_cid, -1, SQLITE_TRANSIENT);
+            bind_text_or_null(ins, 1, did);
+            bind_text_or_null(ins, 2, uri);
+            bind_text_or_null(ins, 3, blob_cid);
             sqlite3_bind_text(ins, 4, ref, -1, SQLITE_TRANSIENT);
             sqlite3_step(ins);
         }
@@ -560,23 +627,18 @@ wf_status metalbear_account_registry_get_takedown(
     char **out_ref) {
     if (!registry || !out_ref) return WF_ERR_INVALID_ARG;
     *out_ref = NULL;
-    if (count_nonnull(did, uri, blob_cid) != 1)
+    if (!takedown_subject_valid(did, uri, blob_cid))
         return WF_ERR_INVALID_ARG;
     pthread_mutex_lock(&registry->mutex);
     sqlite3_stmt *sel = NULL;
     wf_status status = WF_OK;
     if (sqlite3_prepare_v2(registry->db,
             "SELECT takedown_ref FROM subject_takedown WHERE "
-            "(did IS ? AND ? IS NOT NULL) OR "
-            "(uri IS ? AND ? IS NOT NULL) OR "
-            "(blob_cid IS ? AND ? IS NOT NULL) LIMIT 1;",
+            "did IS ? AND uri IS ? AND blob_cid IS ? LIMIT 1;",
             -1, &sel, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(sel, 1, did, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(sel, 2, did, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(sel, 3, uri, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(sel, 4, uri, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(sel, 5, blob_cid, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(sel, 6, blob_cid, -1, SQLITE_TRANSIENT);
+        bind_text_or_null(sel, 1, did);
+        bind_text_or_null(sel, 2, uri);
+        bind_text_or_null(sel, 3, blob_cid);
         if (sqlite3_step(sel) == SQLITE_ROW) {
             const char *ref = (const char *)sqlite3_column_text(sel, 0);
             *out_ref = ref ? strdup(ref) : NULL;
@@ -585,6 +647,36 @@ wf_status metalbear_account_registry_get_takedown(
         status = WF_ERR_INTERNAL;
     }
     sqlite3_finalize(sel);
+    pthread_mutex_unlock(&registry->mutex);
+    return status;
+}
+
+wf_status metalbear_account_registry_clear_takedowns_for_did(
+    metalbear_account_registry *registry, const char *did) {
+    if (!registry || !did || !did[0]) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&registry->mutex);
+    /*
+     * Records are keyed by their at-URI, whose authority is the DID, so they
+     * are matched by prefix rather than by column. Compared with substr rather
+     * than LIKE because a `did:web` may percent-encode a port, and `%` is
+     * LIKE's own wildcard.
+     */
+    sqlite3_stmt *del = NULL;
+    wf_status status = WF_OK;
+    if (sqlite3_prepare_v2(registry->db,
+            "DELETE FROM subject_takedown WHERE did IS ? "
+            "OR substr(uri, 1, ?) = ?;",
+            -1, &del, NULL) == SQLITE_OK) {
+        char prefix[512];
+        int len = snprintf(prefix, sizeof(prefix), "at://%s/", did);
+        sqlite3_bind_text(del, 1, did, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(del, 2, len);
+        sqlite3_bind_text(del, 3, prefix, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(del) != SQLITE_DONE) status = WF_ERR_INTERNAL;
+    } else {
+        status = WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(del);
     pthread_mutex_unlock(&registry->mutex);
     return status;
 }
