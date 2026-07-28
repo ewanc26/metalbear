@@ -30,6 +30,7 @@
 
 #include "metalbear/server.h"
 #include "wolfram/xrpc.h"
+#include "wolfram/xrpc_server.h"
 
 #include <cJSON.h>
 #include <ftw.h>
@@ -588,14 +589,20 @@ int main(void) {
         /* Four takedowns were applied above: a record, a blob, and the
          * account twice. Lifting one is not an application. */
         CHECK(body_has(&response, "metalbear_takedowns_applied_total 4"));
+#ifdef WF_XRPC_HAS_REQUEST_OBSERVER
         /*
          * Per-route series, including a plain HTTP route. Those have no NSID
          * and never reach the auth callback, so counting there — which is
          * where the totals used to come from — missed them entirely.
+         *
+         * Guarded like the code that produces them: the observer is an
+         * optional Wolfram feature, and asserting on it unconditionally
+         * makes an optional dependency a required one.
          */
         CHECK(body_has(&response, "metalbear_route_requests_total{route=\"com.atproto.sync.getRepo\"}"));
         CHECK(body_has(&response, "metalbear_route_errors_total{route=\"com.atproto.sync.getRepo\"}"));
         CHECK(body_has(&response, "metalbear_route_requests_total{route=\"/metrics\"}"));
+#endif
         wf_response_free(&response);
     }
 
