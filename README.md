@@ -510,11 +510,17 @@ MetalBear federates. A running instance is consumed by Bluesky's relays and by
 several third-party ones, its commits verify against the key published in the
 PLC directory, and its posts, profile and media appear on the Bluesky AppView.
 
-Still missing or unproven for production use:
+Nothing on the list of known gaps is outstanding. The last of them was the
+per-route metric table, which used to stop naming routes once it held 128 of
+them; it now tracks the busiest routes instead, folding the least-used one into
+`other` when it is full, and the limit is configurable up to 1024 via
+`limits.metrics_max_routes`. The table stays bounded on purpose: route names
+reach it from the network, and an unbounded label set is a way to exhaust the
+host's memory.
 
-- the per-route metric table is bounded at 128 routes, after which traffic is
-  counted under `other` rather than by name — enough for the protocol surface,
-  but a host proxying a large AppView surface will spill
+What remains is the work no checklist covers — running against more clients,
+more relays, and more traffic than it has seen. Reports of anything that
+misbehaves are the most useful thing you can send.
 
 ## Frontend
 
@@ -536,8 +542,8 @@ current documentation, but it explains why accounts are arranged as they are.
 ## Sponsor
 
 MetalBear is developed in spare time and given away under the AGPL. If it saved
-you the trouble of running a PDS the hard way, or you would like the missing
-pieces under **Status** to arrive sooner, you can fund the work:
+you the trouble of running a PDS the hard way, or you would like the work under
+**Status** to keep moving, you can fund it:
 
 **→ [github.com/sponsors/ewanc26](https://github.com/sponsors/ewanc26)**
 
