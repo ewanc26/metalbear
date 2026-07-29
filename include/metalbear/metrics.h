@@ -17,6 +17,7 @@
  * than it costs.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -66,12 +67,37 @@ uint64_t metalbear_metrics_get(metalbear_metric metric);
  * enumerated up front, because the set is not fixed — the AppView proxy
  * forwards NSIDs this server has never heard of.
  *
- * The table is bounded. An unbounded label set is how a metrics endpoint
- * becomes the thing that exhausts a host's memory, and an NSID arrives from
- * the network. Requests beyond the bound are still counted, under the name
- * `other`, so the totals stay honest.
+ * The table is bounded, and the bound is not negotiable: an unbounded label
+ * set is how a metrics endpoint becomes the thing that exhausts a host's
+ * memory, and an NSID arrives from the network. The storage is a fixed array
+ * of METALBEAR_METRICS_ROUTE_CEILING rows, sized at compile time, so no
+ * configuration and no traffic pattern can make the table grow.
+ *
+ * Within that ceiling the capacity is what an operator chooses, defaulting to
+ * METALBEAR_METRICS_MAX_ROUTES, and a full table evicts its *least-used* route
+ * rather than freezing. Freezing was the real defect: the first 128 names seen
+ * kept their rows forever, so a route that became hot after startup — which is
+ * to say, the one an operator went looking for — was invisible for the life of
+ * the process, while a burst of junk NSIDs seen during boot held rows on
+ * nothing. Evicting the coldest row is also self-defending: a flood of
+ * one-request names evicts the previous one-request name, never the busy route
+ * beside it.
+ *
+ * Evicted counts, and requests that arrive while the table is at capacity,
+ * are folded into the name `other`, so per-route totals still sum to the
+ * overall request count.
  */
 #define METALBEAR_METRICS_MAX_ROUTES 128
+#define METALBEAR_METRICS_ROUTE_CEILING 1024
+
+/*
+ * Set the number of routes tracked by name. Clamped to
+ * [1, METALBEAR_METRICS_ROUTE_CEILING]; zero restores the default. Lowering it
+ * below the number of rows in use folds the coldest of them into `other`
+ * rather than losing their counts. Called once at startup.
+ */
+void metalbear_metrics_set_max_routes(size_t max_routes);
+size_t metalbear_metrics_max_routes(void);
 
 /* Record one finished request. `nsid` may be NULL for a plain HTTP route, in
  * which case `path` names it. */

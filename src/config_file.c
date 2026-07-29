@@ -221,6 +221,7 @@ wf_status metalbear_config_file_load(const char *path,
         INT ("limits.rate_limit",                rate_limit)
         INT ("limits.rate_limit_window_seconds", rate_limit_window)
         INT ("limits.blob_upload_bytes",         blob_upload_limit)
+        INT ("limits.metrics_max_routes",        metrics_max_routes)
 
         INT ("firehose.retention_max_age_seconds", retention_max_age_seconds)
         INT ("firehose.retention_min_events",      retention_min_events)

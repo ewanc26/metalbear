@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static _Atomic uint64_t counters[METALBEAR_METRIC_COUNT];
@@ -99,13 +100,57 @@ typedef struct route_row {
     uint64_t errors;
 } route_row;
 
-static route_row routes[METALBEAR_METRICS_MAX_ROUTES];
+/*
+ * Storage is a fixed array sized at compile time. The configurable capacity
+ * only ever selects a prefix of it, so however the knob is set — or however
+ * many distinct NSIDs the network invents — this is all the memory per-route
+ * accounting can ever occupy.
+ */
+static route_row routes[METALBEAR_METRICS_ROUTE_CEILING];
 static size_t route_count;
+static size_t route_capacity = METALBEAR_METRICS_MAX_ROUTES;
 static pthread_mutex_t routes_lock = PTHREAD_MUTEX_INITIALIZER;
-/* Requests that arrived after the table filled up. Counted rather than
+/* Counts that are no longer attributed to a name: requests that arrived while
+ * the table was at capacity, and rows evicted to make room. Kept rather than
  * dropped, so the per-route numbers always sum to the total. */
 static uint64_t overflow_requests;
 static uint64_t overflow_errors;
+
+/* Index of the row with the fewest requests. Ties go to the earlier row, which
+ * makes eviction deterministic and therefore testable. Caller holds the lock;
+ * only called with a non-empty table. */
+static size_t coldest_row(void) {
+    size_t cold = 0;
+    for (size_t i = 1; i < route_count; i++)
+        if (routes[i].requests < routes[cold].requests) cold = i;
+    return cold;
+}
+
+/* Fold a row's counts into `other` and remove it, keeping the table dense.
+ * Caller holds the lock. */
+static void evict_row(size_t idx) {
+    overflow_requests += routes[idx].requests;
+    overflow_errors += routes[idx].errors;
+    route_count--;
+    if (idx != route_count) routes[idx] = routes[route_count];
+}
+
+void metalbear_metrics_set_max_routes(size_t max_routes) {
+    if (max_routes == 0) max_routes = METALBEAR_METRICS_MAX_ROUTES;
+    if (max_routes > METALBEAR_METRICS_ROUTE_CEILING)
+        max_routes = METALBEAR_METRICS_ROUTE_CEILING;
+    pthread_mutex_lock(&routes_lock);
+    route_capacity = max_routes;
+    while (route_count > route_capacity) evict_row(coldest_row());
+    pthread_mutex_unlock(&routes_lock);
+}
+
+size_t metalbear_metrics_max_routes(void) {
+    pthread_mutex_lock(&routes_lock);
+    size_t n = route_capacity;
+    pthread_mutex_unlock(&routes_lock);
+    return n;
+}
 
 void metalbear_metrics_record_request(const char *nsid, const char *path,
                                       unsigned int status) {
@@ -122,12 +167,24 @@ void metalbear_metrics_record_request(const char *nsid, const char *path,
             return;
         }
     }
-    if (route_count < METALBEAR_METRICS_MAX_ROUTES) {
+    /*
+     * A new name and no room. Give the row to the least-used route instead of
+     * refusing every name after the first `capacity` of them: the table then
+     * keeps tracking whatever is actually busy, and an attacker cannot displace
+     * a hot route with junk, because the coldest row is by definition one of
+     * the junk names already there. The displaced counts move to `other`, so
+     * nothing is lost from the totals — only from attribution.
+     */
+    if (route_count >= route_capacity && route_count > 0)
+        evict_row(coldest_row());
+    if (route_count < route_capacity) {
         route_row *row = &routes[route_count++];
         snprintf(row->name, sizeof(row->name), "%s", name);
         row->requests = 1;
         row->errors = is_error ? 1 : 0;
     } else {
+        /* capacity 0 is impossible (clamped to >= 1), but keep the totals
+         * honest rather than assume it. */
         overflow_requests++;
         if (is_error) overflow_errors++;
     }
@@ -141,19 +198,35 @@ void metalbear_metrics_visit_routes(metalbear_metrics_route_visitor visit,
      * Copied out under the lock and visited outside it. The visitor formats
      * into a growing buffer, and holding a lock the request path needs across
      * an allocation is how a scrape starts blocking writes.
+     *
+     * The copy is on the heap: the table can be configured up to the ceiling,
+     * and a snapshot of that size is more than a worker thread's stack should
+     * be asked to hold. If the allocation fails the scrape visits under the
+     * lock instead — a slower scrape beats a silent one.
      */
-    route_row snapshot[METALBEAR_METRICS_MAX_ROUTES];
     size_t count;
     uint64_t spilled_requests, spilled_errors;
     pthread_mutex_lock(&routes_lock);
     count = route_count;
-    memcpy(snapshot, routes, count * sizeof(route_row));
+    route_row *snapshot = count ? malloc(count * sizeof(route_row)) : NULL;
+    if (count && !snapshot) {
+        for (size_t i = 0; i < count; i++)
+            visit(ctx, routes[i].name, routes[i].requests, routes[i].errors);
+        spilled_requests = overflow_requests;
+        spilled_errors = overflow_errors;
+        pthread_mutex_unlock(&routes_lock);
+        if (spilled_requests)
+            visit(ctx, "other", spilled_requests, spilled_errors);
+        return;
+    }
+    if (count) memcpy(snapshot, routes, count * sizeof(route_row));
     spilled_requests = overflow_requests;
     spilled_errors = overflow_errors;
     pthread_mutex_unlock(&routes_lock);
 
     for (size_t i = 0; i < count; i++)
         visit(ctx, snapshot[i].name, snapshot[i].requests, snapshot[i].errors);
+    free(snapshot);
     if (spilled_requests) visit(ctx, "other", spilled_requests, spilled_errors);
 }
 

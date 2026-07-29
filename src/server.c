@@ -7022,6 +7022,8 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         crawler_notify_seconds = (time_t)config->crawl_notify_seconds;
     if (config->firehose_ping_seconds > 0)
         metalbear_sequencer_set_ping_seconds(config->firehose_ping_seconds);
+    if (config->metrics_max_routes > 0)
+        metalbear_metrics_set_max_routes((size_t)config->metrics_max_routes);
 
     /* Per-client request budget, configurable; 100 per 60s by default. */
     {

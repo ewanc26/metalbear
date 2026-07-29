@@ -68,6 +68,13 @@ rate_limit_window_seconds = 60
 # disk-exhaustion lever; the reference uses 5 MB.
 blob_upload_bytes = 5242880
 
+# How many routes /metrics reports by name. The table is a fixed array, because
+# route names arrive from the network and an unbounded label set exhausts the
+# host's memory; this only chooses how much of that fixed budget to spend, up
+# to a hard ceiling of 1024. Beyond the limit the least-used route is folded
+# into `other`, so the busiest routes stay named and the totals stay exact.
+metrics_max_routes = 128
+
 [firehose]
 # Relays told about new data via requestCrawl on write. Without any, a quiet
 # host is never crawled and never federates.

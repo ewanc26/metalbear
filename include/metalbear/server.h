@@ -80,6 +80,15 @@ typedef struct metalbear_config {
     int64_t crawl_notify_seconds;
     int64_t firehose_ping_seconds;
     /*
+     * How many routes `GET /metrics` reports by name before the least-used one
+     * is folded into `other`. Zero uses METALBEAR_METRICS_MAX_ROUTES, and
+     * anything above METALBEAR_METRICS_ROUTE_CEILING is clamped to it — the
+     * table is a fixed array, and route names arrive from the network, so this
+     * chooses how much of a bounded budget to spend, never whether to have one.
+     * A host proxying a wide AppView surface will want it higher.
+     */
+    int64_t metrics_max_routes;
+    /*
      * Who runs this instance, and what to say about it.
      *
      * `contact_email` and the two policy links are the fields

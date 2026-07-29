@@ -253,6 +253,7 @@ int main(int argc, char **argv) {
     ENV_I64("METALBEAR_RETENTION_MAX_AGE",       retention_max_age_seconds);
     ENV_I64("METALBEAR_RETENTION_MIN_EVENTS",    retention_min_events);
     ENV_I64("METALBEAR_DNS_TTL",                 dns_record_ttl);
+    ENV_I64("METALBEAR_METRICS_MAX_ROUTES",      metrics_max_routes);
     #undef ENV_STR
     #undef ENV_I64
 

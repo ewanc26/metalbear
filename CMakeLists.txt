@@ -151,6 +151,10 @@ if(METALBEAR_BUILD_TESTS)
     add_test(NAME metalbear_repo_store_resolver
         COMMAND test_metalbear_repo_store_resolver)
 
+    add_executable(test_metalbear_metrics test/test_metrics.c)
+    target_link_libraries(test_metalbear_metrics PRIVATE metalbear_core)
+    add_test(NAME metalbear_metrics COMMAND test_metalbear_metrics)
+
     add_executable(test_metalbear_blob_store test/test_blob_store.c)
     target_link_libraries(test_metalbear_blob_store PRIVATE metalbear_core)
     target_include_directories(test_metalbear_blob_store PRIVATE
