@@ -942,6 +942,185 @@ static int run_server(void) {
     return failures;
 }
 
+/*
+ * The write endpoints' error names, over HTTP.
+ *
+ * `com.atproto.repo.{create,put,delete}Record` and `applyWrites` each declare
+ * exactly ONE error in the lexicon: `InvalidSwap`. Everything else the
+ * reference PDS reports is a plain `InvalidRequest` whose *message* carries
+ * the detail — its InvalidRecordError / InvalidRecordKeyError are internal
+ * TypeScript classes converted to InvalidRequestError(err.message), and
+ * `InvalidRecordKey`, `InvalidRecord` and `TooManyWrites` appear nowhere in
+ * the lexicon corpus. These assertions pin both halves of that: the generic
+ * name, and the specific message, so nobody "upgrades" the name to an
+ * invented one that no client can match on.
+ */
+static void expect_xrpc_error(const wf_response *res, const char *want_error,
+                              const char *want_message) {
+    cJSON *root = cJSON_ParseWithLength(res->body, res->body_len);
+    cJSON *err = root ? cJSON_GetObjectItemCaseSensitive(root, "error") : NULL;
+    cJSON *msg = root ? cJSON_GetObjectItemCaseSensitive(root, "message") : NULL;
+    int ok = res->status == 400 && cJSON_IsString(err) && cJSON_IsString(msg) &&
+             strcmp(err->valuestring, want_error) == 0 &&
+             strcmp(msg->valuestring, want_message) == 0;
+    if (!ok)
+        fprintf(stderr,
+                "  wanted 400 %s / \"%s\", got %ld %s / \"%s\"\n",
+                want_error, want_message, (long)res->status,
+                cJSON_IsString(err) ? err->valuestring : "(none)",
+                cJSON_IsString(msg) ? msg->valuestring : "(none)");
+    WF_CHECK(ok);
+    cJSON_Delete(root);
+}
+
+static int run_write_error_names(void) {
+    int failures = 0;
+    char path[256];
+    temp_path(path, sizeof(path), "errnames");
+
+    metalbear_repo_store *store = NULL;
+    wf_status s = metalbear_repo_store_open(path, "did:plc:errnames",
+                                            "err.example.com", &store);
+    WF_CHECK(s == WF_OK && store != NULL);
+    if (s != WF_OK || !store) {
+        unlink(path);
+        return failures + 1;
+    }
+
+    wf_xrpc_server *server = wf_xrpc_server_start("127.0.0.1", 0, 1);
+    WF_CHECK(server != NULL);
+    if (!server) {
+        metalbear_repo_store_free(store);
+        unlink(path);
+        return failures + 1;
+    }
+    WF_CHECK(metalbear_xrpc_server_register_pds_repo(server, store, NULL,
+                                                     NULL) == WF_OK);
+    char base[64];
+    snprintf(base, sizeof(base), "http://127.0.0.1:%u",
+             (unsigned)wf_xrpc_server_port(server));
+    wf_xrpc_client *client = wf_xrpc_client_new(base);
+    WF_CHECK(client != NULL);
+
+    wf_response res = {0};
+
+    /* createRecord, malformed record key. */
+    s = wf_xrpc_procedure(
+        client, "com.atproto.repo.createRecord",
+        "{\"repo\":\"did:plc:errnames\",\"collection\":\"com.example.posts\","
+        "\"rkey\":\"bad key\",\"record\":{\"text\":\"x\"}}", &res);
+    WF_CHECK(s == WF_ERR_HTTP);
+    expect_xrpc_error(&res, "InvalidRequest", "Invalid record key: bad key");
+    wf_response_free(&res);
+
+    /* createRecord, $type disagreeing with the collection. */
+    s = wf_xrpc_procedure(
+        client, "com.atproto.repo.createRecord",
+        "{\"repo\":\"did:plc:errnames\",\"collection\":\"com.example.posts\","
+        "\"record\":{\"$type\":\"com.example.other\",\"text\":\"x\"}}", &res);
+    WF_CHECK(s == WF_ERR_HTTP);
+    expect_xrpc_error(&res, "InvalidRequest",
+                      "Invalid $type: expected com.example.posts, got "
+                      "com.example.other");
+    wf_response_free(&res);
+
+    /* Same, with validate:false. The reference checks $type in prepareWrite,
+     * outside the part validate:false skips, so the specific message must
+     * still come back rather than a bare "record creation failed". */
+    s = wf_xrpc_procedure(
+        client, "com.atproto.repo.createRecord",
+        "{\"repo\":\"did:plc:errnames\",\"collection\":\"com.example.posts\","
+        "\"validate\":false,"
+        "\"record\":{\"$type\":\"com.example.other\",\"text\":\"x\"}}", &res);
+    WF_CHECK(s == WF_ERR_HTTP);
+    expect_xrpc_error(&res, "InvalidRequest",
+                      "Invalid $type: expected com.example.posts, got "
+                      "com.example.other");
+    wf_response_free(&res);
+
+    /* putRecord, malformed record key. */
+    s = wf_xrpc_procedure(
+        client, "com.atproto.repo.putRecord",
+        "{\"repo\":\"did:plc:errnames\",\"collection\":\"com.example.posts\","
+        "\"rkey\":\"bad/key\",\"record\":{\"text\":\"x\"}}", &res);
+    WF_CHECK(s == WF_ERR_HTTP);
+    expect_xrpc_error(&res, "InvalidRequest", "Invalid record key: bad/key");
+    wf_response_free(&res);
+
+    /* deleteRecord, malformed record key: previously answered "record could
+     * not be deleted", which told the client nothing about what was wrong. */
+    s = wf_xrpc_procedure(
+        client, "com.atproto.repo.deleteRecord",
+        "{\"repo\":\"did:plc:errnames\",\"collection\":\"com.example.posts\","
+        "\"rkey\":\"bad key\"}", &res);
+    WF_CHECK(s == WF_ERR_HTTP);
+    expect_xrpc_error(&res, "InvalidRequest", "Invalid record key: bad key");
+    wf_response_free(&res);
+
+    /* applyWrites, malformed record key inside one write. */
+    s = wf_xrpc_procedure(
+        client, "com.atproto.repo.applyWrites",
+        "{\"repo\":\"did:plc:errnames\",\"writes\":[{"
+        "\"$type\":\"com.atproto.repo.applyWrites#create\","
+        "\"collection\":\"com.example.posts\",\"rkey\":\"bad key\","
+        "\"value\":{\"text\":\"x\"}}]}", &res);
+    WF_CHECK(s == WF_ERR_HTTP);
+    expect_xrpc_error(&res, "InvalidRequest", "Invalid record key: bad key");
+    wf_response_free(&res);
+
+    /* applyWrites, $type disagreeing with the collection. */
+    s = wf_xrpc_procedure(
+        client, "com.atproto.repo.applyWrites",
+        "{\"repo\":\"did:plc:errnames\",\"writes\":[{"
+        "\"$type\":\"com.atproto.repo.applyWrites#create\","
+        "\"collection\":\"com.example.posts\","
+        "\"value\":{\"$type\":\"com.example.other\",\"text\":\"x\"}}]}", &res);
+    WF_CHECK(s == WF_ERR_HTTP);
+    expect_xrpc_error(&res, "InvalidRequest",
+                      "Invalid $type: expected com.example.posts, got "
+                      "com.example.other");
+    wf_response_free(&res);
+
+    /* applyWrites, batch over the 200-write cap. */
+    size_t cap = 201;
+    const char *one =
+        "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+        "\"collection\":\"com.example.posts\",\"value\":{\"text\":\"x\"}}";
+    size_t body_cap = 64 + cap * (strlen(one) + 1);
+    char *big = malloc(body_cap);
+    WF_CHECK(big != NULL);
+    if (big) {
+        size_t n = (size_t)snprintf(big, body_cap,
+                                    "{\"repo\":\"did:plc:errnames\",\"writes\":[");
+        for (size_t i = 0; i < cap; i++)
+            n += (size_t)snprintf(big + n, body_cap - n, "%s%s",
+                                  i ? "," : "", one);
+        snprintf(big + n, body_cap - n, "]}");
+        s = wf_xrpc_procedure(client, "com.atproto.repo.applyWrites", big, &res);
+        free(big);
+        WF_CHECK(s == WF_ERR_HTTP);
+        expect_xrpc_error(&res, "InvalidRequest", "Too many writes. Max: 200");
+        wf_response_free(&res);
+    }
+
+    /* The one name the lexicon DOES define still comes back as itself. */
+    s = wf_xrpc_procedure(
+        client, "com.atproto.repo.createRecord",
+        "{\"repo\":\"did:plc:errnames\",\"collection\":\"com.example.posts\","
+        "\"swapCommit\":\"bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
+        "\"record\":{\"text\":\"x\"}}", &res);
+    WF_CHECK(s == WF_ERR_HTTP);
+    expect_xrpc_error(&res, "InvalidSwap",
+                      "swap CID did not match current value");
+    wf_response_free(&res);
+
+    wf_xrpc_client_free(client);
+    wf_xrpc_server_free(server);
+    metalbear_repo_store_free(store);
+    unlink(path);
+    return failures;
+}
+
 int main(void) {
     run_unit();
     run_records_since_rev();
@@ -949,5 +1128,6 @@ int main(void) {
     run_adopted_key();
     run_did_immutability();
     run_server();
+    run_write_error_names();
     WF_TEST_SUMMARY();
 }

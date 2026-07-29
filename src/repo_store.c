@@ -1043,19 +1043,30 @@ wf_status metalbear_repo_store_create_record(metalbear_repo_store *s, const char
     *out_uri = NULL;
     *out_cid = NULL;
 
-    /* (c) record-key validation (atproto charset/length rules). */
+    /* (c) record-key validation (atproto charset/length rules).
+     *
+     * The generic status is correct: `com.atproto.repo.createRecord` declares
+     * exactly one error, `InvalidSwap`, and the reference converts its internal
+     * InvalidRecordKeyError into a plain InvalidRequestError carrying the
+     * message. There is no `InvalidRecordKey` name in the lexicons, so a client
+     * could not branch on one. The detail belongs in the message, which
+     * `check_rkey` in the route handler supplies as "Invalid record key:
+     * <rkey>" before the request ever reaches here. */
     char rkey_buf[16];
     const char *rkey = rkey_or_null;
     if (!rkey || !*rkey) {
         if (wf_tid_now(rkey_buf) != WF_OK) return WF_ERR_INVALID_ARG;
         rkey = rkey_buf;
     } else if (!wf_syntax_record_key_is_valid(rkey)) {
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns InvalidRecordKey */
+        return WF_ERR_INVALID_ARG;
     }
 
-    /* (b) $type, when present, must equal the target collection. */
+    /* (b) $type, when present, must equal the target collection. Same story:
+     * the reference raises InvalidRecordError and reports it as InvalidRequest
+     * with "Invalid $type: expected <x>, got <y>", which `check_record`
+     * produces for HTTP callers. `InvalidRecord` is not a lexicon name. */
     if (!record_type_matches(record_json, collection))
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns InvalidRecord */
+        return WF_ERR_INVALID_ARG;
 
     /* (a) CAS: swapCommit must match the current repo head (if supplied). */
     char *head = head_cid_string(s);
@@ -1104,13 +1115,16 @@ wf_status metalbear_repo_store_put_record(metalbear_repo_store *s, const char *c
     *out_uri = NULL;
     *out_cid = NULL;
 
-    /* (c) record-key validation (atproto charset/length rules). */
+    /* (c) record-key validation. `putRecord` declares only `InvalidSwap`, so
+     * the generic status is right; `check_rkey` names the offending key in the
+     * message. See create_record above. */
     if (!wf_syntax_record_key_is_valid(rkey))
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns InvalidRecordKey */
+        return WF_ERR_INVALID_ARG;
 
-    /* (b) $type, when present, must equal the target collection. */
+    /* (b) $type, when present, must equal the target collection; reported as
+     * "Invalid $type: expected <x>, got <y>" by `check_record`. */
     if (!record_type_matches(record_json, collection))
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns InvalidRecord */
+        return WF_ERR_INVALID_ARG;
 
     /* Detect whether the record already exists. */
     unsigned char *existing = NULL;
@@ -1181,9 +1195,11 @@ wf_status metalbear_repo_store_delete_record(metalbear_repo_store *s, const char
     if (!s || !collection || !*collection || !rkey || !*rkey)
         return WF_ERR_INVALID_ARG;
 
-    /* (c) record-key validation (atproto charset/length rules). */
+    /* (c) record-key validation. `deleteRecord` declares only `InvalidSwap`,
+     * so the generic status is right; `check_rkey` names the offending key in
+     * the message. See create_record above. */
     if (!wf_syntax_record_key_is_valid(rkey))
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns InvalidRecordKey */
+        return WF_ERR_INVALID_ARG;
     if (s->head.len == 0) return WF_ERR_NOT_FOUND;
 
     unsigned char *existing = NULL;
@@ -1278,10 +1294,14 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
     free(head);
     if (st != WF_OK) { cJSON_Delete(root); return st; }
 
-    /* (g) cap batch size at 200 writes (mirrors atproto's limit). */
+    /* (g) cap batch size at 200 writes (mirrors atproto's limit). The
+     * reference raises a plain InvalidRequestError('Too many writes. Max:
+     * 200') — `applyWrites` declares only `InvalidSwap`, and there is no
+     * `TooManyWrites` name anywhere in the lexicons. The route handler emits
+     * that exact message before calling in here. */
     if (cJSON_GetArraySize(root) > 200) {
         cJSON_Delete(root);
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns TooManyWrites */
+        return WF_ERR_INVALID_ARG;
     }
 
     cJSON *results = cJSON_CreateArray();
@@ -1340,8 +1360,11 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
             if (wf_tid_now(tid) != WF_OK) { st = WF_ERR_INTERNAL; goto done; }
             rkeys[staged] = strdup(tid);
         } else {
+            /* Generic status, precise message: the handler runs `check_rkey`
+             * over every write first and answers "Invalid record key: <rkey>".
+             * `InvalidRecordKey` is not a name applyWrites declares. */
             if (!wf_syntax_record_key_is_valid(rkey)) {
-                st = WF_ERR_INVALID_ARG; /* TODO: atproto InvalidRecordKey */
+                st = WF_ERR_INVALID_ARG;
                 goto done;
             }
             rkeys[staged] = strdup(rkey);
@@ -1357,9 +1380,12 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
             if (!val) { st = WF_ERR_INVALID_ARG; goto done; }
             char *rec_json = cJSON_PrintUnformatted(val);
             if (!rec_json) { st = WF_ERR_ALLOC; goto done; }
+            /* Likewise: `check_record` has already answered "Invalid $type:
+             * expected <x>, got <y>" for HTTP callers, and `InvalidRecord` is
+             * not a lexicon-defined name. */
             if (!record_type_matches(rec_json, collections[staged])) {
                 free(rec_json);
-                st = WF_ERR_INVALID_ARG; /* TODO: atproto InvalidRecord */
+                st = WF_ERR_INVALID_ARG;
                 goto done;
             }
             values[staged] = rec_json;
@@ -1675,7 +1701,7 @@ static bool query_param_bool(const cJSON *params, const char *name,
  * Run a write's record through the lexicon corpus and report the outcome the
  * way the reference PDS does.
  *
- * Returns 0 and writes an `InvalidRecord` response when the record has a
+ * Returns 0 and writes an `InvalidRequest` response when the record has a
  * schema and violates it, or when the caller passed validate:true for a
  * collection with no schema. Returns 1 to continue, with *out_status set to
  * the value that belongs in the response's validationStatus and *out_report
@@ -1696,9 +1722,12 @@ static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
 
     *out_status = METALBEAR_VALIDATION_UNKNOWN;
     *out_report = !explicit_off;
-    if (explicit_off) return 1;
 
-    /* The $type, when present, must name the collection being written to. */
+    /* The $type, when present, must name the collection being written to.
+     * This is checked BEFORE honouring validate:false, because the reference
+     * does it in prepareWrite — outside validateRecord, which is the only part
+     * validate:false skips. Gating it on validation left the store's own
+     * $type guard to reject the write with nothing but a generic message. */
     cJSON *parsed = cJSON_Parse(record_json);
     cJSON *type = parsed
         ? cJSON_GetObjectItemCaseSensitive(parsed, "$type") : NULL;
@@ -1712,6 +1741,8 @@ static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
         return 0;
     }
     cJSON_Delete(parsed);
+
+    if (explicit_off) return 1;
 
     /* The reference reports every record problem as a plain InvalidRequest
      * carrying a descriptive message — its InvalidRecordError is an internal
@@ -1925,6 +1956,10 @@ static wf_status h_delete_record(void *ctx, const wf_xrpc_request *req,
                                     "collection and rkey required");
         return WF_OK;
     }
+    /* A malformed rkey is rejected here rather than deep in the store, so the
+     * client is told which key was rejected instead of "record could not be
+     * deleted". */
+    if (!check_rkey(rkey, resp)) return WF_OK;
     const char *swap_str = (swap && cJSON_IsString(swap)) ? swap->valuestring
                                                          : NULL;
     const char *swaprec_str = (swapRec && cJSON_IsString(swapRec))
