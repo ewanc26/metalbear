@@ -54,7 +54,7 @@ static wf_status token_hash(const char *token, unsigned char out[32]) {
 static void prune(metalbear_oauth_store *store, int64_t now) {
     sqlite3_stmt *stmt = NULL;
     static const char *const tables[] = {"oauth_par", "oauth_code",
-                                         "oauth_refresh"};
+                                         "oauth_refresh", "device_session"};
     for (size_t i = 0; i < sizeof(tables) / sizeof(tables[0]); i++) {
         char sql[96];
         int length = snprintf(sql, sizeof(sql),
@@ -200,9 +200,13 @@ wf_status metalbear_oauth_store_open(const char *path, const char *issuer,
             "CREATE TABLE IF NOT EXISTS oauth_refresh("
             "token_hash BLOB PRIMARY KEY,client_id TEXT NOT NULL,scope TEXT NOT NULL,"
             "dpop_jkt TEXT NOT NULL,subject TEXT NOT NULL,expires_at INTEGER NOT NULL);"
+            "CREATE TABLE IF NOT EXISTS device_session("
+            "token_hash BLOB PRIMARY KEY,subject TEXT NOT NULL,"
+            "expires_at INTEGER NOT NULL);"
             "CREATE INDEX IF NOT EXISTS oauth_par_expiry ON oauth_par(expires_at);"
             "CREATE INDEX IF NOT EXISTS oauth_code_expiry ON oauth_code(expires_at);"
-            "CREATE INDEX IF NOT EXISTS oauth_refresh_expiry ON oauth_refresh(expires_at);") != WF_OK ||
+            "CREATE INDEX IF NOT EXISTS oauth_refresh_expiry ON oauth_refresh(expires_at);"
+            "CREATE INDEX IF NOT EXISTS device_session_expiry ON device_session(expires_at);") != WF_OK ||
         load_or_create_key(store) != WF_OK ||
         wf_oauth_trusted_keys_new(&store->trusted_keys) != WF_OK ||
         wf_oauth_dpop_replay_cache_new(&store->replay) != WF_OK)
@@ -618,4 +622,99 @@ wf_status metalbear_oauth_verify_request(
         return WF_ERR_PERMISSION;
     }
     return WF_OK;
+}
+
+/* ── Device sessions ──────────────────────────────────────────────────── */
+
+wf_status metalbear_oauth_device_session_create(metalbear_oauth_store *store,
+                                                const char *subject,
+                                                char **out_token) {
+    if (!store || !subject || !subject[0] || !out_token)
+        return WF_ERR_INVALID_ARG;
+    *out_token = NULL;
+    char *token = NULL;
+    wf_status status = random_value(32, &token);
+    if (status != WF_OK) return status;
+    unsigned char hash[32];
+    if (token_hash(token, hash) != WF_OK) {
+        free(token);
+        return WF_ERR_CRYPTO;
+    }
+    int64_t expires_at =
+        (int64_t)time(NULL) + METALBEAR_DEVICE_SESSION_LIFETIME_SECONDS;
+
+    pthread_mutex_lock(&store->mutex);
+    prune(store, (int64_t)time(NULL));
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+            "INSERT INTO device_session(token_hash,subject,expires_at) "
+            "VALUES(?,?,?);", -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_blob(stmt, 1, hash, sizeof(hash), SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, subject, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 3, expires_at);
+        status = sqlite3_step(stmt) == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
+    } else {
+        status = WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+
+    if (status != WF_OK) {
+        free(token);
+        return status;
+    }
+    *out_token = token;
+    return WF_OK;
+}
+
+wf_status metalbear_oauth_device_session_verify(metalbear_oauth_store *store,
+                                                const char *token, char *out,
+                                                size_t out_len) {
+    if (!store || !out || out_len == 0) return WF_ERR_INVALID_ARG;
+    out[0] = '\0';
+    if (!token || !token[0]) return WF_ERR_NOT_FOUND;
+    unsigned char hash[32];
+    if (token_hash(token, hash) != WF_OK) return WF_ERR_CRYPTO;
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_NOT_FOUND;
+    if (sqlite3_prepare_v2(store->db,
+            "SELECT subject FROM device_session "
+            "WHERE token_hash=? AND expires_at>?;", -1, &stmt,
+            NULL) == SQLITE_OK) {
+        sqlite3_bind_blob(stmt, 1, hash, sizeof(hash), SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, (int64_t)time(NULL));
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *subject = (const char *)sqlite3_column_text(stmt, 0);
+            if (subject) {
+                snprintf(out, out_len, "%s", subject);
+                status = WF_OK;
+            }
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status metalbear_oauth_device_session_revoke(metalbear_oauth_store *store,
+                                                const char *token) {
+    if (!store) return WF_ERR_INVALID_ARG;
+    if (!token || !token[0]) return WF_OK;   /* nothing to revoke */
+    unsigned char hash[32];
+    if (token_hash(token, hash) != WF_OK) return WF_ERR_CRYPTO;
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db,
+            "DELETE FROM device_session WHERE token_hash=?;", -1, &stmt,
+            NULL) == SQLITE_OK) {
+        sqlite3_bind_blob(stmt, 1, hash, sizeof(hash), SQLITE_TRANSIENT);
+        status = sqlite3_step(stmt) == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
 }
