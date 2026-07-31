@@ -60,6 +60,11 @@ the same way.
 - Reuse Wolfram primitives and server infrastructure. Do not copy Wolfram code into this repository or hand-roll cryptography.
 - Keep authentication, repository ownership, persistence, and protocol errors explicit. Never return fabricated success for an unfinished endpoint.
 - Never commit secrets, live credentials, signing keys, or PDS data.
+- C++ is permitted only when wrapping a third-party library that exposes no C
+  ABI. Use `extern "C"` for any wrapper so the rest of the codebase never
+  depends on C++ headers or types. Where a C library equivalent is available
+  (e.g. libsodium vs. OpenSSL), prefer the C one so the codebase stays
+  uniformly compilable without a C++ compiler.
 
 ## Endpoint correctness
 
