@@ -93,6 +93,58 @@ int main(void) {
     free(code);
     free(redirect_uri);
     free(state);
+
+    /* Device sessions: the storage layer /oauth/authorize's gate depends on. */
+    {
+        char *token = NULL;
+        CHECK(metalbear_oauth_device_session_create(
+                  store, "did:plc:alice", &token) == WF_OK);
+        CHECK(token && token[0]);
+
+        char subject[256];
+        CHECK(metalbear_oauth_device_session_verify(
+                  store, token, subject, sizeof(subject)) == WF_OK);
+        CHECK(strcmp(subject, "did:plc:alice") == 0);
+
+        /* A token that never existed, and a token that did but was for a
+         * different subject entirely, must not be confused with each other —
+         * both simply fail. */
+        CHECK(metalbear_oauth_device_session_verify(
+                  store, "not-a-real-token", subject,
+                  sizeof(subject)) == WF_ERR_NOT_FOUND);
+        CHECK(metalbear_oauth_device_session_verify(
+                  store, NULL, subject, sizeof(subject)) == WF_ERR_NOT_FOUND);
+
+        /* Revoking clears it; the same token then verifies as absent, not as
+         * still valid for whoever it used to name. */
+        CHECK(metalbear_oauth_device_session_revoke(store, token) == WF_OK);
+        CHECK(metalbear_oauth_device_session_verify(
+                  store, token, subject, sizeof(subject)) ==
+              WF_ERR_NOT_FOUND);
+
+        /* Revoking a token that is already gone is success, not an error:
+         * the desired end state (signed out) already holds. */
+        CHECK(metalbear_oauth_device_session_revoke(store, token) == WF_OK);
+        CHECK(metalbear_oauth_device_session_revoke(store, "never-issued") ==
+              WF_OK);
+
+        /* Two accounts hold independent sessions; revoking one must not
+         * touch the other's. */
+        char *token_a = NULL, *token_b = NULL;
+        CHECK(metalbear_oauth_device_session_create(
+                  store, "did:plc:a", &token_a) == WF_OK);
+        CHECK(metalbear_oauth_device_session_create(
+                  store, "did:plc:b", &token_b) == WF_OK);
+        CHECK(metalbear_oauth_device_session_revoke(store, token_a) == WF_OK);
+        CHECK(metalbear_oauth_device_session_verify(
+                  store, token_b, subject, sizeof(subject)) == WF_OK);
+        CHECK(strcmp(subject, "did:plc:b") == 0);
+
+        free(token);
+        free(token_a);
+        free(token_b);
+    }
+
     metalbear_oauth_store_free(store);
     unlink(path);
     char sidecar[256];

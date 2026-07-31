@@ -84,6 +84,42 @@ wf_status metalbear_oauth_verify_request(
     const char *dpop_proof, const char *method, const char *uri,
     wf_oauth_verified_token **out);
 
+/*
+ * A device session: proof, held by a browser as a cookie, that this browser
+ * has already presented an account password once. `/oauth/authorize` is a
+ * plain page navigation with no Authorization header, so this is what a
+ * bearer token is everywhere else — the thing that lets the endpoint tell an
+ * authenticated browser apart from anyone who merely knows a handle.
+ *
+ * Deliberately outside the account/app-password credential system: a device
+ * session is bearer-by-cookie rather than bearer-by-header, lives 30 days,
+ * and is revoked by name rather than rotated. Folding it into
+ * metalbear_auth_store would give the browser session the refresh-rotation
+ * semantics an API client needs and a browser cookie does not.
+ */
+#define METALBEAR_DEVICE_SESSION_LIFETIME_SECONDS (30 * 24 * 60 * 60)
+
+/* Create a device session for `subject` (an account DID). *out_token is a
+ * caller-owned opaque bearer value; store it only as a cookie, never log or
+ * echo it. */
+wf_status metalbear_oauth_device_session_create(metalbear_oauth_store *store,
+                                                const char *subject,
+                                                char **out_token);
+
+/*
+ * Resolve a device session token to the account DID it was issued for.
+ * Writes into `out` (caller-supplied buffer) and returns WF_OK, or
+ * WF_ERR_NOT_FOUND if the token is unknown, expired, or NULL.
+ */
+wf_status metalbear_oauth_device_session_verify(metalbear_oauth_store *store,
+                                                const char *token, char *out,
+                                                size_t out_len);
+
+/* Revoke a device session. Revoking an unknown or already-expired token is
+ * WF_OK: the desired state — signed out — already holds. */
+wf_status metalbear_oauth_device_session_revoke(metalbear_oauth_store *store,
+                                                const char *token);
+
 #ifdef __cplusplus
 }
 #endif
