@@ -1,6 +1,10 @@
 # MetalBear agent guidance
 
-MetalBear is a pure C11 AT Protocol PDS built on the sibling Wolfram SDK. It provides a runnable PDS foundation, supporting multi-account hosting.
+MetalBear is a C11-first AT Protocol PDS built on the sibling Wolfram SDK.
+
+The project is implemented primarily in C11. C++ is permitted only as an internal implementation detail for integrating external libraries where there is a clear technical benefit. Public headers, exported APIs, protocol handlers, and the core server architecture remain C11. C++ components must expose a C ABI (`extern "C"` where required), and exceptions must never cross the C/C++ boundary. Do not introduce C++ into the wider codebase without a compelling justification.
+
+It provides a runnable PDS foundation, supporting multi-account hosting.
 
 ## Read first and architecture
 
