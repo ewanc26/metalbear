@@ -1,11 +1,14 @@
 /*
- * Read-only client for the PDS this page is served from.
+ * Client for the PDS this page is served from.
  *
  * The page is prerendered to static files, so everything here runs in the
  * browser against the same origin. That keeps the landing page honest: it
  * reports what the server actually answers right now rather than what was
  * true when the site was built.
  */
+
+import { auth } from './stores/auth';
+import type { Session } from './stores/auth';
 
 export interface ServerInfo {
 	did: string;
@@ -39,6 +42,36 @@ export interface RelayStatus {
 	status: string | null;
 }
 
+export interface SessionResponse {
+	accessJwt: string;
+	refreshJwt: string;
+	handle: string;
+	did: string;
+	didDoc?: Record<string, unknown>;
+	email?: string;
+	emailConfirmed?: boolean;
+	emailAuthFactor?: boolean;
+	active: boolean;
+	status?: string;
+}
+
+export interface AppPassword {
+	name: string;
+	createdAt: string;
+	privileged: boolean;
+}
+
+export interface CreateAppPasswordResponse {
+	name: string;
+	password: string;
+	createdAt: string;
+	privileged: boolean;
+}
+
+export interface ListAppPasswordsResponse {
+	passwords: AppPassword[];
+}
+
 /** Relays worth asking about a host's federation state. */
 export const RELAYS = [
 	{ label: 'Bluesky', host: 'bsky.network' },
@@ -49,10 +82,48 @@ export const RELAYS = [
 	{ label: 'Upcloud', host: 'relay.upcloud.world' }
 ] as const;
 
+function currentSession(): Session | null {
+	let val: Session | null = null;
+	const unsub = auth.subscribe((s) => (val = s));
+	unsub();
+	return val;
+}
+
 async function xrpc<T>(path: string, params?: Record<string, string>): Promise<T> {
 	const url = new URL(`/xrpc/${path}`, window.location.origin);
 	for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
 	const res = await fetch(url, { headers: { accept: 'application/json' } });
+	if (!res.ok) throw new Error(`${path}: ${res.status}`);
+	return res.json() as Promise<T>;
+}
+
+async function xrpcPost<T>(path: string, body: unknown): Promise<T> {
+	const session = currentSession();
+	const url = new URL(`/xrpc/${path}`, window.location.origin);
+	const headers: Record<string, string> = {
+		'content-type': 'application/json',
+		accept: 'application/json'
+	};
+	if (session) headers['authorization'] = `Bearer ${session.accessJwt}`;
+	const res = await fetch(url, {
+		method: 'POST',
+		headers,
+		body: JSON.stringify(body)
+	});
+	if (!res.ok) throw new Error(`${path}: ${res.status}`);
+	return res.json() as Promise<T>;
+}
+
+async function xrpcPostPlain<T>(path: string, body: unknown): Promise<T> {
+	const url = new URL(`/xrpc/${path}`, window.location.origin);
+	const res = await fetch(url, {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+			accept: 'application/json'
+		},
+		body: JSON.stringify(body)
+	});
 	if (!res.ok) throw new Error(`${path}: ${res.status}`);
 	return res.json() as Promise<T>;
 }
@@ -121,9 +192,78 @@ export async function relayStatus(hostname: string): Promise<RelayStatus[]> {
 				};
 			} catch {
 				/* A relay we cannot reach is unknown, not unhealthy: say so rather
-				 * than implying something about this server. */
+				 * than implying anything about this server. */
 				return { name: label, known: false, seq: null, status: null };
 			}
 		})
 	);
+}
+
+/* ---- Auth / Session ---- */
+
+export async function createSession(identifier: string, password: string): Promise<SessionResponse> {
+	return xrpcPostPlain<SessionResponse>('com.atproto.server.createSession', {
+		identifier,
+		password
+	});
+}
+
+export async function getSession(): Promise<SessionResponse> {
+	const session = currentSession();
+	if (!session) throw new Error('Not authenticated');
+	const url = new URL('/xrpc/com.atproto.server.getSession', window.location.origin);
+	const res = await fetch(url, {
+		headers: {
+			accept: 'application/json',
+			authorization: `Bearer ${session.accessJwt}`
+		}
+	});
+	if (!res.ok) throw new Error(`getSession: ${res.status}`);
+	return res.json() as Promise<SessionResponse>;
+}
+
+export async function refreshSession(): Promise<SessionResponse> {
+	const session = currentSession();
+	if (!session) throw new Error('Not authenticated');
+	const url = new URL('/xrpc/com.atproto.server.refreshSession', window.location.origin);
+	const res = await fetch(url, {
+		method: 'POST',
+		headers: {
+			accept: 'application/json',
+			authorization: `Bearer ${session.refreshJwt}`
+		}
+	});
+	if (!res.ok) throw new Error(`refreshSession: ${res.status}`);
+	return res.json() as Promise<SessionResponse>;
+}
+
+export async function deleteSession(): Promise<void> {
+	const session = currentSession();
+	if (!session) throw new Error('Not authenticated');
+	const url = new URL('/xrpc/com.atproto.server.deleteSession', window.location.origin);
+	await fetch(url, {
+		method: 'POST',
+		headers: {
+			accept: 'application/json',
+			authorization: `Bearer ${session.refreshJwt}`
+		}
+	});
+}
+
+/* ---- App Passwords ---- */
+
+export async function createAppPassword(name: string, privileged?: boolean): Promise<CreateAppPasswordResponse> {
+	return xrpcPost<CreateAppPasswordResponse>('com.atproto.server.createAppPassword', {
+		name,
+		privileged: privileged ?? false
+	});
+}
+
+export async function listAppPasswords(): Promise<AppPassword[]> {
+	const { passwords } = await xrpcPost<ListAppPasswordsResponse>('com.atproto.server.listAppPasswords', {});
+	return passwords;
+}
+
+export async function revokeAppPassword(name: string): Promise<void> {
+	await xrpcPost<Record<string, never>>('com.atproto.server.revokeAppPassword', { name });
 }
