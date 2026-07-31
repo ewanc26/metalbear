@@ -2379,17 +2379,49 @@ static size_t proxy_header_cb(char *ptr, size_t size, size_t nmemb, void *userda
     return total;
 }
 
+/* Service ids that have been renamed on the network. The AppView's did:web
+ * document now names `#bsky_appview` where legacy proxies named the same
+ * service `#atproto_bsky_app` (and chat `#atproto_bsky_chat` vs `#bsky_chat`).
+ * Accept both so an `atproto-proxy` header written for either era resolves. */
+static const char *service_id_alias(const char *id) {
+    static const struct { const char *a; const char *b; } aliases[] = {
+        { "atproto_bsky_app", "bsky_appview" },
+        { "atproto_bsky_chat", "bsky_chat" },
+    };
+    for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++) {
+        if (strcmp(id, aliases[i].a) == 0) return aliases[i].b;
+        if (strcmp(id, aliases[i].b) == 0) return aliases[i].a;
+    }
+    return NULL;
+}
+
 static char *resolve_did_web_service(const char *did, const char *service_id) {
     /* "did:web:" is 8 characters; comparing 9 also compares the literal's NUL,
      * which only matches the bare prefix, and skipping 9 eats the first
      * character of the host. Together they made this return NULL for every
      * real did:web, so `atproto-proxy` never resolved anywhere. */
     static const size_t prefix_len = sizeof("did:web:") - 1;
-    if (strncmp(did, "did:web:", prefix_len) != 0) return NULL;
-    const char *host = did + prefix_len;
-    if (!host[0]) return NULL;
+    const char *hash;
+    char *host = NULL;
+    size_t host_len;
     char url[512];
-    int n = snprintf(url, sizeof(url), "https://%s/.well-known/did.json", host);
+    int n;
+    if (strncmp(did, "did:web:", prefix_len) != 0) return NULL;
+
+    /* The header arrives as "<did:web:host>#<service_id>"; the fragment must
+     * not become part of the host when building the well-known URL, or the
+     * fetch hits the site root and the document never parses. */
+    hash = strchr(did + prefix_len, '#');
+    host_len = hash ? (size_t)(hash - (did + prefix_len))
+                    : strlen(did + prefix_len);
+    if (host_len == 0) return NULL;
+    host = malloc(host_len + 1);
+    if (!host) return NULL;
+    memcpy(host, did + prefix_len, host_len);
+    host[host_len] = '\0';
+
+    n = snprintf(url, sizeof(url), "https://%s/.well-known/did.json", host);
+    free(host);
     if (n < 0 || (size_t)n >= sizeof(url)) return NULL;
 
     CURL *curl = curl_easy_init();
@@ -2418,6 +2450,7 @@ static char *resolve_did_web_service(const char *did, const char *service_id) {
         return NULL;
     }
 
+    const char *alias = service_id ? service_id_alias(service_id) : NULL;
     cJSON *services = cJSON_GetObjectItemCaseSensitive(doc, "service");
     char *endpoint = NULL;
     if (cJSON_IsArray(services)) {
@@ -2428,10 +2461,12 @@ static char *resolve_did_web_service(const char *did, const char *service_id) {
             cJSON *id = cJSON_GetObjectItemCaseSensitive(svc, "id");
             cJSON *type = cJSON_GetObjectItemCaseSensitive(svc, "type");
             if (cJSON_IsString(id) && cJSON_IsString(type)) {
+                const char *id_name = id->valuestring[0] == '#'
+                                          ? id->valuestring + 1
+                                          : id->valuestring;
                  bool match = (service_id && service_id[0])
-                     ? (strcmp(id->valuestring, service_id) == 0 ||
-                        (id->valuestring[0] == '#' &&
-                         strcmp(id->valuestring + 1, service_id) == 0))
+                     ? (strcmp(id_name, service_id) == 0 ||
+                        (alias && strcmp(id_name, alias) == 0))
                      : (strcmp(type->valuestring, "HttpUrl") == 0 ||
                         strcmp(type->valuestring, "WebSocket") == 0);
                 if (match) {
@@ -2770,18 +2805,31 @@ static wf_status proxy_appview(metalbear_server *server,
     const char *proxy_header = req->atproto_proxy;
     if (proxy_header && proxy_header[0]) {
         const char *hash = strrchr(proxy_header, '#');
-        upstream = resolve_did_web_service(proxy_header, hash ? hash + 1 : NULL);
-        if (!upstream) {
-            wf_xrpc_response_set_error(resp, 502, "BadGateway",
-                                       "Could not resolve atproto-proxy target");
-            return WF_OK;
-        }
         size_t did_len = hash ? (size_t)(hash - proxy_header)
                               : strlen(proxy_header);
         if (did_len < sizeof(audience_buf)) {
             memcpy(audience_buf, proxy_header, did_len);
             audience_buf[did_len] = '\0';
             audience = audience_buf;
+        }
+        /* A header naming our own configured AppView maps straight to its URL,
+         * whatever service id the client used (both eras of id appear on the
+         * network). Resolving the did:web document is only for other hosts. */
+        if (server->appview_did && strcmp(audience, server->appview_did) == 0) {
+            upstream = strdup(server->appview_url);
+            if (!upstream) {
+                wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                           "Out of memory");
+                return WF_OK;
+            }
+        } else {
+            upstream = resolve_did_web_service(proxy_header,
+                                               hash ? hash + 1 : NULL);
+        }
+        if (!upstream) {
+            wf_xrpc_response_set_error(resp, 502, "BadGateway",
+                                       "Could not resolve atproto-proxy target");
+            return WF_OK;
         }
     } else {
         upstream = strdup(server->appview_url);
@@ -2909,7 +2957,20 @@ static wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
     if (proxy_header && proxy_header[0]) {
         const char *hash = strrchr(proxy_header, '#');
         const char *svc_id = hash ? hash + 1 : NULL;
-        upstream = resolve_did_web_service(proxy_header, svc_id);
+        size_t did_len = hash ? (size_t)(hash - proxy_header)
+                              : strlen(proxy_header);
+        char did_buf[256];
+        const char *bare_did = proxy_header;
+        if (did_len > 0 && did_len < sizeof(did_buf)) {
+            memcpy(did_buf, proxy_header, did_len);
+            did_buf[did_len] = '\0';
+            bare_did = did_buf;
+        }
+        if (server->appview_did && strcmp(bare_did, server->appview_did) == 0) {
+            upstream = strdup(server->appview_url);
+        } else {
+            upstream = resolve_did_web_service(proxy_header, svc_id);
+        }
         if (!upstream) {
             wf_xrpc_response_set_error(resp, 502, "BadGateway",
                                        "Could not resolve atproto-proxy target");
