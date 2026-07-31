@@ -283,6 +283,66 @@ static char *jwt_subject(const char *token) {
     return result;
 }
 
+/*
+ * Detect whether the Authorization header carries a DPoP scheme token (RFC
+ * 9449). The atproto OAuth profile uses `Authorization: DPoP <token>` with a
+ * separate `DPoP: <proof>` header. A plain `Bearer` header with a DPoP proof
+ * header also indicates an OAuth-bound request (RFC 9449 accepts both).
+ */
+static bool is_dpop_request(const char *auth_header, const char *dpop_header) {
+    if (!auth_header) return false;
+    if (strncasecmp(auth_header, "DPoP ", 5) == 0) return true;
+    return dpop_header && strncasecmp(auth_header, "Bearer ", 7) == 0;
+}
+
+/*
+ * Verify an OAuth DPoP-bound access token and set the authenticated subject.
+ * Returns WF_OK on success, with `out_subject` set to a heap-owned DID string
+ * that the caller must free. The request URI (htu) is reconstructed from the
+ * server's public URL and the XRPC NSID — the DPoP proof's `htu` is compared
+ * against this (query and fragment stripped by Wolfram's normalize_htu).
+ */
+static wf_status authenticate_oauth(metalbear_server *server,
+                                     const wf_xrpc_request *req,
+                                     char **out_subject) {
+    if (!server->oauth) {
+        LOG_WARN("authenticate: OAuth token presented but no OAuth store");
+        return WF_ERR_PERMISSION;
+    }
+
+    /* Build the htu: <public_url>/xrpc/<nsid>. The DPoP proof's htu must
+     * match this (after normalization strips query/fragment). */
+    char htu[1024];
+    int n = snprintf(htu, sizeof(htu), "%s/xrpc/%s",
+                     server->public_url ? server->public_url : "",
+                     req->nsid ? req->nsid : "");
+    if (n < 0 || (size_t)n >= sizeof(htu)) {
+        LOG_WARN("authenticate: OAuth htu exceeds buffer");
+        return WF_ERR_INTERNAL;
+    }
+
+    wf_oauth_verified_token *verified = NULL;
+    wf_status status = metalbear_oauth_verify_request(
+        server->oauth, req->auth_header, req->dpop_header,
+        req->method ? req->method : "GET", htu, &verified);
+    if (status != WF_OK) {
+        LOG_WARN("authenticate: OAuth verify failed nsid=%s status=%d",
+                 req->nsid ? req->nsid : "-", status);
+        return status;
+    }
+
+    /* metalbear_oauth_verify_request already checks iss/aud/scope/dpop_bound,
+     * but the subject may not be an account we host. */
+    if (!verified->sub || !verified->sub[0]) {
+        wf_oauth_verified_token_free(verified);
+        return WF_ERR_PERMISSION;
+    }
+
+    *out_subject = strdup(verified->sub);
+    wf_oauth_verified_token_free(verified);
+    return *out_subject ? WF_OK : WF_ERR_ALLOC;
+}
+
 /* Determine the account DID implied by a request: the authenticated subject
  * (writes / self endpoints) or a `did`/`repo` parameter (public reads). When
  * the DID must be extracted from an `at://` `repo` value, it is written into
@@ -494,25 +554,73 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
         }
     }
 
-    const char *provided = bearer_token(req->auth_header);
-    if (!provided) {
-        LOG_DEBUG("authenticate: no bearer token for nsid=%s host=%s",
-                  req->nsid ? req->nsid : "-",
-                  req->host_header ? req->host_header : "-");
-        return WF_ERR_PERMISSION;
+    /*
+     * Two token types reach this point, distinguished by the Authorization
+     * scheme and the presence of a DPoP proof header:
+     *
+     *   - Session JWTs (createSession): `Authorization: Bearer <jwt>`, no
+     *     DPoP header. HS256-signed, verified against the account's auth
+     *     store.
+     *   - OAuth DPoP tokens: `Authorization: DPoP <token>` (or `Bearer`
+     *     with a DPoP header), plus `DPoP: <proof>`. ES256-signed, verified
+     *     against the server's OAuth trusted keys.
+     *
+     * The flows share takedown and deactivation checks but differ in how the
+     * subject is extracted and the token verified.
+     */
+    char *sub = NULL;
+    metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
+
+    if (is_dpop_request(req->auth_header, req->dpop_header)) {
+        wf_status oauth_status = authenticate_oauth(server, req, &sub);
+        if (oauth_status != WF_OK) return oauth_status;
+        /* OAuth tokens are always full-access: the atproto scope grants
+         * the same privileges as a session token. App-password scoping
+         * does not apply to OAuth-issued tokens. */
+    } else {
+        const char *provided = bearer_token(req->auth_header);
+        if (!provided) {
+            LOG_DEBUG("authenticate: no bearer token for nsid=%s host=%s",
+                      req->nsid ? req->nsid : "-",
+                      req->host_header ? req->host_header : "-");
+            return WF_ERR_PERMISSION;
+        }
+
+        /* Route to the account named by the token's `sub` claim, then verify
+         * the token against THAT account's auth store. The signature is
+         * server-wide, so verification proves the token is genuine and `sub`
+         * is the identity we bind the request to. */
+        sub = jwt_subject(provided);
+        if (!sub) {
+            LOG_DEBUG("authenticate: invalid JWT for nsid=%s host=%s",
+                      req->nsid ? req->nsid : "-",
+                      req->host_header ? req->host_header : "-");
+            return WF_ERR_PERMISSION;
+        }
+
+        bool refresh_route = strcmp(req->nsid,
+                                    "com.atproto.server.refreshSession") == 0 ||
+                             strcmp(req->nsid,
+                                    "com.atproto.server.deleteSession") == 0;
+        wf_status verify_status = refresh_route
+            ? WF_OK
+            : metalbear_auth_verify_access_scope(
+                  context_for_did(server, sub)->auth, provided, &scope);
+        if (verify_status != WF_OK) {
+            LOG_WARN("authenticate: token verify failed for did=%s nsid=%s status=%d",
+                     sub, req->nsid ? req->nsid : "-", verify_status);
+            free(sub);
+            return verify_status;
+        }
+        if (!refresh_route && full_access_route(req->nsid) &&
+            scope != METALBEAR_ACCESS_FULL) {
+            LOG_WARN("authenticate: insufficient scope for did=%s nsid=%s scope=%d",
+                     sub, req->nsid ? req->nsid : "-", scope);
+            free(sub);
+            return WF_ERR_PERMISSION;
+        }
     }
 
-    /* Route to the account named by the token's `sub` claim, then verify the
-     * token against THAT account's auth store. The signature is server-wide,
-     * so verification proves the token is genuine and `sub` is the identity
-     * we bind the request to. */
-    char *sub = jwt_subject(provided);
-    if (!sub) {
-        LOG_DEBUG("authenticate: invalid JWT for nsid=%s host=%s",
-                  req->nsid ? req->nsid : "-",
-                  req->host_header ? req->host_header : "-");
-        return WF_ERR_PERMISSION;
-    }
     metalbear_account_context *acct = context_for_did(server, sub);
     if (!acct) {
         LOG_WARN("authenticate: unknown did=%s for nsid=%s host=%s",
@@ -522,27 +630,6 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
         return WF_ERR_PERMISSION;
     }
 
-    bool refresh_route = strcmp(req->nsid,
-                                "com.atproto.server.refreshSession") == 0 ||
-                         strcmp(req->nsid,
-                                "com.atproto.server.deleteSession") == 0;
-    metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
-    wf_status status = refresh_route
-        ? WF_OK
-        : metalbear_auth_verify_access_scope(acct->auth, provided, &scope);
-    if (status != WF_OK) {
-        LOG_WARN("authenticate: token verify failed for did=%s nsid=%s status=%d",
-                 sub, req->nsid ? req->nsid : "-", status);
-        free(sub);
-        return status;
-    }
-    if (!refresh_route && full_access_route(req->nsid) &&
-        scope != METALBEAR_ACCESS_FULL) {
-        LOG_WARN("authenticate: insufficient scope for did=%s nsid=%s scope=%d",
-                 sub, req->nsid ? req->nsid : "-", scope);
-        free(sub);
-        return WF_ERR_PERMISSION;
-    }
     /*
      * A takedown admits none of the exceptions a deactivation does: the
      * routes a deactivated account may still reach exist so its holder can
@@ -554,7 +641,7 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
      * lexicon's `AccountTakedown` rather than a bare authentication failure —
      * the difference a client needs to stop retrying and tell its user why.
      */
-    if (!refresh_route && account_is_taken_down(server, sub)) {
+    if (account_is_taken_down(server, sub)) {
         LOG_WARN("authenticate: taken-down account did=%s nsid=%s", sub,
                  req->nsid ? req->nsid : "-");
         free(sub);
