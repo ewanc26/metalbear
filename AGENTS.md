@@ -37,6 +37,20 @@ MetalBear is a pure C11 AT Protocol PDS built on the sibling Wolfram SDK. It pro
 Matches the sibling Wolfram repository's convention, so the two histories read
 the same way.
 
+## Versioning
+
+- **Tag every version bump**: a commit that changes `VERSION` in
+  `CMakeLists.txt` must also create a signed annotated git tag on that commit:
+  `git tag -s v<major>.<minor>.<patch> -m "v<major>.<minor>.<patch>"` (use `-s`
+  when a signing key is available, otherwise `-a`). Push tags with
+  `git push --tags`.
+- **Bump in the same commit**: the version change and the tag must refer to the
+  same commit — no separate bump commit without a tag.
+- **Bump both projects together**: when a release touches both MetalBear and
+  Wolfram (the common case), tag both repositories from their respective roots
+  with the same version string, in a single operation so neither is ever
+  ahead.
+
 ## Reuse and safety
 
 - Reuse Wolfram primitives and server infrastructure. Do not copy Wolfram code into this repository or hand-roll cryptography.
