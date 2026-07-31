@@ -132,6 +132,11 @@ typedef struct metalbear_config {
     const char *dns_zone_id;
     const char *dns_server;
     int64_t dns_record_ttl;
+    /* Update watcher (optional) */
+    bool update_check_enabled;
+    int64_t update_check_interval;
+    const char *update_metalbear_repo;
+    const char *update_wolfram_repo;
 } metalbear_config;
 
 /* Start a single-account AT Protocol PDS. All strings are copied. */
