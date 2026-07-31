@@ -136,3 +136,12 @@ did = "did:web:api.bsky.app"
 # from_address = "pds@example.com"
 # from_name    = "My PDS"
 # starttls     = true
+
+[updates]
+# Periodically checks GitHub for newer MetalBear and Wolfram releases, and
+# logs a warning when one is found. Disabled by default; enable it to be
+# notified when a new release is available.
+check_enabled = false
+check_interval_seconds = 86400   # 24 hours
+# metalbear_repo = "ewanc26/metalbear"
+# wolfram_repo   = "ewanc26/wolfram"

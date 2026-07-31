@@ -253,6 +253,11 @@ wf_status metalbear_config_file_load(const char *path,
         STR ("smtp.from_name",    from_name)
         BOOL("smtp.starttls",     smtp_starttls)
 
+        BOOL("updates.check_enabled",          update_check_enabled)
+        INT ("updates.check_interval_seconds", update_check_interval)
+        STR ("updates.metalbear_repo",         update_metalbear_repo)
+        STR ("updates.wolfram_repo",           update_wolfram_repo)
+
         #undef STR
         #undef INT
         #undef BOOL
