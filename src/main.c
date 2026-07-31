@@ -253,12 +253,20 @@ int main(int argc, char **argv) {
     ENV_I64("METALBEAR_RETENTION_MAX_AGE",       retention_max_age_seconds);
     ENV_I64("METALBEAR_RETENTION_MIN_EVENTS",    retention_min_events);
     ENV_I64("METALBEAR_DNS_TTL",                 dns_record_ttl);
+    ENV_I64("METALBEAR_UPDATE_CHECK_INTERVAL",   update_check_interval);
+    ENV_STR("METALBEAR_UPDATE_METALBEAR_REPO",   update_metalbear_repo);
+    ENV_STR("METALBEAR_UPDATE_WOLFRAM_REPO",     update_wolfram_repo);
     #undef ENV_STR
     #undef ENV_I64
 
     /* Only an explicitly set METALBEAR_PORT overrides the file; the parsed
      * default would otherwise silently win over a configured port. */
     if (port_text && port_text[0] && port > 0) config.port = (uint16_t)port;
+    {
+        const char *v = getenv("METALBEAR_UPDATE_CHECK_ENABLED");
+        if (v && (strcmp(v, "1") == 0 || strcmp(v, "true") == 0))
+            config.update_check_enabled = true;
+    }
     {
         const char *v = getenv("METALBEAR_DEVELOPMENT");
         if (v && (strcmp(v, "1") == 0 || strcmp(v, "true") == 0))

@@ -22,8 +22,10 @@
 #include "metalbear/sequencer.h"
 
 #include "metalbear/blob_store.h"
+#include "metalbear/update_watcher.h"
 #include "wolfram/crypto.h"
 #include "wolfram/plc.h"
+#include "wolfram/version.h"
 #include "metalbear/repo_store.h"
 #include "wolfram/repo/cid.h"
 #include "wolfram/syntax.h"
@@ -111,6 +113,7 @@ struct metalbear_server {
      * NULL when no DNS provider is configured, which leaves those records to
      * the operator. */
     metalbear_handle_dns *handle_dns;
+    metalbear_update_watcher *update_watcher;
 };
 
 /*
@@ -7584,6 +7587,31 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         }
         LOG_INFO("dns: publishing _atproto records via %s", config->dns_provider);
     }
+
+    /* Start the update watcher if enabled */
+    if (config->update_check_enabled) {
+        metalbear_update_watcher_config uc = {
+            .enabled = true,
+            .interval_seconds = config->update_check_interval > 0
+                                    ? config->update_check_interval
+                                    : 86400,
+            .metalbear_repo = config->update_metalbear_repo
+                                  ? config->update_metalbear_repo
+                                  : "ewanc26/metalbear",
+            .wolfram_repo = config->update_wolfram_repo
+                                ? config->update_wolfram_repo
+                                : "ewanc26/wolfram",
+            .current_metalbear_version = METALBEAR_VERSION,
+            .current_wolfram_version = WOLFRAM_VERSION_STRING,
+        };
+        if (metalbear_update_watcher_open(&uc, &server->update_watcher) != WF_OK) {
+            LOG_WARN("update-watcher: could not start (releases unreachable?)");
+        } else {
+            LOG_INFO("update-watcher: checking every %ld seconds",
+                     (long)uc.interval_seconds);
+        }
+    }
+
     if (config->account_email && config->account_email[0])
         server->account_email = strdup(config->account_email);
     #define COPY_OPT(field) \
@@ -7633,6 +7661,7 @@ void metalbear_server_free(metalbear_server *server) {
     metalbear_account_registry_free(server->registry);
     metalbear_email_free(server->email);
     metalbear_handle_dns_free(server->handle_dns);
+    metalbear_update_watcher_free(server->update_watcher);
     metalbear_report_store_free(server->reports);
     wf_rate_limiter_free(server->rate_limiter);
     metalbear_log_close();
