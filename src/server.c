@@ -1355,6 +1355,40 @@ static int resolve_oauth_subject(void *ctx, const char *hint, char *out,
     return 1;
 }
 
+/*
+ * Verify credentials for a device session — /oauth/authorize's proof that
+ * the browser controls the account login_hint names, not merely that it
+ * knows the handle.
+ *
+ * Account password only. metalbear_account_verify_credential also accepts
+ * app passwords, which valid_login (createSession's own check) is right to
+ * allow: an app password is meant to open a session scoped to one
+ * third-party client. A device session is not that — it authorizes THIS
+ * endpoint to grant arbitrary OTHER OAuth clients access, and opens the web
+ * UI's account management including creating further app passwords. An app
+ * password that could open one would be a scoped credential escalating
+ * itself to full account control, so METALBEAR_CREDENTIAL_ACCOUNT is
+ * checked explicitly rather than accepting whatever
+ * metalbear_account_verify_credential accepted.
+ */
+static int verify_oauth_credential(void *ctx, const char *identifier,
+                                   const char *password, char *out,
+                                   size_t out_len) {
+    metalbear_server *server = ctx;
+    if (!server || !identifier || !identifier[0] || !password || !out ||
+        out_len == 0)
+        return 0;
+    metalbear_account_context *acct = context_for_identifier(server,
+                                                              identifier);
+    if (!acct || !acct->did || !acct->did[0]) return 0;
+    metalbear_credential_kind credential =
+        metalbear_account_verify_credential(acct->account, password, NULL);
+    if (credential != METALBEAR_CREDENTIAL_ACCOUNT) return 0;
+    if (strlen(acct->did) >= out_len) return 0;
+    snprintf(out, out_len, "%s", acct->did);
+    return 1;
+}
+
 /* ---- com.atproto.identity.getRecommendedDidCredentials (query) ---- */
 static wf_status get_recommended_did_credentials(void *ctx,
         const wf_xrpc_request *request, wf_xrpc_response *response) {
@@ -7298,6 +7332,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                                          server->public_url,
                                          server->service_did,
                                          resolve_oauth_subject,
+                                         verify_oauth_credential,
                                          server) != WF_OK) {
         LOG_ERROR("cannot register OAuth routes");
         goto fail;
