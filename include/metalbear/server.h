@@ -40,6 +40,10 @@ typedef struct metalbear_config {
     bool smtp_starttls;
     /* Account email for notifications */
     const char *account_email;
+    /* Override for the operator email shown on the landing page
+     * and in operator.json. When set, this takes precedence over
+     * account_email for the operator contact address. */
+    const char *operator_email;
     /* Firehose retention (optional, defaults: max_age=30d, min_events=1000) */
     int64_t retention_max_age_seconds;
     int64_t retention_min_events;
