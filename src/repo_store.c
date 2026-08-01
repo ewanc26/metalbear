@@ -1050,12 +1050,12 @@ wf_status metalbear_repo_store_create_record(metalbear_repo_store *s, const char
         if (wf_tid_now(rkey_buf) != WF_OK) return WF_ERR_INVALID_ARG;
         rkey = rkey_buf;
     } else if (!wf_syntax_record_key_is_valid(rkey)) {
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns InvalidRecordKey */
+        return WF_ERR_INVALID_ARG; /* mapped to 400 InvalidRequest ("Invalid record key") */
     }
 
     /* (b) $type, when present, must equal the target collection. */
     if (!record_type_matches(record_json, collection))
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns InvalidRecord */
+        return WF_ERR_INVALID_ARG; /* mapped to 400 InvalidRequest ("Invalid $type") */
 
     /* (a) CAS: swapCommit must match the current repo head (if supplied). */
     char *head = head_cid_string(s);
@@ -1106,11 +1106,11 @@ wf_status metalbear_repo_store_put_record(metalbear_repo_store *s, const char *c
 
     /* (c) record-key validation (atproto charset/length rules). */
     if (!wf_syntax_record_key_is_valid(rkey))
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns InvalidRecordKey */
+        return WF_ERR_INVALID_ARG;
 
     /* (b) $type, when present, must equal the target collection. */
     if (!record_type_matches(record_json, collection))
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns InvalidRecord */
+        return WF_ERR_INVALID_ARG;
 
     /* Detect whether the record already exists. */
     unsigned char *existing = NULL;
@@ -1183,7 +1183,7 @@ wf_status metalbear_repo_store_delete_record(metalbear_repo_store *s, const char
 
     /* (c) record-key validation (atproto charset/length rules). */
     if (!wf_syntax_record_key_is_valid(rkey))
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns InvalidRecordKey */
+        return WF_ERR_INVALID_ARG;
     if (s->head.len == 0) return WF_ERR_NOT_FOUND;
 
     unsigned char *existing = NULL;
@@ -1281,7 +1281,7 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
     /* (g) cap batch size at 200 writes (mirrors atproto's limit). */
     if (cJSON_GetArraySize(root) > 200) {
         cJSON_Delete(root);
-        return WF_ERR_INVALID_ARG; /* TODO: atproto returns TooManyWrites */
+        return WF_ERR_INVALID_ARG;
     }
 
     cJSON *results = cJSON_CreateArray();
@@ -1341,7 +1341,7 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
             rkeys[staged] = strdup(tid);
         } else {
             if (!wf_syntax_record_key_is_valid(rkey)) {
-                st = WF_ERR_INVALID_ARG; /* TODO: atproto InvalidRecordKey */
+                st = WF_ERR_INVALID_ARG;
                 goto done;
             }
             rkeys[staged] = strdup(rkey);
@@ -1359,7 +1359,7 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
             if (!rec_json) { st = WF_ERR_ALLOC; goto done; }
             if (!record_type_matches(rec_json, collections[staged])) {
                 free(rec_json);
-                st = WF_ERR_INVALID_ARG; /* TODO: atproto InvalidRecord */
+                st = WF_ERR_INVALID_ARG;
                 goto done;
             }
             values[staged] = rec_json;
