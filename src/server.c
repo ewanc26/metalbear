@@ -948,7 +948,8 @@ static wf_status operator_info(void *ctx, const wf_xrpc_request *request,
     cJSON *op = cJSON_CreateObject();
     if (op) {
         if (server->operator_name) cJSON_AddStringToObject(op, "name", server->operator_name);
-        if (server->account_email) cJSON_AddStringToObject(op, "email", server->account_email);
+        if (server->operator_email) cJSON_AddStringToObject(op, "email", server->operator_email);
+        else if (server->account_email) cJSON_AddStringToObject(op, "email", server->account_email);
         if (server->operator_url)  cJSON_AddStringToObject(op, "url", server->operator_url);
         if (server->support_url)   cJSON_AddStringToObject(op, "supportUrl", server->support_url);
         cJSON_AddItemToObject(root, "operator", op);
