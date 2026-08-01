@@ -124,6 +124,15 @@ static wf_status oauth_post(wf_xrpc_client *client, const char *base,
                         extra_count, out);
 }
 
+static wf_status oauth_form_post(wf_xrpc_client *client, const char *base,
+                                 const char *path, const char *body,
+                                 wf_response *out) {
+    char url[256];
+    snprintf(url, sizeof(url), "%s%s", base, path);
+    return wf_http_post(client, url, "application/x-www-form-urlencoded",
+                        body, NULL, 0, out);
+}
+
 /*
  * Pull just `mb_device=<token>` out of a Set-Cookie value, discarding the
  * `; Path=/; HttpOnly; ...` attributes — those are instructions to a real
@@ -188,17 +197,16 @@ int main(void) {
               &pkce) == WF_OK);
     char par_body[1024];
     snprintf(par_body, sizeof(par_body),
-             "{\"client_id\":\"https://client.example/metadata.json\","
-             "\"redirect_uri\":\"https://client.example/callback\","
-             "\"scope\":\"atproto transition:generic\","
-             "\"state\":\"state-123\","
-             "\"code_challenge\":\"%s\","
-             "\"dpop_jkt\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}",
+             "client_id=https%%3A%%2F%%2Fclient.example%%2Fmetadata.json&"
+             "redirect_uri=https%%3A%%2F%%2Fclient.example%%2Fcallback%%3Ffrom%%3Doauth&"
+             "scope=atproto+transition%%3Ageneric&state=state+%%26+value&"
+             "code_challenge=%s&"
+             "dpop_jkt=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
              pkce.challenge);
     wf_response response = {0};
-    CHECK(oauth_post(client, base, "/oauth/par", par_body, NULL, 0,
-                     &response) == WF_OK);
-    CHECK(response.status == 200);
+    CHECK(oauth_form_post(client, base, "/oauth/par", par_body,
+                          &response) == WF_OK);
+    CHECK(response.status == 201);
     cJSON *par_json = json_response(&response);
     cJSON *request_uri_j = par_json
         ? cJSON_GetObjectItemCaseSensitive(par_json, "request_uri") : NULL;
@@ -284,10 +292,14 @@ int main(void) {
         CHECK(response.status == 302);
         CHECK(response.location != NULL);
         CHECK(response.location &&
-              strncmp(response.location, "https://client.example/callback",
-                     strlen("https://client.example/callback")) == 0);
+              strncmp(response.location,
+                      "https://client.example/callback?from=oauth&code=",
+                      strlen("https://client.example/callback?from=oauth&code=")) == 0);
         CHECK(response.location && strstr(response.location, "code="));
-        CHECK(response.location && strstr(response.location, "state=state-123"));
+        CHECK(response.location && strstr(response.location,
+                                          "state=state%20%26%20value"));
+        CHECK(response.location && strstr(response.location,
+                                          "iss=https%3A%2F%2Fpds.example.com"));
         wf_response_free(&response);
     }
 
