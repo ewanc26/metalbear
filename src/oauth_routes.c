@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 /* The device-session cookie name and attributes. HttpOnly so a script on the
  * page cannot read it (there is nothing legitimate for one to do with it, and
@@ -244,35 +245,133 @@ static wf_status oauth_jwks(void *ctx, const wf_xrpc_request *req,
     return WF_OK;
 }
 
+static int hex_value(unsigned char ch) {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    return -1;
+}
+
+/* Decode one application/x-www-form-urlencoded component.  Decode '+'
+ * before percent escapes so an encoded literal plus (%2B) remains a plus. */
+static wf_status form_decode(const char *value, size_t len, char **out) {
+    char *decoded = malloc(len + 1);
+    if (!decoded) return WF_ERR_ALLOC;
+    size_t write = 0;
+    for (size_t read = 0; read < len; read++) {
+        unsigned char ch = (unsigned char)value[read];
+        if (ch == '+') {
+            decoded[write++] = ' ';
+        } else if (ch == '%') {
+            if (read + 2 >= len) { free(decoded); return WF_ERR_INVALID_ARG; }
+            int high = hex_value((unsigned char)value[++read]);
+            int low = hex_value((unsigned char)value[++read]);
+            if (high < 0 || low < 0) { free(decoded); return WF_ERR_INVALID_ARG; }
+            ch = (unsigned char)((high << 4) | low);
+            /* cJSON values are C strings; embedded NUL cannot be preserved. */
+            if (ch == '\0') { free(decoded); return WF_ERR_INVALID_ARG; }
+            decoded[write++] = (char)ch;
+        } else {
+            decoded[write++] = (char)ch;
+        }
+    }
+    decoded[write] = '\0';
+    *out = decoded;
+    return WF_OK;
+}
+
+static bool media_type_is(const char *value, const char *media_type) {
+    if (!value) return false;
+    size_t length = strlen(media_type);
+    return strncasecmp(value, media_type, length) == 0 &&
+           (value[length] == '\0' || value[length] == ';' ||
+            value[length] == ' ' || value[length] == '\t');
+}
+
+/* OAuth PAR and token requests are commonly application/x-www-form-urlencoded.
+ * Keep JSON accepted for the existing JSON API clients, but parse form values
+ * before they reach the exact client/redirect-uri comparisons in the store. */
+static wf_status parse_form_body(const wf_xrpc_request *req, cJSON **out) {
+    *out = NULL;
+    if (!req->body || req->body_len == 0) return WF_ERR_INVALID_ARG;
+
+    if (media_type_is(req->content_type, "application/json")) {
+        cJSON *json = cJSON_ParseWithLength((const char *)req->body,
+                                             req->body_len);
+        if (!json || !cJSON_IsObject(json)) {
+            cJSON_Delete(json);
+            return WF_ERR_INVALID_ARG;
+        }
+        *out = json;
+        return WF_OK;
+    }
+    if (!media_type_is(req->content_type,
+                       "application/x-www-form-urlencoded"))
+        return WF_ERR_INVALID_ARG;
+
+    cJSON *form = cJSON_CreateObject();
+    if (!form) return WF_ERR_ALLOC;
+    size_t offset = 0;
+    while (offset < req->body_len) {
+        const char *start = (const char *)req->body + offset;
+        const char *end = memchr(start, '&', req->body_len - offset);
+        size_t pair_len = end ? (size_t)(end - start) : req->body_len - offset;
+        const char *equals = memchr(start, '=', pair_len);
+        char *key = NULL, *value = NULL;
+        wf_status status = WF_ERR_INVALID_ARG;
+        if (!equals || equals == start ||
+            (status = form_decode(start, (size_t)(equals - start), &key)) != WF_OK ||
+            !key[0] || cJSON_GetObjectItemCaseSensitive(form, key) ||
+            (status = form_decode(equals + 1,
+                                  pair_len - (size_t)(equals - start) - 1,
+                                  &value)) != WF_OK ||
+            !cJSON_AddStringToObject(form, key, value)) {
+            if (status == WF_OK) status = WF_ERR_ALLOC;
+            free(key);
+            free(value);
+            cJSON_Delete(form);
+            return status;
+        }
+        free(key);
+        free(value);
+        offset += pair_len + (end ? 1 : 0);
+    }
+    *out = form;
+    return WF_OK;
+}
+
 static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
                            wf_xrpc_response *resp) {
     oauth_route_ctx *rctx = ctx;
-    if (!req->params || !cJSON_IsObject(req->params)) {
+    cJSON *body = NULL;
+    if (parse_form_body(req, &body) != WF_OK || !body) {
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                    "Missing or invalid request body");
         return WF_OK;
     }
 
-    cJSON *client_id = cJSON_GetObjectItemCaseSensitive(req->params,
+    cJSON *client_id = cJSON_GetObjectItemCaseSensitive(body,
                                                         "client_id");
-    cJSON *redirect_uri = cJSON_GetObjectItemCaseSensitive(req->params,
+    cJSON *redirect_uri = cJSON_GetObjectItemCaseSensitive(body,
                                                            "redirect_uri");
-    cJSON *scope = cJSON_GetObjectItemCaseSensitive(req->params, "scope");
-    cJSON *state = cJSON_GetObjectItemCaseSensitive(req->params, "state");
-    cJSON *code_challenge = cJSON_GetObjectItemCaseSensitive(req->params,
+    cJSON *scope = cJSON_GetObjectItemCaseSensitive(body, "scope");
+    cJSON *state = cJSON_GetObjectItemCaseSensitive(body, "state");
+    cJSON *code_challenge = cJSON_GetObjectItemCaseSensitive(body,
                                                             "code_challenge");
-    cJSON *dpop_jkt = cJSON_GetObjectItemCaseSensitive(req->params,
+    cJSON *dpop_jkt = cJSON_GetObjectItemCaseSensitive(body,
                                                        "dpop_jkt");
 
     if (!cJSON_IsString(client_id) || !cJSON_IsString(redirect_uri) ||
         !cJSON_IsString(scope) || !cJSON_IsString(code_challenge) ||
         !cJSON_IsString(dpop_jkt)) {
+        cJSON_Delete(body);
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                    "Missing required parameters");
         return WF_OK;
     }
 
     if (!strstr(scope->valuestring, "atproto")) {
+        cJSON_Delete(body);
         wf_xrpc_response_set_error(resp, 400, "invalid_scope",
                                    "Scope must include 'atproto'");
         return WF_OK;
@@ -292,6 +391,7 @@ static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
     wf_status status = metalbear_oauth_create_par(rctx->store, &request,
                                                    &request_uri,
                                                    &expires_in);
+    cJSON_Delete(body);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                    "Could not create PAR");
@@ -305,6 +405,7 @@ static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
     free(request_uri);
 
     wf_xrpc_response_set_content_type(resp, "application/json");
+    resp->http_status = 201;
     return json_response(resp, root, "no-store");
 }
 
@@ -418,18 +519,31 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
-    size_t url_len = strlen(redirect_uri) + strlen(code) +
-                     (state ? strlen(state) : 0) + 64;
-    char *url = malloc(url_len);
-    if (!url) {
+    char *escaped_code = url_escape(code);
+    char *escaped_state = state ? url_escape(state) : NULL;
+    char *escaped_issuer = url_escape(rctx->public_url);
+    if (!escaped_code || (state && !escaped_state) || !escaped_issuer) {
+        curl_free(escaped_code);
+        curl_free(escaped_state);
+        curl_free(escaped_issuer);
         free(code); free(redirect_uri); free(state);
         return WF_ERR_ALLOC;
     }
-    snprintf(url, url_len, "%s?code=%s", redirect_uri, code);
-    if (state) {
-        size_t len = strlen(url);
-        snprintf(url + len, url_len - len, "&state=%s", state);
+    const char separator = strchr(redirect_uri, '?') ? '&' : '?';
+    size_t url_len = strlen(redirect_uri) + strlen(escaped_code) +
+                     strlen(escaped_issuer) +
+                     (escaped_state ? strlen(escaped_state) : 0) + 32;
+    char *url = malloc(url_len);
+    if (!url) {
+        curl_free(escaped_code);
+        curl_free(escaped_state);
+        curl_free(escaped_issuer);
+        free(code); free(redirect_uri); free(state);
+        return WF_ERR_ALLOC;
     }
+    snprintf(url, url_len, "%s%ccode=%s%s%s&iss=%s", redirect_uri,
+             separator, escaped_code, escaped_state ? "&state=" : "",
+             escaped_state ? escaped_state : "", escaped_issuer);
 
     wf_xrpc_response_set_content_type(resp, "text/html");
     wf_xrpc_response_add_header(resp, "Location", url);
@@ -439,36 +553,10 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
     free(redirect_uri);
     free(state);
     free(url);
+    curl_free(escaped_code);
+    curl_free(escaped_state);
+    curl_free(escaped_issuer);
     return WF_OK;
-}
-
-static wf_status parse_form_body(const wf_xrpc_request *req, cJSON **out) {
-    *out = NULL;
-    if (!req->body || req->body_len == 0) return WF_ERR_INVALID_ARG;
-
-    if (req->content_type && strstr(req->content_type, "application/json")) {
-        *out = cJSON_ParseWithLength((const char *)req->body, req->body_len);
-        return *out ? WF_OK : WF_ERR_INVALID_ARG;
-    }
-
-    char *body = strndup((const char *)req->body, req->body_len);
-    if (!body) return WF_ERR_ALLOC;
-
-    *out = cJSON_CreateObject();
-    if (!*out) { free(body); return WF_ERR_ALLOC; }
-
-    char *saveptr = NULL;
-    char *pair = strtok_r(body, "&", &saveptr);
-    while (pair) {
-        char *eq = strchr(pair, '=');
-        if (eq) {
-            *eq = '\0';
-            cJSON_AddStringToObject(*out, pair, eq + 1);
-        }
-        pair = strtok_r(NULL, "&", &saveptr);
-    }
-    free(body);
-    return *out ? WF_OK : WF_ERR_ALLOC;
 }
 
 static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
