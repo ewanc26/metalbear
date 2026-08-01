@@ -370,13 +370,6 @@ static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
-    if (!strstr(scope->valuestring, "atproto")) {
-        cJSON_Delete(body);
-        wf_xrpc_response_set_error(resp, 400, "invalid_scope",
-                                   "Scope must include 'atproto'");
-        return WF_OK;
-    }
-
     metalbear_oauth_request request = {
         .client_id = client_id->valuestring,
         .redirect_uri = redirect_uri->valuestring,
