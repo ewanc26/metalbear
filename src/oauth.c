@@ -244,11 +244,29 @@ void metalbear_oauth_grant_free(metalbear_oauth_grant *grant) {
 }
 
 static bool valid_request(const metalbear_oauth_request *request) {
-    return request && request->client_id && request->client_id[0] &&
-           request->redirect_uri && request->redirect_uri[0] &&
-           request->scope && request->scope[0] &&
-           request->code_challenge && strlen(request->code_challenge) == 43 &&
-           request->dpop_jkt && strlen(request->dpop_jkt) == 43;
+    if (!request || !request->client_id || !request->client_id[0] ||
+        !request->redirect_uri || !request->redirect_uri[0] ||
+        !request->scope || !request->scope[0] ||
+        !request->code_challenge || strlen(request->code_challenge) != 43 ||
+        !request->dpop_jkt || strlen(request->dpop_jkt) != 43)
+        return false;
+
+    /* The "atproto" scope token is required for all OAuth flows.
+     * Check for it as a space-separated token, not a substring. */
+    const char *scope = request->scope;
+    bool has_atproto = false;
+    const char *p = scope;
+    while (*p) {
+        const char *end = strchr(p, ' ');
+        size_t len = end ? (size_t)(end - p) : strlen(p);
+        if (len == 6 && strncmp(p, "atproto", 6) == 0) {
+            has_atproto = true;
+            break;
+        }
+        p = end ? end + 1 : p + len;
+    }
+
+    return has_atproto;
 }
 
 wf_status metalbear_oauth_create_par(metalbear_oauth_store *store,

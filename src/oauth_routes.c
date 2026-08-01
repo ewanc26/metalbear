@@ -370,6 +370,29 @@ static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
+    /* The "atproto" scope token is required for all OAuth flows.
+     * Check for it as a space-separated token, not a substring. */
+    {
+        const char *scope_str = scope->valuestring;
+        bool has_atproto = false;
+        const char *p = scope_str;
+        while (*p) {
+            const char *end = strchr(p, ' ');
+            size_t len = end ? (size_t)(end - p) : strlen(p);
+            if (len == 6 && strncmp(p, "atproto", 6) == 0) {
+                has_atproto = true;
+                break;
+            }
+            p = end ? end + 1 : p + len;
+        }
+        if (!has_atproto) {
+            cJSON_Delete(body);
+            wf_xrpc_response_set_error(resp, 400, "invalid_scope",
+                                       "The \"atproto\" scope is required");
+            return WF_OK;
+        }
+    }
+
     metalbear_oauth_request request = {
         .client_id = client_id->valuestring,
         .redirect_uri = redirect_uri->valuestring,
