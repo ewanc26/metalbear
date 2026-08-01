@@ -155,8 +155,8 @@ verifying, and nothing reaching a relay. Check the wire, not the API.
 - Measurements need checking before conclusions do. "No requests from the
   relay" was drawn from a log grep that could never have matched, because
   traffic arrives through a tunnel and nginx logs the tunnel's address.
-- `tools/firehose_probe.py <host>` subscribes over the public ingress and
-  checks the frames a strict reader would reject. Like `verify_repo_car.py` it
+- `tools/firehose_probe.cpp <host>` subscribes over the public ingress and
+  checks the frames a strict reader would reject. Like `verify_repo_car.cpp` it
   is stdlib-only and shares no code with Wolfram — verifying our encoder with
   our encoder proves nothing. Run it against the live host, not localhost: it
   exercises the whole path a relay uses, TLS and proxy included.
