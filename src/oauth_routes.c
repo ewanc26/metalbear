@@ -379,7 +379,7 @@ static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
         while (*p) {
             const char *end = strchr(p, ' ');
             size_t len = end ? (size_t)(end - p) : strlen(p);
-            if (len == 6 && strncmp(p, "atproto", 6) == 0) {
+            if (len == 7 && strncmp(p, "atproto", 6) == 0) {
                 has_atproto = true;
                 break;
             }
