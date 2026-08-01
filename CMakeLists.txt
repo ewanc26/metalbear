@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-project(metalbear VERSION 0.8.3 LANGUAGES C)
+project(metalbear VERSION 0.9.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(METALBEAR_BUILD_TESTS "Build MetalBear tests" ON)
 find_package(SQLite3 REQUIRED)
@@ -18,6 +20,10 @@ if(NOT TARGET SQLite3::SQLite3)
         INTERFACE_INCLUDE_DIRECTORIES "${SQLite3_INCLUDE_DIR}")
 endif()
 find_package(Threads REQUIRED)
+# The C++ dev tools link OpenSSL. Wolfram's subdirectory runs its own
+# find_package(OpenSSL REQUIRED), but that only populates targets in wolfram's
+# scope, so MetalBear must resolve OpenSSL::Crypto here.
+find_package(OpenSSL REQUIRED)
 set(WOLFRAM_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../wolfram" CACHE PATH
     "Path to the Wolfram source tree")
 
@@ -165,4 +171,17 @@ if(METALBEAR_BUILD_TESTS)
     target_include_directories(test_metalbear_blob_store PRIVATE
         "${METALBEAR_CJSON_SOURCE_DIR}")
     add_test(NAME metalbear_blob_store COMMAND test_metalbear_blob_store)
+endif()
+
+# C++ dev tools (replacements for the Python tools of the same name). Guarded
+# so the build still works while the sources are mid-migration and may be
+# incomplete.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/firehose_probe.cpp")
+    add_executable(firehose_probe tools/firehose_probe.cpp)
+    target_link_libraries(firehose_probe PRIVATE OpenSSL::Crypto OpenSSL::SSL)
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_repo_car.cpp")
+    find_package(CURL REQUIRED)
+    add_executable(verify_repo_car tools/verify_repo_car.cpp)
+    target_link_libraries(verify_repo_car PRIVATE OpenSSL::Crypto CURL::libcurl)
 endif()
