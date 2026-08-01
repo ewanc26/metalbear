@@ -25,6 +25,7 @@ It provides a runnable PDS foundation, supporting multi-account hosting.
 - `src/email.c` is the optional SMTP email client using libcurl.
 - `src/backup.c` implements repository backup/restore with CRC32 checksums.
 - `src/oauth.c` handles OAuth 2.0 token endpoints.
+- `src/oauth_scope.c` implements OAuth auth scope parsing and matching for AT Protocol granular permissions. Parses static scopes (`atproto`, `transition:*`) and dynamic repo scopes (`repo:<collection>?action=<action>`). Integrated with the authentication callback in `server.c` to enforce scope-based access control on repo write operations.
 - `cpp/MetalBear/MetalBear/key_rotation.cpp` manages P-256 signing key rotation. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
 - `include/metalbear/` contains all public headers.
 

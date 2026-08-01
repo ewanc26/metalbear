@@ -17,6 +17,7 @@
 #include "metalbear/handle_dns.h"
 #include "metalbear/key_rotation.h"
 #include "metalbear/oauth.h"
+#include "metalbear/oauth_scope.h"
 #include "metalbear/report.h"
 #include "metalbear/oauth_routes.h"
 #include "metalbear/sequencer.h"
@@ -307,7 +308,8 @@ static bool is_dpop_request(const char *auth_header, const char *dpop_header) {
  */
 static wf_status authenticate_oauth(metalbear_server *server,
                                      const wf_xrpc_request *req,
-                                     char **out_subject) {
+                                     char **out_subject,
+                                     char **out_scope) {
     if (!server->oauth) {
         LOG_WARN("authenticate: OAuth token presented but no OAuth store");
         return WF_ERR_PERMISSION;
@@ -342,6 +344,7 @@ static wf_status authenticate_oauth(metalbear_server *server,
     }
 
     *out_subject = strdup(verified->sub);
+    *out_scope = verified->scope ? strdup(verified->scope) : NULL;
     wf_oauth_verified_token_free(verified);
     return *out_subject ? WF_OK : WF_ERR_ALLOC;
 }
@@ -573,13 +576,89 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
      */
     char *sub = NULL;
     metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
+    char *oauth_scope_str = NULL;
 
     if (is_dpop_request(req->auth_header, req->dpop_header)) {
-        wf_status oauth_status = authenticate_oauth(server, req, &sub);
+        wf_status oauth_status = authenticate_oauth(server, req, &sub,
+                                                    &oauth_scope_str);
         if (oauth_status != WF_OK) return oauth_status;
-        /* OAuth tokens are always full-access: the atproto scope grants
-         * the same privileges as a session token. App-password scoping
-         * does not apply to OAuth-issued tokens. */
+
+        /* Parse the OAuth scope and enforce granular permissions.
+         *
+         * The "atproto" static scope grants full access (equivalent to a
+         * session token). Dynamic scopes like "repo:<collection>?action=<a>"
+         * grant only the specified actions on the specified collections.
+         *
+         * If the scope is NULL or empty, we treat it as full access for
+         * backwards compatibility (older tokens may not carry a scope).
+         */
+        if (oauth_scope_str && oauth_scope_str[0]) {
+            mb_scope_set scope_set;
+            if (mb_scope_set_parse(oauth_scope_str, &scope_set) == WF_OK) {
+                if (!mb_scope_set_is_full_access(&scope_set)) {
+                    /* Determine the collection and action from the request */
+                    const char *nsid = req->nsid ? req->nsid : "";
+                    mb_repo_action action = MB_REPO_ACTION_NONE;
+                    const char *collection = NULL;
+                    cJSON *coll_param = NULL;
+
+                    if (strcmp(nsid, "com.atproto.repo.createRecord") == 0) {
+                        action = MB_REPO_ACTION_CREATE;
+                        coll_param = req->params
+                            ? cJSON_GetObjectItemCaseSensitive(req->params,
+                                                               "collection")
+                            : NULL;
+                    } else if (strcmp(nsid, "com.atproto.repo.putRecord") == 0) {
+                        action = MB_REPO_ACTION_UPDATE;
+                        coll_param = req->params
+                            ? cJSON_GetObjectItemCaseSensitive(req->params,
+                                                               "collection")
+                            : NULL;
+                    } else if (strcmp(nsid, "com.atproto.repo.deleteRecord") == 0) {
+                        action = MB_REPO_ACTION_DELETE;
+                        coll_param = req->params
+                            ? cJSON_GetObjectItemCaseSensitive(req->params,
+                                                               "collection")
+                            : NULL;
+                    }
+
+                    collection = cJSON_IsString(coll_param)
+                        ? coll_param->valuestring : NULL;
+
+                    if (action != MB_REPO_ACTION_NONE && collection) {
+                        if (!mb_scope_set_allows_repo(&scope_set,
+                                                       collection, action)) {
+                            LOG_WARN("authenticate: OAuth scope denied "
+                                     "did=%s nsid=%s collection=%s action=%d",
+                                     sub, nsid, collection, action);
+                            mb_scope_set_free(&scope_set);
+                            free(oauth_scope_str);
+                            free(sub);
+                            return WF_ERR_PERMISSION;
+                        }
+                    } else if (action == MB_REPO_ACTION_NONE) {
+                        /* Read or non-repo operation: check read access.
+                         * For now, allow reads if any repo scope matches
+                         * or if the scope set is not empty. Full enforcement
+                         * of read scopes will be added once the upstream
+                         * spec finalizes read permissions. */
+                        if (collection &&
+                            !mb_scope_set_allows_read(&scope_set, collection) &&
+                            !mb_scope_set_is_full_access(&scope_set)) {
+                            LOG_WARN("authenticate: OAuth scope denied read "
+                                     "did=%s nsid=%s collection=%s",
+                                     sub, nsid, collection);
+                            mb_scope_set_free(&scope_set);
+                            free(oauth_scope_str);
+                            free(sub);
+                            return WF_ERR_PERMISSION;
+                        }
+                    }
+                }
+            }
+            mb_scope_set_free(&scope_set);
+        }
+        free(oauth_scope_str);
     } else {
         const char *provided = bearer_token(req->auth_header);
         if (!provided) {
