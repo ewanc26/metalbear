@@ -50,6 +50,8 @@ the same way.
   `git push --tags`.
 - **Bump in the same commit**: the version change and the tag must refer to the
   same commit — no separate bump commit without a tag.
+- **Create a GitHub release for every version bump**: after tagging, create a
+  release via `gh release create v<major>.<minor>.<patch> <tag> --title "v<major>.<minor>.<patch>" --generate-notes`. The release must be created in the same commit as the tag — no separate release without a tag.
 - **Bump both projects together**: when a release touches both MetalBear and
   Wolfram (the common case), tag both repositories from their respective roots
   with the same version string, in a single operation so neither is ever
