@@ -34,6 +34,9 @@ jobs:
             libc-ares-dev \
             libidn2-dev \
 
+      - name: Clean build directory
+        run: rm -rf build
+
       - name: Configure
         run: |
           if [ ! -d "${{ github.workspace }}/../wolfram" ]; then
