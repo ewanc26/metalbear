@@ -2,7 +2,7 @@
 
 MetalBear is a C23-first AT Protocol PDS built on the sibling Wolfram SDK.
 
-The project is implemented primarily in C23. C++ is now permitted for performance-sensitive components and library integrations where C offers no equivalent. All C++ usage must follow strict isolation via `extern "C"` modules. Public headers, exported APIs, protocol handlers, and the core server architecture remain C23. C++ components must expose a C ABI (`extern "C"` where required), and exceptions must never cross the C/C++ boundary. Do not introduce C++ into the wider codebase without a compelling justification.
+The project is implemented primarily in C23. C++ is permitted for complex or sensitive components where C is insufficient — specifically RAII-based resource management (e.g. sqlite3, OpenSSL), performance-critical code, and third-party library integrations that have no C equivalent. All C++ usage must follow strict isolation via `extern "C"` modules. Public headers, exported APIs, protocol handlers, and the core server architecture remain C23. C++ components must expose a C ABI (`extern "C"` where required), and exceptions must never cross the C/C++ boundary. Default to C for new code; introduce C++ only when the complexity, resource management, or performance requirements justify it.
 
 It provides a runnable PDS foundation, supporting multi-account hosting.
 
@@ -60,11 +60,7 @@ the same way.
 - Reuse Wolfram primitives and server infrastructure. Do not copy Wolfram code into this repository or hand-roll cryptography.
 - Keep authentication, repository ownership, persistence, and protocol errors explicit. Never return fabricated success for an unfinished endpoint.
 - Never commit secrets, live credentials, signing keys, or PDS data.
-- C++ is permitted for performance-sensitive tasks and third-party libraries
-  (e.g. crypto wrappers, server infrastructure) where C offers no equivalent.
-  Always use `extern "C"` for any wrapper so the rest of the codebase can
-  consume it without C++ headers or types. Where a C library equivalent exists,
-  prefer the C one.
+- C++ is permitted for complex or sensitive components where C is insufficient — RAII-based resource management, performance-critical code, and third-party library integrations with no C equivalent. Default to C; introduce C++ only when justified. Always use `extern "C"` for any wrapper so the rest of the codebase can consume it without C++ headers or types. Where a C library equivalent exists, prefer the C one.
 
 ## Endpoint correctness
 
