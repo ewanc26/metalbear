@@ -540,6 +540,7 @@ you the trouble of running a PDS the hard way, or you would like the missing
 pieces under **Status** to arrive sooner, you can fund the work:
 
 **→ [github.com/sponsors/ewanc26](https://github.com/sponsors/ewanc26)**
+**→ [ko-fi.com/ewancroft](https://ko-fi.com/ewancroft)**
 
 Sponsorship supports MetalBear and its sibling SDK
 [Wolfram](https://github.com/ewanc26/wolfram) together — the two are developed
