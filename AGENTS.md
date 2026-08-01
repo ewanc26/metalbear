@@ -18,14 +18,14 @@ It provides a runnable PDS foundation, supporting multi-account hosting.
   to disagree, the lexicons and reference implementation win for behaviour,
   but the spec is what other implementations were written against.
 - `src/server.c` is the central file: server lifecycle, XRPC route registration, auth callback, and all protocol handler functions.
-- `src/account.c` manages credential storage, app passwords, email tokens, and account state (active/deactivated) in a per-account SQLite database.
+- `cpp/MetalBear/MetalBear/account.cpp` manages credential storage, app passwords, email tokens, and account state (active/deactivated) in a per-account SQLite database. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
 - `src/auth.c` manages session tokens (access/refresh JWTs) with scrypt-hashed refresh tokens and scope-based access control.
 - `src/sequencer.c` handles the firehose event stream (commits, identity, account, sync events) with configurable retention.
-- `src/account_registry.c` is the multi-account registry, mapping account DIDs to their respective data directory paths.
+- `cpp/MetalBear/MetalBear/account_registry.cpp` manages the multi-account registry, mapping account DIDs to their respective data directory paths. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
 - `src/email.c` is the optional SMTP email client using libcurl.
 - `src/backup.c` implements repository backup/restore with CRC32 checksums.
 - `src/oauth.c` handles OAuth 2.0 token endpoints.
-- `src/key_rotation.c` manages P-256 signing key rotation.
+- `cpp/MetalBear/MetalBear/key_rotation.cpp` manages P-256 signing key rotation. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
 - `include/metalbear/` contains all public headers.
 
 ## Commits
