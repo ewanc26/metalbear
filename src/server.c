@@ -82,6 +82,10 @@ struct metalbear_server {
     char *user_domain;
     char *data_directory;
     char *account_email;
+    /* Override for the operator email shown on the landing page
+     * and in operator.json. When set, this takes precedence over
+     * account_email for the operator contact address. */
+    char *operator_email;
     /* Who runs this instance; surfaced on describeServer where the protocol
      * defines a field, and on /operator.json where it does not. */
     char *operator_name;
@@ -7704,6 +7708,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         if (config->field && config->field[0]) \
             server->field = strdup(config->field)
     COPY_OPT(operator_name);
+    COPY_OPT(operator_email);
     COPY_OPT(operator_url);
     COPY_OPT(support_url);
     COPY_OPT(instance_description);
@@ -7756,6 +7761,7 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->user_domain);
     free(server->data_directory);
     free(server->account_email);
+    free(server->operator_email);
     free(server->admin_password);
     free(server->crawlers);
     free(server->plc_url);
