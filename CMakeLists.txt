@@ -38,6 +38,7 @@ set(WOLFRAM_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WOLFRAM_BUILD_CPP OFF CACHE BOOL "" FORCE)
 add_subdirectory("${WOLFRAM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/wolfram")
 get_target_property(METALBEAR_CJSON_SOURCE_DIR cjson SOURCE_DIR)
+target_compile_options(cjson PRIVATE -Wno-keyword-macro)
 
 add_library(metalbear_core src/metrics.c src/handle_dns.c src/handle_dns_rfc2136.c cpp/MetalBear/MetalBear/account_registry.cpp src/account_context.c src/account_cache.c src/auth.c src/backup.c src/email.c src/oauth.c src/oauth_routes.c src/oauth_scope.c cpp/MetalBear/MetalBear/key_rotation.cpp src/repo_store.c src/sequencer.c src/server.c src/report.c src/blob_store.c src/blob_store_server.c src/update_watcher.c cpp/MetalBear/MetalBear/config_file.cpp cpp/MetalBear/MetalBear/log.cpp cpp/MetalBear/MetalBear/account.cpp)
 target_include_directories(metalbear_core PUBLIC include
