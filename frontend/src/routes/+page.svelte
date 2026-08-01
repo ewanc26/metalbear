@@ -46,7 +46,7 @@
 	<title>MetalBear{hostname ? ` — ${hostname}` : ''}</title>
 	<meta
 		name="description"
-		content="A Personal Data Server for the AT Protocol, written in pure C11."
+		content="A Personal Data Server for the AT Protocol, written in pure C23."
 	/>
 </svelte:head>
 
@@ -236,7 +236,7 @@
 						>{/if}
 				</h2>
 				<p class="mt-1.5 text-sm text-slate-400">
-					An AT Protocol Personal Data Server written from scratch in C11, on the
+					An AT Protocol Personal Data Server written from scratch in C23, on the
 					<a
 						class="text-emerald-500 hover:text-emerald-400"
 						href="https://github.com/ewanc26/wolfram">Wolfram</a
