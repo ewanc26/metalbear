@@ -13,10 +13,14 @@
 # MetalBear
 
 MetalBear is an AT Protocol Personal Data Server written in C23 and built on
-[Wolfram](https://github.com/ewanc26/wolfram). It hosts multiple accounts, mints
-`did:plc` identities, serves the firehose, and federates: as of 0.4.1 a
-MetalBear instance is consumed by Bluesky's relays and its posts are indexed by
-the Bluesky AppView.
+[Wolfram](https://github.com/ewanc26/wolfram). C is the default language;
+C++ is used for complex or sensitive components where C is insufficient —
+RAII-based resource management (e.g. sqlite3), performance-critical code,
+and third-party library integrations. All C++ code exposes a C ABI via
+`extern "C"` so the SDK never requires a C++ toolchain at runtime.
+It hosts multiple accounts, mints `did:plc` identities, serves the firehose,
+and federates: as of 0.4.1 a MetalBear instance is consumed by Bluesky's
+relays and its posts are indexed by the Bluesky AppView.
 
 **Version:** 0.12.0
 

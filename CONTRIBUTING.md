@@ -1,7 +1,7 @@
 # Contributing to MetalBear
 
 Thanks for your interest. MetalBear is a C23 AT Protocol PDS built on the
-sibling Wolfram SDK. A few ground rules help keep the codebase coherent.
+sibling Wolfram SDK. C is the default language for all new code; C++ is permitted for complex or sensitive components where C is insufficient — RAII-based resource management, performance-critical code, and third-party library integrations with no C equivalent. All C++ must expose a C ABI via `extern "C"` and never leak C++ types across the boundary. A few ground rules help keep the codebase coherent.
 
 ## Core philosophy
 
