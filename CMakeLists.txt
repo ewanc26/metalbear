@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
-project(metalbear VERSION 0.13.0 LANGUAGES C CXX)
+project(metalbear VERSION 0.13.1 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_options(-Wno-gcc-compat)
 
 option(METALBEAR_BUILD_TESTS "Build MetalBear tests" ON)
 find_package(SQLite3 REQUIRED)
