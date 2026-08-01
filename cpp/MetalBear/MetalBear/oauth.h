@@ -1,0 +1,127 @@
+#ifndef METALBEAR_OAUTH_H
+#define METALBEAR_OAUTH_H
+
+#include "wolfram/oauth.h"
+#include "wolfram/xrpc.h"
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct metalbear_oauth_store metalbear_oauth_store;
+
+typedef struct metalbear_oauth_request {
+    const char *client_id;
+    const char *redirect_uri;
+    const char *scope;
+    const char *state;
+    const char *code_challenge;
+    const char *dpop_jkt;
+} metalbear_oauth_request;
+
+typedef struct metalbear_oauth_grant {
+    char *access_token;
+    char *refresh_token;
+    int64_t expires_in;
+} metalbear_oauth_grant;
+
+void metalbear_oauth_grant_free(metalbear_oauth_grant *grant);
+
+/*
+ * Open the host's OAuth store. Takes no account: the store holds one signing
+ * key for the server, and the account a token speaks for travels with the
+ * grant. Binding a single subject here could only ever admit one account.
+ */
+wf_status metalbear_oauth_store_open(const char *path, const char *issuer,
+                                     metalbear_oauth_store **out);
+void metalbear_oauth_store_free(metalbear_oauth_store *store);
+
+/* Owned public JWK/JWKS documents for discovery endpoints. */
+wf_status metalbear_oauth_public_jwk(metalbear_oauth_store *store,
+                                     char **out_jwk);
+wf_status metalbear_oauth_jwks(metalbear_oauth_store *store, char **out_jwks);
+
+/* Persist a five-minute pushed authorization request. */
+wf_status metalbear_oauth_create_par(metalbear_oauth_store *store,
+                                     const metalbear_oauth_request *request,
+                                     char **out_request_uri,
+                                     int64_t *out_expires_in);
+
+/* Consume a PAR and issue a five-minute, one-time authorization code. */
+/* `subject` is the account DID the issued code (and every token minted from
+ * it) speaks for. */
+wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
+                                    const char *request_uri,
+                                    const char *client_id,
+                                    const char *subject,
+                                    char **out_code,
+                                    char **out_redirect_uri,
+                                    char **out_state);
+
+/* Exchange a code using S256 PKCE and the same DPoP key used at PAR. */
+wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
+                                        const char *code,
+                                        const char *client_id,
+                                        const char *redirect_uri,
+                                        const char *code_verifier,
+                                        const char *dpop_jkt,
+                                        metalbear_oauth_grant *out);
+
+/* Rotate a refresh token and retain its client, scope, and DPoP binding. */
+wf_status metalbear_oauth_refresh(metalbear_oauth_store *store,
+                                  const char *refresh_token,
+                                  const char *client_id,
+                                  const char *dpop_jkt,
+                                  metalbear_oauth_grant *out);
+wf_status metalbear_oauth_revoke(metalbear_oauth_store *store,
+                                 const char *token);
+
+/* Verify a self-issued access token plus its request-bound DPoP proof. */
+wf_status metalbear_oauth_verify_request(
+    metalbear_oauth_store *store, const char *authorization,
+    const char *dpop_proof, const char *method, const char *uri,
+    wf_oauth_verified_token **out);
+
+/*
+ * A device session: proof, held by a browser as a cookie, that this browser
+ * has already presented an account password once. `/oauth/authorize` is a
+ * plain page navigation with no Authorization header, so this is what a
+ * bearer token is everywhere else — the thing that lets the endpoint tell an
+ * authenticated browser apart from anyone who merely knows a handle.
+ *
+ * Deliberately outside the account/app-password credential system: a device
+ * session is bearer-by-cookie rather than bearer-by-header, lives 30 days,
+ * and is revoked by name rather than rotated. Folding it into
+ * metalbear_auth_store would give the browser session the refresh-rotation
+ * semantics an API client needs and a browser cookie does not.
+ */
+#define METALBEAR_DEVICE_SESSION_LIFETIME_SECONDS (30 * 24 * 60 * 60)
+
+/* Create a device session for `subject` (an account DID). *out_token is a
+ * caller-owned opaque bearer value; store it only as a cookie, never log or
+ * echo it. */
+wf_status metalbear_oauth_device_session_create(metalbear_oauth_store *store,
+                                                const char *subject,
+                                                char **out_token);
+
+/*
+ * Resolve a device session token to the account DID it was issued for.
+ * Writes into `out` (caller-supplied buffer) and returns WF_OK, or
+ * WF_ERR_NOT_FOUND if the token is unknown, expired, or NULL.
+ */
+wf_status metalbear_oauth_device_session_verify(metalbear_oauth_store *store,
+                                                const char *token, char *out,
+                                                size_t out_len);
+
+/* Revoke a device session. Revoking an unknown or already-expired token is
+ * WF_OK: the desired state — signed out — already holds. */
+wf_status metalbear_oauth_device_session_revoke(metalbear_oauth_store *store,
+                                                const char *token);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
