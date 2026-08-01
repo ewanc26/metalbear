@@ -408,6 +408,8 @@ int main(void) {
         json, "inviteCodeRequired")));
     CHECK(cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(
         json, "phoneVerificationRequired")));
+    cJSON *blob_lim = cJSON_GetObjectItemCaseSensitive(json, "blobUploadLimit");
+    if (blob_lim) CHECK(cJSON_IsNumber(blob_lim));
     CHECK(cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(json, "contact")));
     cJSON_Delete(json);
     wf_response_free(&response);
