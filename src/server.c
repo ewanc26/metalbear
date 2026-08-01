@@ -828,6 +828,8 @@ static wf_status describe_server(void *ctx, const wf_xrpc_request *request,
     cJSON_AddItemToObject(root, "availableUserDomains", domains);
     cJSON_AddBoolToObject(root, "inviteCodeRequired", server->invite_required);
     cJSON_AddBoolToObject(root, "phoneVerificationRequired", false);
+    if (server->blob_upload_limit > 0)
+        cJSON_AddNumberToObject(root, "blobUploadLimit", (double)server->blob_upload_limit);
     if (server->account_email && server->account_email[0])
         cJSON_AddStringToObject(contact, "email", server->account_email);
     cJSON_AddItemToObject(root, "contact", contact);
