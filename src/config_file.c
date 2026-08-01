@@ -229,6 +229,7 @@ wf_status metalbear_config_file_load(const char *path,
 
         STR ("operator.name",             operator_name)
         STR ("operator.email",            account_email)
+        STR ("operator.override_email",   operator_email)
         STR ("operator.url",              operator_url)
         STR ("operator.support_url",      support_url)
         STR ("operator.description",      instance_description)
