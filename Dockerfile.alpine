@@ -43,7 +43,7 @@ RUN cmake -S MetalBear -B build \
 FROM alpine:3.21 AS runtime
 
 LABEL org.opencontainers.image.title="MetalBear" \
-      org.opencontainers.image.description="An AT Protocol Personal Data Server written in C11 (Alpine)" \
+      org.opencontainers.image.description="An AT Protocol Personal Data Server written in C23 (Alpine)" \
       org.opencontainers.image.source="https://github.com/ewanc26/metalbear" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 

@@ -1,6 +1,6 @@
 # Contributing to MetalBear
 
-Thanks for your interest. MetalBear is a C11 AT Protocol PDS built on the
+Thanks for your interest. MetalBear is a C23 AT Protocol PDS built on the
 sibling Wolfram SDK. A few ground rules help keep the codebase coherent.
 
 ## Core philosophy
