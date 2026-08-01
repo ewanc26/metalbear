@@ -124,6 +124,27 @@ Full OAuth 2.0 authorization server endpoints for AT Protocol OAuth flows:
 - `POST /oauth/token` - Token endpoint (authorization code + refresh grants)
 - `POST /oauth/revoke` - Token revocation (RFC 7009)
 
+### OAuth Auth Scopes
+
+Granular permission enforcement for OAuth-issued tokens, following the
+AT Protocol OAuth scope specification:
+
+- **Static scopes**: `atproto` (full access), `transition:email`,
+  `transition:generic`, `transition:chat.bsky`
+- **Dynamic repo scopes**: `repo:<collection>?action=<action>` for
+  fine-grained control over record operations
+  - Actions: `create`, `update`, `delete` (default: all)
+  - Wildcard collection: `repo:*` matches any collection
+  - Examples:
+    - `repo:app.bsky.feed.post` - all actions on posts
+    - `repo:app.bsky.feed.post?action=create` - only create posts
+    - `repo:*?action=create&action=update` - create/update any collection
+
+Scope enforcement is applied at the authentication layer for
+`com.atproto.repo.createRecord`, `putRecord`, and `deleteRecord` endpoints.
+Tokens with the `atproto` static scope or a wildcard repo scope with all
+actions retain full access.
+
 ## Account Management
 
 - `com.atproto.server.requestAccountDelete` - Request account deletion with
