@@ -2565,65 +2565,6 @@ static char *resolve_did_web_service(const char *did, const char *service_id) {
     return endpoint;
 }
 
-/* Low-level HTTP proxy: forwards request to `target` and copies status/body. */
-static wf_status proxy_http_request(const char *target, const char *method,
-                                    const char *content_type,
-                                    const unsigned char *body, size_t body_len,
-                                    wf_xrpc_response *resp) {
-    struct curl_slist *hdrs = NULL;
-    if (content_type && content_type[0]) {
-        char ct[256];
-        snprintf(ct, sizeof(ct), "Content-Type: %s", content_type);
-        hdrs = curl_slist_append(hdrs, ct);
-    }
-    proxy_buf_t body_out = {0};
-    proxy_headers hdrs_out = {0};
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-        curl_slist_free_all(hdrs);
-        wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                   "Could not initialise HTTP client");
-        return WF_OK;
-    }
-    curl_easy_setopt(curl, CURLOPT_URL, target);
-    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method ? method : "GET");
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, proxy_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body_out);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, proxy_header_cb);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &hdrs_out);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
-    if (body && body_len > 0) {
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body_len);
-    }
-    CURLcode rc = curl_easy_perform(curl);
-    long status = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-    curl_easy_cleanup(curl);
-    curl_slist_free_all(hdrs);
-
-    if (rc != CURLE_OK) {
-        free(body_out.data);
-        proxy_headers_free(&hdrs_out);
-        wf_xrpc_response_set_error(resp, 502, "BadGateway",
-                                   "Upstream request failed");
-        return WF_OK;
-    }
-
-    resp->http_status = status;
-    if (hdrs_out.content_type) {
-        wf_xrpc_response_set_content_type(resp, hdrs_out.content_type);
-    }
-    if (body_out.data && body_out.len > 0) {
-        wf_xrpc_response_set_body(resp, body_out.data, body_out.len);
-    }
-    free(body_out.data);
-    proxy_headers_free(&hdrs_out);
-    return WF_OK;
-}
-
 /* ------------------------------------------------------------------ */
 /* Read-after-write                                                     */
 /* ------------------------------------------------------------------ */
@@ -5910,8 +5851,10 @@ static wf_status appview_get_starter_packs(void *ctx,
 
 /* Notification endpoints — user-specific */
 static wf_status appview_get_unread_notifications(void *ctx,
-                                                const wf_xrpc_request *req,
-                                                wf_xrpc_response *resp) {
+                                                 const wf_xrpc_request *req,
+                                                 wf_xrpc_response *resp) {
+    (void)ctx;
+    (void)req;
     // Return empty unread count for public AppView; local AppView can be implemented later
     cJSON *root = cJSON_CreateObject();
     if (!root) {
