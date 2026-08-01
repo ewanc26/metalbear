@@ -18,7 +18,7 @@ MetalBear is an AT Protocol Personal Data Server written in C23 and built on
 MetalBear instance is consumed by Bluesky's relays and its posts are indexed by
 the Bluesky AppView.
 
-**Version:** 0.10.0
+**Version:** 0.12.0
 
 ## Core Features
 
