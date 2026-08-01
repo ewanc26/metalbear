@@ -246,7 +246,7 @@ void metalbear_oauth_grant_free(metalbear_oauth_grant *grant) {
 static bool valid_request(const metalbear_oauth_request *request) {
     return request && request->client_id && request->client_id[0] &&
            request->redirect_uri && request->redirect_uri[0] &&
-           request->scope && strstr(request->scope, "atproto") &&
+           request->scope && request->scope[0] &&
            request->code_challenge && strlen(request->code_challenge) == 43 &&
            request->dpop_jkt && strlen(request->dpop_jkt) == 43;
 }
