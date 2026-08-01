@@ -12,7 +12,7 @@
 
 # MetalBear
 
-MetalBear is an AT Protocol Personal Data Server written in C11 and built on
+MetalBear is an AT Protocol Personal Data Server written in C23 and built on
 [Wolfram](https://github.com/ewanc26/wolfram). It hosts multiple accounts, mints
 `did:plc` identities, serves the firehose, and federates: as of 0.4.1 a
 MetalBear instance is consumed by Bluesky's relays and its posts are indexed by

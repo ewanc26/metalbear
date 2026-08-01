@@ -1,4 +1,4 @@
-# MetalBear — an AT Protocol Personal Data Server in C11.
+# MetalBear — an AT Protocol Personal Data Server in C23.
 #
 # The build context is the parent directory holding both the MetalBear and
 # Wolfram source trees, so the image always builds the SDK from the same commit
@@ -71,7 +71,7 @@ CMD ["/bin/bash"]
 FROM debian:bookworm-slim AS runtime
 
 LABEL org.opencontainers.image.title="MetalBear" \
-      org.opencontainers.image.description="An AT Protocol Personal Data Server written in C11" \
+      org.opencontainers.image.description="An AT Protocol Personal Data Server written in C23" \
       org.opencontainers.image.source="https://github.com/ewanc26/metalbear" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 RUN apt-get update     && apt-get install -y --no-install-recommends \
