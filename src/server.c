@@ -3257,41 +3257,9 @@ static wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
  * order, which makes its cursored pages inconsistent; rsky's ORDER BY is
  * the self-consistent variant.) */
 
-/* Recursively find blob references in a record's JSON value. A modern blob
- * is {"$type":"blob","ref":{"$link":"<cid>"},...}; a legacy blob is
- * {"cid":"<cid>","mimeType":...} with no $type member. */
-static void json_walk_blob_refs(const cJSON *node,
-                                void (*cb)(const char *cid, void *ctx),
-                                void *ctx) {
-    if (!node) return;
-    if (cJSON_IsObject(node)) {
-        const cJSON *type = cJSON_GetObjectItemCaseSensitive(node, "$type");
-        if (cJSON_IsString(type) && type->valuestring &&
-            strcmp(type->valuestring, "blob") == 0) {
-            const cJSON *ref = cJSON_GetObjectItemCaseSensitive(node, "ref");
-            const cJSON *link = cJSON_IsObject(ref)
-                ? cJSON_GetObjectItemCaseSensitive(ref, "$link") : NULL;
-            if (cJSON_IsString(link) && link->valuestring)
-                cb(link->valuestring, ctx);
-            return; /* blob objects carry no nested records */
-        }
-        if (!cJSON_IsString(type)) {
-            const cJSON *cid = cJSON_GetObjectItemCaseSensitive(node, "cid");
-            const cJSON *mime = cJSON_GetObjectItemCaseSensitive(node,
-                                                                 "mimeType");
-            if (cJSON_IsString(cid) && cid->valuestring &&
-                cJSON_IsString(mime)) {
-                cb(cid->valuestring, ctx);
-                return;
-            }
-        }
-        const cJSON *child = NULL;
-        cJSON_ArrayForEach(child, node) json_walk_blob_refs(child, cb, ctx);
-    } else if (cJSON_IsArray(node)) {
-        const cJSON *child = NULL;
-        cJSON_ArrayForEach(child, node) json_walk_blob_refs(child, cb, ctx);
-    }
-}
+/* Blob-ref discovery lives in blob_store.h (metalbear_blob_walk_refs) — the
+ * write path needs the same walk to associate/dereference blobs on record
+ * writes, so it is shared rather than duplicated here. */
 
 typedef struct missing_blob_ref {
     char *cid;
@@ -3341,7 +3309,7 @@ static wf_status missing_blobs_visit(const char *collection, const char *rkey,
     if (!value) return WF_OK;
     scan->collection = collection;
     scan->rkey = rkey;
-    json_walk_blob_refs(value, missing_blob_candidate, scan);
+    metalbear_blob_walk_refs(value, missing_blob_candidate, scan);
     cJSON_Delete(value);
     return WF_OK;
 }
@@ -3376,7 +3344,7 @@ static wf_status blob_ref_tally_visit(const char *collection, const char *rkey,
     (void)rkey;
     cJSON *value = cJSON_Parse(value_json);
     if (!value) return WF_OK;
-    json_walk_blob_refs(value, blob_ref_tally_add, ctx);
+    metalbear_blob_walk_refs(value, blob_ref_tally_add, ctx);
     cJSON_Delete(value);
     return WF_OK;
 }

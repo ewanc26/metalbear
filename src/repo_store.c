@@ -18,6 +18,7 @@
  */
 
 #include "metalbear/repo_store.h"
+#include "metalbear/blob_store.h"
 
 #include "wolfram/repo/cbor.h"
 #include "wolfram/repo/cid.h"
@@ -1613,23 +1614,166 @@ static bool repo_access_allowed(metalbear_pds_repo_bundle *b,
  * 400 RepoNotFound response when the resolver fails / resolves no store.
  * When no resolver is set the single fallback store is returned.
  */
-static metalbear_repo_store *resolve_repo(metalbear_pds_repo_bundle *b,
-                                   const wf_xrpc_request *req,
-                                   wf_xrpc_response *resp) {
+/*
+ * As resolve_repo, but also resolves the account's blob store into
+ * `out_blobs` (NULL on any failure path, including when a resolver simply
+ * has none to offer). Write handlers need both stores to track which blobs
+ * a record references.
+ */
+static metalbear_repo_store *resolve_repo_and_blobs(
+    metalbear_pds_repo_bundle *b, const wf_xrpc_request *req,
+    wf_xrpc_response *resp, metalbear_blob_store **out_blobs) {
     metalbear_repo_store *store = b->fallback_repo;
+    metalbear_blob_store *blobs = b->fallback_blobs;
     if (b->resolver) {
         metalbear_repo_store *out_repo = NULL;
-        metalbear_blob_store *out_blobs = NULL;
-        if (b->resolver(b->resolver_ctx, req, &out_repo, &out_blobs) != WF_OK ||
+        metalbear_blob_store *resolved_blobs = NULL;
+        if (b->resolver(b->resolver_ctx, req, &out_repo, &resolved_blobs) != WF_OK ||
             !out_repo) {
             wf_xrpc_response_set_error(resp, 400, "RepoNotFound",
                                         "Repository is not hosted here");
+            if (out_blobs) *out_blobs = NULL;
             return NULL;
         }
         store = out_repo;
+        blobs = resolved_blobs;
     }
-    if (!repo_access_allowed(b, req, NULL, resp)) return NULL;
+    if (!repo_access_allowed(b, req, NULL, resp)) {
+        if (out_blobs) *out_blobs = NULL;
+        return NULL;
+    }
+    if (out_blobs) *out_blobs = blobs;
     return store;
+}
+
+static metalbear_repo_store *resolve_repo(metalbear_pds_repo_bundle *b,
+                                   const wf_xrpc_request *req,
+                                   wf_xrpc_response *resp) {
+    return resolve_repo_and_blobs(b, req, resp, NULL);
+}
+
+/*
+ * Blob reference bookkeeping for the repo write path — mirrors the reference
+ * PDS's insertBlobs/associateBlob (record_blob rows) and
+ * deleteDereferencedBlobs (a blob dropped by every record that named it is
+ * garbage, deleted immediately rather than on a timer). `blobs` may be NULL
+ * (no blob store resolved for this account), in which case every helper
+ * below is a no-op.
+ *
+ * A record may reference a blob CID that has not been uploaded yet — the
+ * migration flow deliberately allows this (com.atproto.repo.listMissingBlobs
+ * exists precisely to let a client discover such records and backfill the
+ * blobs afterward; see its handler's comment). So association here is
+ * best-effort: a CID with no matching stored blob is simply not associated,
+ * silently, matching the reference PDS's own record_blob rows, which name a
+ * blobCid whether or not that blob has actually landed yet.
+ */
+typedef struct blob_assoc_ctx {
+    metalbear_blob_store *blobs;
+    const char *uri;
+} blob_assoc_ctx;
+
+static void blob_associate_cb(const char *cid, void *opaque) {
+    blob_assoc_ctx *c = opaque;
+    /* WF_ERR_NOT_FOUND (blob not uploaded yet) is expected and not an error
+     * here — see the module comment above. */
+    (void)metalbear_blob_store_associate(c->blobs, cid, c->uri);
+}
+
+/* Associate every blob `record_json` references with `uri`. Call this
+ * BEFORE untrack_superseded_blobs for the record it is replacing, so a blob
+ * shared between the old and new value is already re-associated by the time
+ * the old value's association is dropped. */
+static void track_written_blobs(metalbear_blob_store *blobs, const char *uri,
+                                const char *record_json) {
+    if (!blobs || !record_json) return;
+    cJSON *value = cJSON_Parse(record_json);
+    if (!value) return;
+    blob_assoc_ctx c = {blobs, uri};
+    metalbear_blob_walk_refs(value, blob_associate_cb, &c);
+    cJSON_Delete(value);
+}
+
+/* A small deduplicated set of owned CID strings, used only to answer "is
+ * this CID also in the new value" while dereferencing an old one. */
+typedef struct blob_cid_set {
+    char **cids;
+    size_t count;
+} blob_cid_set;
+
+static void blob_cid_set_add(const char *cid, void *opaque) {
+    blob_cid_set *set = opaque;
+    for (size_t i = 0; i < set->count; i++)
+        if (set->cids[i] && strcmp(set->cids[i], cid) == 0) return;
+    char **grown = (char **)realloc(set->cids, (set->count + 1) * sizeof(*grown));
+    if (!grown) return; /* best-effort: a missed entry only costs an extra,
+                          * harmless dissociate call below, never a leak */
+    set->cids = grown;
+    set->cids[set->count] = strdup(cid);
+    set->count++;
+}
+
+static bool blob_cid_set_contains(const blob_cid_set *set, const char *cid) {
+    for (size_t i = 0; i < set->count; i++)
+        if (set->cids[i] && strcmp(set->cids[i], cid) == 0) return true;
+    return false;
+}
+
+static void blob_cid_set_free(blob_cid_set *set) {
+    for (size_t i = 0; i < set->count; i++) free(set->cids[i]);
+    free(set->cids);
+}
+
+typedef struct blob_dissociate_except_ctx {
+    metalbear_blob_store *blobs;
+    const char *uri;
+    const blob_cid_set *keep;
+} blob_dissociate_except_ctx;
+
+static void blob_dissociate_except_cb(const char *cid, void *opaque) {
+    blob_dissociate_except_ctx *c = opaque;
+    if (c->keep && blob_cid_set_contains(c->keep, cid))
+        return; /* still referenced by the record's new value */
+    (void)metalbear_blob_store_dissociate(c->blobs, cid, c->uri);
+}
+
+/*
+ * Dissociate every blob `old_json` referenced from `uri`, except one also
+ * referenced by `new_json` (pass NULL for a delete, where nothing is kept).
+ *
+ * This is not simply "associate the new value before dissociating the old
+ * one": when a record is replaced but keeps referencing the SAME blob CID,
+ * old and new both name the identical (cid, uri) pair — associating it is a
+ * no-op (it is already associated), so an unconditional dissociate would
+ * still drop the count to zero and delete a blob the record still uses.
+ * Skipping CIDs the new value keeps is the only correct rule; it also
+ * mirrors the reference PDS's deleteDereferencedBlobs, which excludes
+ * `newBlobCids` from the set of rows it deletes for exactly this reason.
+ */
+static void untrack_superseded_blobs(metalbear_blob_store *blobs,
+                                     const char *uri, const char *old_json,
+                                     const char *new_json) {
+    if (!blobs || !old_json) return;
+    cJSON *old_value = cJSON_Parse(old_json);
+    if (!old_value) return;
+    blob_cid_set keep = {0};
+    if (new_json) {
+        cJSON *new_value = cJSON_Parse(new_json);
+        if (new_value) {
+            metalbear_blob_walk_refs(new_value, blob_cid_set_add, &keep);
+            cJSON_Delete(new_value);
+        }
+    }
+    blob_dissociate_except_ctx c = {blobs, uri, &keep};
+    metalbear_blob_walk_refs(old_value, blob_dissociate_except_cb, &c);
+    cJSON_Delete(old_value);
+    blob_cid_set_free(&keep);
+}
+
+static void free_owned_strings(char **arr, size_t count) {
+    if (!arr) return;
+    for (size_t i = 0; i < count; i++) free(arr[i]);
+    free(arr);
 }
 
 /*
@@ -1780,7 +1924,9 @@ static void set_write_error(wf_xrpc_response *resp, wf_status st,
 
 static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
                                   wf_xrpc_response *resp) {
-    metalbear_repo_store *s = resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
+    metalbear_blob_store *blobs = NULL;
+    metalbear_repo_store *s = resolve_repo_and_blobs(
+        (metalbear_pds_repo_bundle *)ctx, req, resp, &blobs);
     if (!s) return WF_OK;
     cJSON *body = req->params;
     if (!body || !cJSON_IsObject(body)) {
@@ -1816,11 +1962,13 @@ static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
     char *uri = NULL, *cid = NULL;
     wf_status st = metalbear_repo_store_create_record(s, collection->valuestring, rk,
                                               rec_json, swap_str, &uri, &cid);
-    free(rec_json);
     if (st != WF_OK) {
+        free(rec_json);
         set_write_error(resp, st, "record creation failed");
         return WF_OK;
     }
+    track_written_blobs(blobs, uri, rec_json);
+    free(rec_json);
 
     cJSON *out = cJSON_CreateObject();
     cJSON_AddStringToObject(out, "uri", uri ? uri : "");
@@ -1841,7 +1989,9 @@ static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
 
 static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
                                wf_xrpc_response *resp) {
-    metalbear_repo_store *s = resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
+    metalbear_blob_store *blobs = NULL;
+    metalbear_repo_store *s = resolve_repo_and_blobs(
+        (metalbear_pds_repo_bundle *)ctx, req, resp, &blobs);
     if (!s) return WF_OK;
     cJSON *body = req->params;
     if (!body || !cJSON_IsObject(body)) {
@@ -1878,15 +2028,30 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
+    /* Capture the record it may replace BEFORE the write lands, so its blobs
+     * can be dissociated afterward — putRecord upserts by rkey and there is
+     * no other way to learn the prior value once the store has overwritten
+     * it. Absent (WF_ERR_NOT_FOUND) simply means this is a create. */
+    char *old_json = NULL, *old_cid_unused = NULL;
+    (void)metalbear_repo_store_get_record(s, collection->valuestring,
+                                          rkey->valuestring, &old_json,
+                                          &old_cid_unused);
+    free(old_cid_unused);
+
     char *uri = NULL, *cid = NULL;
     wf_status st = metalbear_repo_store_put_record(s, collection->valuestring,
                                            rkey->valuestring, rec_json,
                                            swap_str, swaprec_str, &uri, &cid);
-    free(rec_json);
     if (st != WF_OK) {
+        free(rec_json);
+        free(old_json);
         set_write_error(resp, st, "record put failed");
         return WF_OK;
     }
+    track_written_blobs(blobs, uri, rec_json);
+    untrack_superseded_blobs(blobs, uri, old_json, rec_json);
+    free(rec_json);
+    free(old_json);
 
     cJSON *out = cJSON_CreateObject();
     cJSON_AddStringToObject(out, "uri", uri ? uri : "");
@@ -1907,7 +2072,9 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
 
 static wf_status h_delete_record(void *ctx, const wf_xrpc_request *req,
                                   wf_xrpc_response *resp) {
-    metalbear_repo_store *s = resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
+    metalbear_blob_store *blobs = NULL;
+    metalbear_repo_store *s = resolve_repo_and_blobs(
+        (metalbear_pds_repo_bundle *)ctx, req, resp, &blobs);
     if (!s) return WF_OK;
     cJSON *body = req->params;
     if (!body || !cJSON_IsObject(body)) {
@@ -1929,6 +2096,13 @@ static wf_status h_delete_record(void *ctx, const wf_xrpc_request *req,
                                                          : NULL;
     const char *swaprec_str = (swapRec && cJSON_IsString(swapRec))
                                   ? swapRec->valuestring : NULL;
+    /* Capture the value being deleted BEFORE it is gone, so its blobs can be
+     * dissociated afterward. */
+    char *old_json = NULL, *old_cid_unused = NULL;
+    (void)metalbear_repo_store_get_record(s, collection->valuestring,
+                                          rkey->valuestring, &old_json,
+                                          &old_cid_unused);
+    free(old_cid_unused);
     wf_status st = metalbear_repo_store_delete_record(s, collection->valuestring,
                                               rkey->valuestring, swap_str,
                                               swaprec_str);
@@ -1938,9 +2112,16 @@ static wf_status h_delete_record(void *ctx, const wf_xrpc_request *req,
      * as a spurious error on a retry that has nothing left to do. A swap
      * guard that fails is still a real InvalidSwap conflict. */
     if (st != WF_OK && st != WF_ERR_NOT_FOUND) {
+        free(old_json);
         set_write_error(resp, st, "record could not be deleted");
         return WF_OK;
     }
+    if (st == WF_OK) {
+        char *uri = make_uri(s->did, collection->valuestring, rkey->valuestring);
+        untrack_superseded_blobs(blobs, uri, old_json, NULL);
+        free(uri);
+    }
+    free(old_json);
     cJSON *out = cJSON_CreateObject();
     if (st == WF_OK) add_commit_meta(s, out);
     char *js = cJSON_PrintUnformatted(out);
@@ -2017,7 +2198,9 @@ static wf_status h_get_record(void *ctx, const wf_xrpc_request *req,
 
 static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
                                  wf_xrpc_response *resp) {
-    metalbear_repo_store *s = resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
+    metalbear_blob_store *blobs = NULL;
+    metalbear_repo_store *s = resolve_repo_and_blobs(
+        (metalbear_pds_repo_bundle *)ctx, req, resp, &blobs);
     if (!s) return WF_OK;
     cJSON *body = req->params;
     if (!body || !cJSON_IsObject(body)) {
@@ -2048,6 +2231,13 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
     metalbear_validation_status *statuses = write_count
         ? calloc((size_t)write_count, sizeof(*statuses)) : NULL;
     if (write_count && !statuses) return WF_ERR_ALLOC;
+    /* The value replaced or removed by an update/delete op, captured now
+     * (before anything is committed) since it is the only chance to learn
+     * it — the store overwrites it inside metalbear_repo_store_apply_writes.
+     * NULL for create ops and for update/delete ops with no prior record. */
+    char **old_values = write_count
+        ? calloc((size_t)write_count, sizeof(*old_values)) : NULL;
+    if (write_count && !old_values) { free(statuses); return WF_ERR_ALLOC; }
     bool report_status = true;
     int idx = 0;
     const cJSON *w = NULL;
@@ -2055,29 +2245,56 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
         const cJSON *type = cJSON_GetObjectItemCaseSensitive(w, "$type");
         const cJSON *coll = cJSON_GetObjectItemCaseSensitive(w, "collection");
         const cJSON *val = cJSON_GetObjectItemCaseSensitive(w, "value");
-        if (!check_rkey(cJSON_GetObjectItemCaseSensitive(w, "rkey"), resp)) {
+        const cJSON *rk = cJSON_GetObjectItemCaseSensitive(w, "rkey");
+        if (!check_rkey(rk, resp)) {
             free(statuses);
+            free_owned_strings(old_values, (size_t)write_count);
             return WF_OK;
         }
         bool is_write = cJSON_IsString(type) && val && cJSON_IsString(coll) &&
             (strcmp(type->valuestring, "com.atproto.repo.applyWrites#create") == 0 ||
              strcmp(type->valuestring, "com.atproto.repo.applyWrites#update") == 0);
+        bool is_update = cJSON_IsString(type) &&
+            strcmp(type->valuestring, "com.atproto.repo.applyWrites#update") == 0;
+        bool is_delete = cJSON_IsString(type) &&
+            strcmp(type->valuestring, "com.atproto.repo.applyWrites#delete") == 0;
+        if ((is_update || is_delete) && cJSON_IsString(coll) &&
+            cJSON_IsString(rk) && rk->valuestring[0]) {
+            char *old_cid_unused = NULL;
+            (void)metalbear_repo_store_get_record(s, coll->valuestring,
+                                                  rk->valuestring,
+                                                  &old_values[idx],
+                                                  &old_cid_unused);
+            free(old_cid_unused);
+        }
         if (is_write) {
             char *rec_json = cJSON_PrintUnformatted(val);
-            if (!rec_json) { free(statuses); return WF_ERR_ALLOC; }
+            if (!rec_json) {
+                free(statuses);
+                free_owned_strings(old_values, (size_t)write_count);
+                return WF_ERR_ALLOC;
+            }
             bool report_one = true;
             int ok = check_record((metalbear_pds_repo_bundle *)ctx, body,
                                   coll->valuestring, rec_json, resp,
                                   &statuses[idx], &report_one);
             free(rec_json);
-            if (!ok) { free(statuses); return WF_OK; }
+            if (!ok) {
+                free(statuses);
+                free_owned_strings(old_values, (size_t)write_count);
+                return WF_OK;
+            }
             report_status = report_one;
         }
         idx++;
     }
 
     char *writes_json = cJSON_PrintUnformatted(writes);
-    if (!writes_json) { free(statuses); return WF_ERR_ALLOC; }
+    if (!writes_json) {
+        free(statuses);
+        free_owned_strings(old_values, (size_t)write_count);
+        return WF_ERR_ALLOC;
+    }
 
     char *cid = NULL, *rev = NULL, *results = NULL;
     wf_status st = metalbear_repo_store_apply_writes(s, writes_json, swap_str, &cid,
@@ -2085,6 +2302,7 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
     free(writes_json);
     if (st != WF_OK) {
         free(statuses);
+        free_owned_strings(old_values, (size_t)write_count);
         set_write_error(resp, st, "applyWrites failed");
         return WF_OK;
     }
@@ -2106,9 +2324,59 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
                 cJSON_AddStringToObject(entry, "validationStatus",
                                         validation_status_text(statuses[i]));
         }
+
+        /* Blob reference bookkeeping — mirrors the reference PDS's
+         * insertBlobs + deleteDereferencedBlobs. Phase 1 associates every
+         * blob a create/update's NEW value references; phase 2 dissociates
+         * every blob an update/delete's OLD value referenced. Doing all of
+         * phase 1 before any of phase 2 means a blob reused elsewhere in the
+         * same batch (moved from one record to another) never touches a
+         * zero reference count in between. */
+        for (int i = 0; i < cJSON_GetArraySize(res) && i < write_count; i++) {
+            const cJSON *wi = cJSON_GetArrayItem(writes, i);
+            const cJSON *type = cJSON_GetObjectItemCaseSensitive(wi, "$type");
+            const cJSON *val = cJSON_GetObjectItemCaseSensitive(wi, "value");
+            cJSON *entry = cJSON_GetArrayItem(res, i);
+            cJSON *entry_uri = cJSON_GetObjectItemCaseSensitive(entry, "uri");
+            bool is_create_or_update = cJSON_IsString(type) &&
+                (strcmp(type->valuestring, "com.atproto.repo.applyWrites#create") == 0 ||
+                 strcmp(type->valuestring, "com.atproto.repo.applyWrites#update") == 0);
+            if (is_create_or_update && cJSON_IsString(entry_uri) && val) {
+                char *val_json = cJSON_PrintUnformatted(val);
+                track_written_blobs(blobs, entry_uri->valuestring, val_json);
+                free(val_json);
+            }
+        }
+        for (int i = 0; i < cJSON_GetArraySize(res) && i < write_count; i++) {
+            if (!old_values[i]) continue;
+            const cJSON *wi = cJSON_GetArrayItem(writes, i);
+            const cJSON *type = cJSON_GetObjectItemCaseSensitive(wi, "$type");
+            if (!cJSON_IsString(type)) continue;
+            if (strcmp(type->valuestring, "com.atproto.repo.applyWrites#update") == 0) {
+                cJSON *entry = cJSON_GetArrayItem(res, i);
+                cJSON *entry_uri = cJSON_GetObjectItemCaseSensitive(entry, "uri");
+                const cJSON *val = cJSON_GetObjectItemCaseSensitive(wi, "value");
+                if (cJSON_IsString(entry_uri)) {
+                    char *val_json = val ? cJSON_PrintUnformatted(val) : NULL;
+                    untrack_superseded_blobs(blobs, entry_uri->valuestring,
+                                             old_values[i], val_json);
+                    free(val_json);
+                }
+            } else if (strcmp(type->valuestring, "com.atproto.repo.applyWrites#delete") == 0) {
+                const cJSON *coll = cJSON_GetObjectItemCaseSensitive(wi, "collection");
+                const cJSON *rk = cJSON_GetObjectItemCaseSensitive(wi, "rkey");
+                if (cJSON_IsString(coll) && cJSON_IsString(rk)) {
+                    char *uri = make_uri(s->did, coll->valuestring, rk->valuestring);
+                    untrack_superseded_blobs(blobs, uri, old_values[i], NULL);
+                    free(uri);
+                }
+            }
+        }
+
         cJSON_AddItemToObject(out, "results", res);
     }
     free(statuses);
+    free_owned_strings(old_values, (size_t)write_count);
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
     free(cid);
