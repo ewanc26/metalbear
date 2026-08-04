@@ -287,6 +287,15 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     steps:
+      # docker/metadata-action's `type=semver,pattern={{version}}` tag (what
+      # the image job actually pushes) strips the tag's leading `v` —
+      # `v0.13.6` pushes as `0.13.6`, not `v0.13.6`. The release body's pull
+      # command used to reference `github.ref_name` directly, which docker
+      # pull would then fail to resolve.
+      - name: Compute image tag
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       # Only the named binary artifacts. The image job's buildx runs upload
       # *.dockerbuild attestation artifacts that repeatedly fail to download
       # here and have been taking every tag release down with them.
@@ -307,7 +316,7 @@ jobs:
             ## Container image
 
             ```sh
-            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            docker pull ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.version }}
             ```
 
             Built for `linux/amd64` and `linux/arm64`.
