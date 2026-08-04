@@ -1,17 +1,20 @@
 /*
- * test_oauth_metadata.c — offline test for the OAuth authorization-server
- * metadata endpoint (.well-known/oauth-authorization-server).
+ * test_oauth_metadata.c — offline test for the OAuth server metadata
+ * endpoints (.well-known/oauth-authorization-server and
+ * .well-known/oauth-protected-resource).
  *
- * Locks in a real bug found by comparing this endpoint field-by-field
- * against the reference PDS's oauth-provider (build-metadata.ts):
- * `token_endpoint_auth_methods_supported` used to advertise
- * "private_key_jwt" even though nothing in this codebase parses or
- * verifies a client_assertion JWT. A confidential client reading this
+ * Locks in a real bug found by comparing these endpoints field-by-field
+ * against the reference PDS's oauth-provider (build-metadata.ts,
+ * auth-routes.ts): `token_endpoint_auth_methods_supported` used to
+ * advertise "private_key_jwt" even though nothing in this codebase parses
+ * or verifies a client_assertion JWT. A confidential client reading this
  * metadata and attempting assertion-based auth would find no verifier on
  * the other end. Also locks in `dpop_signing_alg_values_supported` being
  * ES256-only, matching wf_oauth_verify_dpop's hardcoded `alg == "ES256"`
  * check — advertising an algorithm this server cannot actually verify a
- * DPoP proof with would be the same class of bug.
+ * DPoP proof with would be the same class of bug — and that
+ * `resource_documentation` (present in the reference, previously absent
+ * here) is now included on the protected-resource endpoint.
  *
  * Requires WOLFRAM_BUILD_SERVER.
  */
@@ -171,6 +174,22 @@ static int run(void) {
         cJSON_Delete(root);
     }
     free(body);
+
+    unsigned char *pr_body = NULL; size_t pr_len = 0; long pr_status = 0;
+    WF_CHECK(raw_get("127.0.0.1", port,
+                     "/.well-known/oauth-protected-resource", &pr_body,
+                     &pr_len, &pr_status) == 0);
+    WF_CHECK(pr_status == 200);
+    cJSON *pr_root = cJSON_ParseWithLength((const char *)pr_body, pr_len);
+    WF_CHECK(pr_root != NULL);
+    if (pr_root) {
+        cJSON *docs = cJSON_GetObjectItemCaseSensitive(
+            pr_root, "resource_documentation");
+        WF_CHECK(cJSON_IsString(docs) &&
+                 strcmp(docs->valuestring, "https://atproto.com") == 0);
+        cJSON_Delete(pr_root);
+    }
+    free(pr_body);
 
     wf_xrpc_server_free(server);
     metalbear_oauth_store_free(store);
