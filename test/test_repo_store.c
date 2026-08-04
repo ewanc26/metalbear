@@ -171,6 +171,80 @@ static int run_record_validation(void) {
 }
 
 /*
+ * The uploadBlob lexicon is explicit that mimetype/size restrictions are
+ * enforced "when the reference is created", not at upload time — MetalBear's
+ * blob store itself imposes none. That enforcement is this same lexicon
+ * record-validation path: app.bsky.embed.images#image declares an "image"
+ * mimetype-glob accept list and maxSize:2000000, so a post embedding a blob
+ * outside either bound must fail validation exactly like a missing required field
+ * does, proving check_record's call into metalbear_validate_record actually
+ * covers blob constraints and not just plain object/string/array schemas.
+ */
+static int run_blob_constraint_validation(void) {
+    int failures = 0;
+    wf_lexicon_registry *lex = wf_lexicon_registry_new();
+    WF_CHECK(lex != NULL);
+    if (!lex) return failures + 1;
+    if (wf_lexicon_registry_load_dir(lex, METALBEAR_TEST_LEXICON_DIR) != WF_OK) {
+        fprintf(stderr, "SKIP: no lexicon corpus at %s\n",
+                METALBEAR_TEST_LEXICON_DIR);
+        wf_lexicon_registry_free(lex);
+        return failures;
+    }
+
+    metalbear_validation_status status = METALBEAR_VALIDATION_VALID;
+    char *message = NULL;
+
+    /* Within accept + maxSize: valid. */
+    const char *good =
+        "{\"$type\":\"app.bsky.feed.post\",\"text\":\"pic\","
+        "\"embed\":{\"$type\":\"app.bsky.embed.images\",\"images\":["
+        "{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
+        "\"ref\":{\"$link\":\"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku\"},\"mimeType\":\"image/png\","
+        "\"size\":2000000}}]},"
+        "\"createdAt\":\"2026-07-25T00:00:00Z\"}";
+    WF_CHECK(metalbear_validate_record(lex, "app.bsky.feed.post", good, false,
+                                       &status, &message) == WF_OK);
+    WF_CHECK(status == METALBEAR_VALIDATION_VALID);
+    WF_CHECK(message == NULL);
+
+    /* One byte over the 2 MB maxSize is rejected. */
+    const char *too_big =
+        "{\"$type\":\"app.bsky.feed.post\",\"text\":\"pic\","
+        "\"embed\":{\"$type\":\"app.bsky.embed.images\",\"images\":["
+        "{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
+        "\"ref\":{\"$link\":\"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku\"},\"mimeType\":\"image/png\","
+        "\"size\":2000001}}]},"
+        "\"createdAt\":\"2026-07-25T00:00:00Z\"}";
+    status = METALBEAR_VALIDATION_VALID;
+    WF_CHECK(metalbear_validate_record(lex, "app.bsky.feed.post", too_big,
+                                       false, &status, &message) ==
+             WF_ERR_VALIDATION);
+    WF_CHECK(message != NULL);
+    free(message);
+    message = NULL;
+
+    /* A mimetype outside the "image" accept glob is rejected regardless of size. */
+    const char *wrong_mime =
+        "{\"$type\":\"app.bsky.feed.post\",\"text\":\"pic\","
+        "\"embed\":{\"$type\":\"app.bsky.embed.images\",\"images\":["
+        "{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
+        "\"ref\":{\"$link\":\"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku\"},\"mimeType\":\"application/pdf\","
+        "\"size\":100}}]},"
+        "\"createdAt\":\"2026-07-25T00:00:00Z\"}";
+    status = METALBEAR_VALIDATION_VALID;
+    WF_CHECK(metalbear_validate_record(lex, "app.bsky.feed.post", wrong_mime,
+                                       false, &status, &message) ==
+             WF_ERR_VALIDATION);
+    WF_CHECK(message != NULL);
+    free(message);
+    message = NULL;
+
+    wf_lexicon_registry_free(lex);
+    return failures;
+}
+
+/*
  * Read-after-write's load-bearing query: which records post-date a given repo
  * rev. An AppView reports how far it has indexed via `atproto-repo-rev`, and
  * everything newer is a write the author cannot see yet.
@@ -946,6 +1020,7 @@ int main(void) {
     run_unit();
     run_records_since_rev();
     run_record_validation();
+    run_blob_constraint_validation();
     run_adopted_key();
     run_did_immutability();
     run_server();
