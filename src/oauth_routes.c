@@ -172,15 +172,23 @@ static wf_status oauth_metadata(void *ctx, const wf_xrpc_request *req,
     cJSON_AddItemToArray(methods, cJSON_CreateString("S256"));
     cJSON_AddItemToObject(root, "code_challenge_methods_supported", methods);
 
+    /* ES256 only: wf_oauth_verify_dpop (wolfram's oauth/verify.c) hardcodes
+     * `alg == "ES256"` and rejects everything else, so that is the only
+     * algorithm this server can actually verify a DPoP proof with. */
     cJSON *dpop_algs = cJSON_CreateArray();
     cJSON_AddItemToArray(dpop_algs, cJSON_CreateString("ES256"));
     cJSON_AddItemToObject(root, "dpop_signing_alg_values_supported",
                           dpop_algs);
 
+    /* "none" only. Nothing in this codebase parses or verifies a
+     * client_assertion JWT — grep for "assertion" in src/oauth*.c and there
+     * is nothing to find. Advertising "private_key_jwt" here (as this
+     * endpoint used to) is exactly the kind of fabricated capability
+     * AGENTS.md warns against: a confidential client that read this
+     * metadata and attempted assertion-based auth would find no verifier on
+     * the other end. */
     cJSON *token_methods = cJSON_CreateArray();
     cJSON_AddItemToArray(token_methods, cJSON_CreateString("none"));
-    cJSON_AddItemToArray(token_methods,
-                         cJSON_CreateString("private_key_jwt"));
     cJSON_AddItemToObject(root, "token_endpoint_auth_methods_supported",
                           token_methods);
 
