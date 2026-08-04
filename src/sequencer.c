@@ -712,9 +712,34 @@ static void *subscriber_main(void *raw) {
                 break;
             }
             if (frame) {
-                if (wf_xrpc_server_ws_send(worker->stream, frame, length) !=
-                    WF_OK) {
+                wf_status send_rc =
+                    wf_xrpc_server_ws_send(worker->stream, frame, length);
+                if (send_rc != WF_OK) {
                     free(frame);
+                    /*
+                     * The peer's receive window stayed full for the whole
+                     * write timeout: it isn't reading fast enough to keep up
+                     * with this repo's write volume. The reference PDS
+                     * distinguishes this from an ordinary disconnect
+                     * (packages/pds/src/sequencer/outbox.ts, on its
+                     * AsyncBufferFullError) so the subscriber knows *why* it
+                     * was dropped rather than guessing at a network blip.
+                     * Best-effort: if the socket is truly dead this second
+                     * send fails silently too, same as the InternalServerError
+                     * case above.
+                     */
+                    if (send_rc == WF_ERR_TIMEOUT) {
+                        unsigned char *err = NULL;
+                        size_t err_len = 0;
+                        if (wf_sync_publish_error(
+                                worker->cursor, "ConsumerTooSlow",
+                                "Stream consumer too slow", &err,
+                                &err_len) == WF_OK) {
+                            wf_xrpc_server_ws_send(worker->stream, err,
+                                                   err_len);
+                            free(err);
+                        }
+                    }
                     break;
                 }
                 worker->cursor = seq;
