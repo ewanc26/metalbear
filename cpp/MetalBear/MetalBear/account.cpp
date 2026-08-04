@@ -73,7 +73,8 @@ wf_status metalbear_account_store_open(const char *path,
         "id INTEGER PRIMARY KEY CHECK(id=0),"
         "active INTEGER NOT NULL CHECK(active IN(0,1)),"
         "email TEXT,email_confirmed INTEGER NOT NULL DEFAULT 0,"
-        "deactivated_at TEXT,delete_after TEXT);"
+        "deactivated_at TEXT,delete_after TEXT,"
+        "invites_enabled INTEGER NOT NULL DEFAULT 1);"
         "INSERT OR IGNORE INTO account_state(id,active) VALUES(0,1);"
         "CREATE TABLE IF NOT EXISTS credentials("
         "id INTEGER PRIMARY KEY CHECK(id=0),salt BLOB NOT NULL,"
@@ -92,6 +93,20 @@ wf_status metalbear_account_store_open(const char *path,
         metalbear_account_store_free(store);
         return WF_ERR_INTERNAL;
     }
+    /* Migrate existing databases that predate the invites_enabled column. A
+     * fresh database already carries the column, so "duplicate column name" is
+     * the expected case; any other failure leaves the store unable to read the
+     * flag the new queries depend on, so fail the open rather than limp on. */
+    char *err = nullptr;
+    sqlite3_exec(store->db.get(),
+        "ALTER TABLE account_state ADD COLUMN invites_enabled INTEGER NOT NULL DEFAULT 1;",
+        nullptr, nullptr, &err);
+    if (err && !std::strstr(err, "duplicate column name")) {
+        sqlite3_free(err);
+        metalbear_account_store_free(store);
+        return WF_ERR_INTERNAL;
+    }
+    if (err) sqlite3_free(err);
     sqlite3_stmt *stmt = nullptr;
     int has_credentials = 0;
     if (sqlite3_prepare_v2(store->db.get(),
@@ -592,6 +607,39 @@ wf_status metalbear_account_store_prefs_put(metalbear_account_store *store,
             "REPLACE INTO preferences(id, data) VALUES(0, ?);",
             -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, json, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_DONE) status = WF_OK;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+bool metalbear_account_invites_enabled(metalbear_account_store *store) {
+    if (!store) return false;
+    pthread_mutex_lock(&store->mutex);
+    int enabled = 1;
+    sqlite3_stmt *stmt = nullptr;
+    if (sqlite3_prepare_v2(store->db.get(),
+            "SELECT invites_enabled FROM account_state WHERE id=0;",
+            -1, &stmt, nullptr) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW) {
+        enabled = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return enabled != 0;
+}
+
+wf_status metalbear_account_set_invites_enabled(metalbear_account_store *store,
+                                                bool enabled) {
+    if (!store) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = nullptr;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db.get(),
+            "UPDATE account_state SET invites_enabled=? WHERE id=0;",
+            -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, enabled ? 1 : 0);
         if (sqlite3_step(stmt) == SQLITE_DONE) status = WF_OK;
     }
     sqlite3_finalize(stmt);

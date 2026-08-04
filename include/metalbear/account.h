@@ -66,6 +66,11 @@ wf_status metalbear_account_store_prefs_get(metalbear_account_store *store,
                                            char **out_json);
 wf_status metalbear_account_store_prefs_put(metalbear_account_store *store,
                                            const char *json);
+/* Return whether the account may receive new invite codes (default 1). */
+bool metalbear_account_invites_enabled(metalbear_account_store *store);
+/* Set whether the account may receive new invite codes. */
+wf_status metalbear_account_set_invites_enabled(metalbear_account_store *store,
+                                                bool enabled);
 /* Hash a password with scrypt for storage. Caller must free the result. */
 char *metalbear_account_hash_password(const char *password);
 
