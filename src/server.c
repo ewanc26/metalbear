@@ -4498,11 +4498,15 @@ static wf_status admin_get_account_info(void *ctx,
     cJSON_AddStringToObject(root, "did", entry->did);
     cJSON_AddStringToObject(root, "handle", entry->handle);
     cJSON_AddBoolToObject(root, "active", entry->active != 0);
+    cJSON_AddBoolToObject(root, "invitesDisabled", false);
     /* Email lives in the account's own store; open it read-only. */
     char *acct_path = join_path(entry->data_directory, "account.sqlite3");
     if (acct_path) {
         metalbear_account_store *acct = NULL;
         if (metalbear_account_store_open(acct_path, "", &acct) == WF_OK) {
+            if (!metalbear_account_invites_enabled(acct))
+                cJSON_ReplaceItemInObject(root, "invitesDisabled",
+                                          cJSON_CreateBool(true));
             char *email = NULL;
             int confirmed = 0;
             if (metalbear_account_get_email(acct, &email, &confirmed) == WF_OK
@@ -4844,10 +4848,14 @@ static cJSON *build_account_view(metalbear_server *server,
     cJSON_AddStringToObject(obj, "did", entry->did);
     cJSON_AddStringToObject(obj, "handle", entry->handle);
     cJSON_AddBoolToObject(obj, "active", entry->active != 0);
+    cJSON_AddBoolToObject(obj, "invitesDisabled", false);
     char *acct_path = join_path(entry->data_directory, "account.sqlite3");
     if (acct_path) {
         metalbear_account_store *acct = NULL;
         if (metalbear_account_store_open(acct_path, "", &acct) == WF_OK) {
+            if (!metalbear_account_invites_enabled(acct))
+                cJSON_ReplaceItemInObject(obj, "invitesDisabled",
+                                          cJSON_CreateBool(true));
             char *email = NULL;
             int confirmed = 0;
             if (metalbear_account_get_email(acct, &email, &confirmed) == WF_OK
@@ -5075,9 +5083,26 @@ static wf_status admin_update_account_password(void *ctx,
 static wf_status admin_enable_account_invites(void *ctx,
                                                const wf_xrpc_request *request,
                                                wf_xrpc_response *response) {
-    (void)ctx; (void)request;
-    /* For now, this is a no-op stub. MetalBear does not yet track per-account
-     * invite enablement. Return success for protocol compatibility. */
+    metalbear_server *server = ctx;
+    cJSON *account = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "account") : NULL;
+    if (!cJSON_IsString(account) || !account->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "account is required");
+        return WF_OK;
+    }
+    metalbear_account_context *acct =
+        context_for_did(server, account->valuestring);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 404, "AccountNotFound",
+                                    "account is not hosted here");
+        return WF_OK;
+    }
+    if (metalbear_account_set_invites_enabled(acct->account, true) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                    "could not persist invite state");
+        return WF_OK;
+    }
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     return set_json(response, root);
@@ -5087,8 +5112,26 @@ static wf_status admin_enable_account_invites(void *ctx,
 static wf_status admin_disable_account_invites(void *ctx,
                                                 const wf_xrpc_request *request,
                                                 wf_xrpc_response *response) {
-    (void)ctx; (void)request;
-    /* Stub: same as enable — no per-account invite tracking yet. */
+    metalbear_server *server = ctx;
+    cJSON *account = request->params
+        ? cJSON_GetObjectItemCaseSensitive(request->params, "account") : NULL;
+    if (!cJSON_IsString(account) || !account->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                    "account is required");
+        return WF_OK;
+    }
+    metalbear_account_context *acct =
+        context_for_did(server, account->valuestring);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 404, "AccountNotFound",
+                                    "account is not hosted here");
+        return WF_OK;
+    }
+    if (metalbear_account_set_invites_enabled(acct->account, false) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                    "could not persist invite state");
+        return WF_OK;
+    }
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     return set_json(response, root);

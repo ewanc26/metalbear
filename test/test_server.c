@@ -195,6 +195,10 @@ int main(void) {
         /* No account exists until one is created below: the server has no
          * configured account to be "the" account any more. */
         .invite_required = false,
+        /* The rate limiter is not under test here; the suite issues more than
+         * the 100-request default within the first window, which later starves
+         * unrelated endpoints (resolveHandle) into 429s. */
+        .rate_limit = 10000,
     };
     metalbear_server *server = metalbear_server_start(&config);
     CHECK(server != NULL);
@@ -775,6 +779,171 @@ int main(void) {
 
         free(code_to_disable);
         wf_xrpc_client_set_auth(client, access_token);
+    }
+
+    /* === com.atproto.admin.disableAccountInvites / enableAccountInvites ===
+     * The flag lives in the account's own store; disabling must be visible in
+     * getAccountInfo and — matching the reference, which only disables an
+     * account's self-granted routine codes — must not touch admin-minted
+     * codes (existing or newly gifted). */
+    {
+        const char *alice_did = "did:plc:metalbeartest";
+
+        /* admin Basic header for the GET checks below; the client's bearer
+         * auth must be cleared first or the server sees two Authorization
+         * headers and rejects the request. */
+        wf_xrpc_client_set_auth(client, NULL);
+
+        /* Unknown DID -> AccountNotFound (404), never a fabricated success. */
+        CHECK(admin_post(client, base, "com.atproto.admin.disableAccountInvites",
+                         "{\"account\":\"did:plc:ghost\"}",
+                         &response) == WF_ERR_HTTP);
+        CHECK(response.status == 404);
+        json = json_response(&response);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                     "AccountNotFound") == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        /* Missing account param -> 400. */
+        CHECK(admin_post(client, base, "com.atproto.admin.disableAccountInvites",
+                         "{}", &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        wf_response_free(&response);
+
+        /* Disable invites for the hosted account. */
+        {
+            char body[256];
+            snprintf(body, sizeof(body), "{\"account\":\"%s\",\"note\":\"spam\"}",
+                     alice_did);
+            CHECK(admin_post(client, base,
+                             "com.atproto.admin.disableAccountInvites",
+                             body, &response) == WF_OK);
+            CHECK(response.status == 200);
+            wf_response_free(&response);
+        }
+
+        /* getAccountInfo reflects invitesDisabled=true. */
+        {
+            char url[192];
+            snprintf(url, sizeof(url),
+                     "%s/xrpc/com.atproto.admin.getAccountInfo?did=%s",
+                     base, alice_did);
+            char hdr[160];
+            char cred[64];
+            int n = snprintf(cred, sizeof(cred), "admin:%s", "secret-admin");
+            char b64[128];
+            int len = EVP_EncodeBlock((unsigned char *)b64,
+                                      (const unsigned char *)cred, n);
+            b64[len] = '\0';
+            snprintf(hdr, sizeof(hdr), "Basic %s", b64);
+            wf_http_header auth_hdr = {"Authorization", hdr};
+            CHECK(wf_http_get_with_headers(client, url, &auth_hdr, 1,
+                                           &response) == WF_OK);
+            CHECK(response.status == 200);
+            json = json_response(&response);
+            CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(
+                json, "invitesDisabled")));
+            cJSON_Delete(json);
+            wf_response_free(&response);
+        }
+
+        /* A code minted for the disabled account stays usable: the reference
+         * only disables the account's self-granted routine codes, and admin
+         * minting is never gated on invitesDisabled. */
+        {
+            char body[192];
+            snprintf(body, sizeof(body),
+                     "{\"useCount\":2,\"forAccount\":\"%s\"}", alice_did);
+            CHECK(admin_post(client, base, "com.atproto.server.createInviteCode",
+                             body, &response) == WF_OK);
+            CHECK(response.status == 200);
+            json = json_response(&response);
+            cJSON *code_item = cJSON_GetObjectItemCaseSensitive(json, "code");
+            char *gifted_code = cJSON_IsString(code_item)
+                ? strdup(code_item->valuestring) : NULL;
+            cJSON_Delete(json);
+            wf_response_free(&response);
+            CHECK(gifted_code != NULL);
+
+            /* admin.getInviteCodes lists it without a disabled flag. */
+            {
+                char list_url[256];
+                snprintf(list_url, sizeof(list_url),
+                         "%s/xrpc/com.atproto.admin.getInviteCodes", base);
+                char hdr[160];
+                char cred[64];
+                int n = snprintf(cred, sizeof(cred), "admin:%s",
+                                 "secret-admin");
+                char b64[128];
+                int len = EVP_EncodeBlock((unsigned char *)b64,
+                                          (const unsigned char *)cred, n);
+                b64[len] = '\0';
+                snprintf(hdr, sizeof(hdr), "Basic %s", b64);
+                wf_http_header auth_hdr = {"Authorization", hdr};
+                CHECK(wf_http_get_with_headers(client, list_url, &auth_hdr, 1,
+                                               &response) == WF_OK);
+                CHECK(response.status == 200);
+                json = json_response(&response);
+                cJSON *all_codes = cJSON_GetObjectItemCaseSensitive(json,
+                                                                    "codes");
+                int found = 0;
+                int found_disabled = 0;
+                for (int i = 0; cJSON_IsArray(all_codes) &&
+                                i < cJSON_GetArraySize(all_codes); i++) {
+                    cJSON *c = cJSON_GetArrayItem(all_codes, i);
+                    cJSON *code_str = cJSON_GetObjectItemCaseSensitive(c,
+                                                                       "code");
+                    if (code_str && code_str->valuestring &&
+                        strcmp(code_str->valuestring, gifted_code) == 0) {
+                        found = 1;
+                        found_disabled = cJSON_IsTrue(
+                            cJSON_GetObjectItemCaseSensitive(c, "disabled"));
+                    }
+                }
+                cJSON_Delete(json);
+                wf_response_free(&response);
+                CHECK(found);
+                CHECK(!found_disabled);
+            }
+            free(gifted_code);
+        }
+
+        /* Re-enable invites; the account's codes stay usable. */
+        {
+            char body[256];
+            snprintf(body, sizeof(body), "{\"account\":\"%s\"}", alice_did);
+            CHECK(admin_post(client, base,
+                             "com.atproto.admin.enableAccountInvites",
+                             body, &response) == WF_OK);
+            CHECK(response.status == 200);
+            wf_response_free(&response);
+        }
+
+        /* getAccountInfo reflects invitesDisabled=false again. */
+        {
+            char url[192];
+            snprintf(url, sizeof(url),
+                     "%s/xrpc/com.atproto.admin.getAccountInfo?did=%s",
+                     base, alice_did);
+            char hdr[160];
+            char cred[64];
+            int n = snprintf(cred, sizeof(cred), "admin:%s", "secret-admin");
+            char b64[128];
+            int len = EVP_EncodeBlock((unsigned char *)b64,
+                                      (const unsigned char *)cred, n);
+            b64[len] = '\0';
+            snprintf(hdr, sizeof(hdr), "Basic %s", b64);
+            wf_http_header auth_hdr = {"Authorization", hdr};
+            CHECK(wf_http_get_with_headers(client, url, &auth_hdr, 1,
+                                           &response) == WF_OK);
+            CHECK(response.status == 200);
+            json = json_response(&response);
+            CHECK(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(
+                json, "invitesDisabled")));
+            cJSON_Delete(json);
+            wf_response_free(&response);
+        }
     }
 
     /* === com.atproto.admin.deleteAccount (admin-gated) === */
