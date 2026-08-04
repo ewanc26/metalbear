@@ -535,11 +535,9 @@ MetalBear federates. A running instance is consumed by Bluesky's relays and by
 several third-party ones, its commits verify against the key published in the
 PLC directory, and its posts, profile and media appear on the Bluesky AppView.
 
-Still missing or unproven for production use:
-
-- the per-route metric table is bounded at 128 routes, after which traffic is
-  counted under `other` rather than by name — enough for the protocol surface,
-  but a host proxying a large AppView surface will spill
+Per-route request accounting grows on demand up to a 4096-route cap — enough
+for the protocol surface and a host proxying the whole AppView surface — with
+requests beyond the cap still counted under `other` so the totals stay honest.
 
 ## Frontend
 
