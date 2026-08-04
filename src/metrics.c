@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static _Atomic uint64_t counters[METALBEAR_METRIC_COUNT];
@@ -99,13 +100,32 @@ typedef struct route_row {
     uint64_t errors;
 } route_row;
 
-static route_row routes[METALBEAR_METRICS_MAX_ROUTES];
+/* Grows on demand to METALBEAR_METRICS_MAX_ROUTES so an idle host allocates
+ * only what it uses; the cap is what keeps a label-cardinality attack from
+ * exhausting memory. Guarded by routes_lock. */
+static route_row *routes;
 static size_t route_count;
+static size_t route_capacity;
 static pthread_mutex_t routes_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Requests that arrived after the table filled up. Counted rather than
  * dropped, so the per-route numbers always sum to the total. */
 static uint64_t overflow_requests;
 static uint64_t overflow_errors;
+
+/* Grow the table geometrically under routes_lock. False when the cap is
+ * already reached or the allocation failed. */
+static bool grow_routes_locked(void) {
+    size_t new_cap = route_capacity ? route_capacity * 2 : 16;
+    route_row *grown;
+    if (new_cap > METALBEAR_METRICS_MAX_ROUTES)
+        new_cap = METALBEAR_METRICS_MAX_ROUTES;
+    if (new_cap <= route_capacity) return false;
+    grown = realloc(routes, new_cap * sizeof(route_row));
+    if (!grown) return false;
+    routes = grown;
+    route_capacity = new_cap;
+    return true;
+}
 
 void metalbear_metrics_record_request(const char *nsid, const char *path,
                                       unsigned int status) {
@@ -122,15 +142,17 @@ void metalbear_metrics_record_request(const char *nsid, const char *path,
             return;
         }
     }
-    if (route_count < METALBEAR_METRICS_MAX_ROUTES) {
-        route_row *row = &routes[route_count++];
-        snprintf(row->name, sizeof(row->name), "%s", name);
-        row->requests = 1;
-        row->errors = is_error ? 1 : 0;
-    } else {
+    if (route_count == METALBEAR_METRICS_MAX_ROUTES ||
+        (route_count == route_capacity && !grow_routes_locked())) {
         overflow_requests++;
         if (is_error) overflow_errors++;
+        pthread_mutex_unlock(&routes_lock);
+        return;
     }
+    route_row *row = &routes[route_count++];
+    snprintf(row->name, sizeof(row->name), "%s", name);
+    row->requests = 1;
+    row->errors = is_error ? 1 : 0;
     pthread_mutex_unlock(&routes_lock);
 }
 
@@ -142,18 +164,30 @@ void metalbear_metrics_visit_routes(metalbear_metrics_route_visitor visit,
      * into a growing buffer, and holding a lock the request path needs across
      * an allocation is how a scrape starts blocking writes.
      */
-    route_row snapshot[METALBEAR_METRICS_MAX_ROUTES];
+    route_row *snapshot = NULL;
     size_t count;
     uint64_t spilled_requests, spilled_errors;
     pthread_mutex_lock(&routes_lock);
     count = route_count;
-    memcpy(snapshot, routes, count * sizeof(route_row));
     spilled_requests = overflow_requests;
     spilled_errors = overflow_errors;
-    pthread_mutex_unlock(&routes_lock);
-
-    for (size_t i = 0; i < count; i++)
-        visit(ctx, snapshot[i].name, snapshot[i].requests, snapshot[i].errors);
+    if (count) {
+        snapshot = malloc(count * sizeof(route_row));
+        if (snapshot) memcpy(snapshot, routes, count * sizeof(route_row));
+    }
+    if (snapshot) {
+        pthread_mutex_unlock(&routes_lock);
+        for (size_t i = 0; i < count; i++)
+            visit(ctx, snapshot[i].name, snapshot[i].requests,
+                  snapshot[i].errors);
+        free(snapshot);
+    } else {
+        /* Rare allocation failure: visit under the lock rather than drop
+         * accounting data. */
+        for (size_t i = 0; i < count; i++)
+            visit(ctx, routes[i].name, routes[i].requests, routes[i].errors);
+        pthread_mutex_unlock(&routes_lock);
+    }
     if (spilled_requests) visit(ctx, "other", spilled_requests, spilled_errors);
 }
 
@@ -161,7 +195,10 @@ void metalbear_metrics_reset(void) {
     for (int i = 0; i < METALBEAR_METRIC_COUNT; i++)
         atomic_store_explicit(&counters[i], 0, memory_order_relaxed);
     pthread_mutex_lock(&routes_lock);
+    free(routes);
+    routes = NULL;
     route_count = 0;
+    route_capacity = 0;
     overflow_requests = 0;
     overflow_errors = 0;
     pthread_mutex_unlock(&routes_lock);
