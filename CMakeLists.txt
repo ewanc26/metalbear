@@ -166,6 +166,13 @@ if(METALBEAR_BUILD_TESTS)
         "${METALBEAR_CJSON_SOURCE_DIR}")
     add_test(NAME metalbear_takedown COMMAND test_metalbear_takedown)
 
+    add_executable(test_metalbear_rate_limits test/test_rate_limits.c)
+    target_link_libraries(test_metalbear_rate_limits PRIVATE metalbear_core
+        SQLite3::SQLite3)
+    target_include_directories(test_metalbear_rate_limits PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_rate_limits COMMAND test_metalbear_rate_limits)
+
     add_executable(test_metalbear_oauth_device_session
         test/test_oauth_device_session.c)
     target_link_libraries(test_metalbear_oauth_device_session PRIVATE
