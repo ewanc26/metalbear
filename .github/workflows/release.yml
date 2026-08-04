@@ -229,6 +229,43 @@ jobs:
             type=raw,value=latest,enable=${{ matrix.name == 'alpine' || matrix.name == 'dev' }}
             type=sha,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
 
+      # The multi-platform build below only pushes; buildx cannot --load a
+      # multi-arch manifest, so nothing before this ever actually ran the
+      # image it ships. A binary that starts on the runner (the "binaries"
+      # job's smoke test builds it separately, outside any container) can
+      # still fail to start inside the image if the image is missing a
+      # runtime dependency the binary needs — neither runtime image's apt/
+      # apk list installed libstdc++/libgcc_s, and that went unnoticed for
+      # three releases because nothing ran the container before shipping it.
+      # Build once, single native platform, load it locally, and actually
+      # run it.
+      - name: Smoke test the container
+        if: matrix.target == 'runtime'
+        run: |
+          docker buildx build \
+            --load \
+            -f "${{ matrix.file }}" \
+            --target "${{ matrix.target }}" \
+            -t smoke-test:${{ matrix.name }} \
+            .
+          docker run -d --name smoke-${{ matrix.name }} -p 12583:2583 \
+            -e METALBEAR_SERVICE_DID=did:web:smoke.example.com \
+            -e METALBEAR_PUBLIC_URL=http://127.0.0.1:12583 \
+            -e METALBEAR_USER_DOMAIN=.smoke.example.com \
+            smoke-test:${{ matrix.name }}
+          ok=
+          for _ in $(seq 1 30); do
+            sleep 1
+            curl -sf http://127.0.0.1:12583/xrpc/_health >/dev/null && { ok=1; break; }
+          done
+          if [ -z "$ok" ]; then
+            echo "container never answered _health"
+            docker logs smoke-${{ matrix.name }}
+            exit 1
+          fi
+          echo "healthy: $(curl -s http://127.0.0.1:12583/xrpc/_health)"
+          docker rm -f smoke-${{ matrix.name }}
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
