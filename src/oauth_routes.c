@@ -237,6 +237,10 @@ static wf_status protected_resource_metadata(void *ctx,
     cJSON_AddItemToArray(methods, cJSON_CreateString("header"));
     cJSON_AddItemToObject(root, "bearer_methods_supported", methods);
 
+    /* Matches the reference PDS's auth-routes.ts verbatim. */
+    cJSON_AddStringToObject(root, "resource_documentation",
+                            "https://atproto.com");
+
     return json_response(resp, root, "max-age=300");
 }
 
