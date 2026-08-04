@@ -180,6 +180,12 @@ if(METALBEAR_BUILD_TESTS)
         "${METALBEAR_CJSON_SOURCE_DIR}")
     add_test(NAME metalbear_blob_store COMMAND test_metalbear_blob_store)
 
+    add_executable(test_metalbear_blob_gc test/test_blob_gc.c)
+    target_link_libraries(test_metalbear_blob_gc PRIVATE metalbear_core)
+    target_include_directories(test_metalbear_blob_gc PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}" "${WOLFRAM_SOURCE_DIR}/test")
+    add_test(NAME metalbear_blob_gc COMMAND test_metalbear_blob_gc)
+
     add_executable(test_metalbear_metrics test/test_metrics.c)
     target_link_libraries(test_metalbear_metrics PRIVATE metalbear_core)
     target_include_directories(test_metalbear_metrics PRIVATE

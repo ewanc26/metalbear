@@ -8,6 +8,11 @@
  *      POST a raw blob to com.atproto.repo.uploadBlob, read back its CID, then
  *      GET com.atproto.sync.getBlob?did=...&cid=... and assert the bytes and
  *      Content-Type match what was uploaded.
+ *   4. metalbear_blob_walk_refs: modern + legacy blob refs, nested in
+ *      objects/arrays.
+ *   5. Reference tracking: associate/dissociate/is_referenced, idempotent
+ *      association, dereference-deletes-the-blob, and persistence of
+ *      associations across a file-backed reopen.
  *
  * Requires WOLFRAM_BUILD_SERVER (raw HTTP helper + server registration).
  */
@@ -512,12 +517,228 @@ static int test_server_roundtrip(void) {
     return fail;
 }
 
+/* ------------------------------------------------------------------ */
+/* 4. metalbear_blob_walk_refs                                          */
+/* ------------------------------------------------------------------ */
+
+typedef struct walk_collect {
+    char cids[8][128];
+    size_t count;
+} walk_collect;
+
+static void walk_collect_cb(const char *cid, void *ctx) {
+    walk_collect *c = ctx;
+    if (c->count < 8) {
+        snprintf(c->cids[c->count], sizeof(c->cids[0]), "%s", cid);
+        c->count++;
+    }
+}
+
+static bool walk_collect_has(const walk_collect *c, const char *cid) {
+    for (size_t i = 0; i < c->count; i++)
+        if (strcmp(c->cids[i], cid) == 0) return true;
+    return false;
+}
+
+static int test_walk_refs(void) {
+    int fail = 0;
+
+    /* Modern blob ref, legacy blob ref, both nested inside an array under an
+     * object — the shape a real app.bsky.feed.post#images embed takes. */
+    const char *json =
+        "{\"$type\":\"app.bsky.feed.post\",\"text\":\"hi\","
+        "\"embed\":{\"$type\":\"app.bsky.embed.images\",\"images\":["
+        "{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
+        "\"ref\":{\"$link\":\"bafymodern\"},\"mimeType\":\"image/png\",\"size\":1}},"
+        "{\"alt\":\"b\",\"image\":{\"cid\":\"bafylegacy\",\"mimeType\":\"image/jpeg\"}}"
+        "]}}";
+    cJSON *root = cJSON_Parse(json);
+    if (!root) {
+        fprintf(stderr, "FAIL: walk_refs parse\n");
+        return 1;
+    }
+    walk_collect c = {0};
+    metalbear_blob_walk_refs(root, walk_collect_cb, &c);
+    cJSON_Delete(root);
+
+    if (c.count != 2 || !walk_collect_has(&c, "bafymodern") ||
+        !walk_collect_has(&c, "bafylegacy")) {
+        fprintf(stderr, "FAIL: walk_refs found %zu refs, expected 2 "
+                        "(modern+legacy)\n", c.count);
+        fail = 1;
+    }
+
+    /* A record with no blobs at all yields zero callbacks. */
+    cJSON *empty = cJSON_Parse("{\"$type\":\"app.bsky.feed.post\",\"text\":\"hi\"}");
+    walk_collect c2 = {0};
+    metalbear_blob_walk_refs(empty, walk_collect_cb, &c2);
+    cJSON_Delete(empty);
+    if (c2.count != 0) {
+        fprintf(stderr, "FAIL: walk_refs found refs in a blob-free record\n");
+        fail = 1;
+    }
+
+    if (!fail) printf("PASS: metalbear_blob_walk_refs\n");
+    return fail;
+}
+
+/* ------------------------------------------------------------------ */
+/* 5. Reference tracking (associate/dissociate/is_referenced)           */
+/* ------------------------------------------------------------------ */
+
+static int test_reference_tracking(void) {
+    metalbear_blob_store *store = metalbear_blob_store_new(NULL);
+    if (!store) { fprintf(stderr, "FAIL: store (reference tracking)\n"); return 1; }
+    int fail = 0;
+
+    const unsigned char payload[] = {1, 2, 3};
+    const char *cid = "bafyreftrack";
+    const char *uri_a = "at://did:plc:alice/app.bsky.feed.post/aaa";
+    const char *uri_b = "at://did:plc:alice/app.bsky.feed.post/bbb";
+
+    /* Associating an unuploaded CID fails closed. */
+    if (metalbear_blob_store_associate(store, "bafyunknown", uri_a) !=
+        WF_ERR_NOT_FOUND) {
+        fprintf(stderr, "FAIL: associate unknown cid should be NOT_FOUND\n");
+        fail = 1;
+    }
+
+    if (metalbear_blob_store_put(store, cid, "text/plain", payload,
+                                 sizeof(payload)) != WF_OK) {
+        fprintf(stderr, "FAIL: put (reference tracking)\n");
+        metalbear_blob_store_free(store);
+        return 1;
+    }
+
+    /* A freshly uploaded blob has no associations yet. */
+    if (metalbear_blob_store_is_referenced(store, cid) != WF_ERR_NOT_FOUND) {
+        fprintf(stderr, "FAIL: freshly uploaded blob should be unreferenced\n");
+        fail = 1;
+    }
+
+    if (metalbear_blob_store_associate(store, cid, uri_a) != WF_OK ||
+        metalbear_blob_store_is_referenced(store, cid) != WF_OK) {
+        fprintf(stderr, "FAIL: associate/is_referenced\n");
+        fail = 1;
+    }
+
+    /* Re-associating the same pair is idempotent: still referenced, and (as
+     * verified below) a single dissociate is enough to clear it. */
+    if (metalbear_blob_store_associate(store, cid, uri_a) != WF_OK) {
+        fprintf(stderr, "FAIL: re-associate should be a no-op success\n");
+        fail = 1;
+    }
+
+    /* A second record referencing the same blob keeps it alive after the
+     * first stops referencing it. */
+    if (metalbear_blob_store_associate(store, cid, uri_b) != WF_OK) {
+        fprintf(stderr, "FAIL: second associate\n");
+        fail = 1;
+    }
+    if (metalbear_blob_store_dissociate(store, cid, uri_a) != WF_OK ||
+        metalbear_blob_store_exists(store, cid) != WF_OK ||
+        metalbear_blob_store_is_referenced(store, cid) != WF_OK) {
+        fprintf(stderr, "FAIL: blob shared by two records should survive "
+                        "one dissociating\n");
+        fail = 1;
+    }
+
+    /* Dissociating a URI that was never associated is a harmless no-op. */
+    if (metalbear_blob_store_dissociate(store, cid, "at://did:plc:nobody/x/1") !=
+        WF_OK || metalbear_blob_store_exists(store, cid) != WF_OK) {
+        fprintf(stderr, "FAIL: dissociate of an unrelated uri should no-op\n");
+        fail = 1;
+    }
+
+    /* Dissociating the last reference deletes the blob outright — mirrors
+     * the reference PDS's deleteDereferencedBlobs. */
+    if (metalbear_blob_store_dissociate(store, cid, uri_b) != WF_OK) {
+        fprintf(stderr, "FAIL: dissociate last reference\n");
+        fail = 1;
+    }
+    if (metalbear_blob_store_exists(store, cid) != WF_ERR_NOT_FOUND) {
+        fprintf(stderr, "FAIL: dereferenced blob should have been deleted\n");
+        fail = 1;
+    }
+    if (metalbear_blob_store_associate(store, cid, uri_a) != WF_ERR_NOT_FOUND ||
+        metalbear_blob_store_dissociate(store, cid, uri_a) != WF_ERR_NOT_FOUND ||
+        metalbear_blob_store_is_referenced(store, cid) != WF_ERR_NOT_FOUND) {
+        fprintf(stderr, "FAIL: operations on a deleted blob should be "
+                        "NOT_FOUND\n");
+        fail = 1;
+    }
+
+    metalbear_blob_store_free(store);
+    if (!fail) printf("PASS: reference tracking\n");
+    return fail;
+}
+
+static int test_reference_tracking_file_backed(void) {
+    char tmpl[] = "/tmp/metalbear_blob_refs.XXXXXX";
+    char *dir = mkdtemp(tmpl);
+    if (!dir) { fprintf(stderr, "FAIL: mkdtemp (refs)\n"); return 1; }
+    int fail = 0;
+
+    const unsigned char payload[] = {9, 9, 9};
+    const char *cid = "bafyreffile";
+    const char *uri_a = "at://did:plc:alice/app.bsky.feed.post/aaa";
+    const char *uri_b = "at://did:plc:alice/app.bsky.feed.post/bbb";
+
+    metalbear_blob_store *s1 = metalbear_blob_store_new(dir);
+    if (!s1) { fprintf(stderr, "FAIL: new (refs file)\n"); return 1; }
+    if (metalbear_blob_store_put(s1, cid, "text/plain", payload, sizeof(payload)) !=
+            WF_OK ||
+        metalbear_blob_store_associate(s1, cid, uri_a) != WF_OK ||
+        metalbear_blob_store_associate(s1, cid, uri_b) != WF_OK) {
+        fprintf(stderr, "FAIL: put/associate (refs file)\n");
+        metalbear_blob_store_free(s1);
+        return 1;
+    }
+    metalbear_blob_store_free(s1);
+
+    /* Associations must survive a restart, same as the blob bytes do. */
+    metalbear_blob_store *s2 = metalbear_blob_store_new(dir);
+    if (!s2) { fprintf(stderr, "FAIL: reopen (refs file)\n"); return 1; }
+    if (metalbear_blob_store_is_referenced(s2, cid) != WF_OK) {
+        fprintf(stderr, "FAIL: reference lost across reopen\n");
+        fail = 1;
+    }
+    /* Dropping one of the two survives; dropping both deletes the blob and
+     * its .refs sidecar. */
+    if (metalbear_blob_store_dissociate(s2, cid, uri_a) != WF_OK ||
+        metalbear_blob_store_exists(s2, cid) != WF_OK) {
+        fprintf(stderr, "FAIL: partial dereference across reopen\n");
+        fail = 1;
+    }
+    if (metalbear_blob_store_dissociate(s2, cid, uri_b) != WF_OK ||
+        metalbear_blob_store_exists(s2, cid) != WF_ERR_NOT_FOUND) {
+        fprintf(stderr, "FAIL: full dereference across reopen\n");
+        fail = 1;
+    }
+    metalbear_blob_store_free(s2);
+
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s.refs", dir, cid);
+    if (access(path, F_OK) == 0) {
+        fprintf(stderr, "FAIL: deleted blob's .refs sidecar remains\n");
+        remove(path);
+        fail = 1;
+    }
+    rmdir(dir);
+
+    if (!fail) printf("PASS: reference tracking (file-backed)\n");
+    return fail;
+}
+
 int main(void) {
     int failures = 0;
     failures += test_unit_memory();
     failures += test_delete_invalid_args();
     failures += test_file_backed();
     failures += test_server_roundtrip();
+    failures += test_walk_refs();
+    failures += test_reference_tracking();
+    failures += test_reference_tracking_file_backed();
     if (failures == 0) printf("ALL PASS: blob_store\n");
     return failures;
 }
