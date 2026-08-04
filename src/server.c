@@ -2044,10 +2044,14 @@ static cJSON *session_json(metalbear_server *server,
  * requestEmailConfirmation, requestEmailUpdate): every tier is always
  * charged — never short-circuited on the first hit — and the request is
  * rejected if any tier is empty, reporting whichever tier's retry-after is
- * longest. `tier_b` may be NULL for a single-tier check. On rejection fills
- * `response` with the same {"error":"RateLimitExceeded",...} shape and
- * Retry-After header Wolfram's own built-in limiter uses, and returns
- * false; returns true (response untouched) otherwise.
+ * longest. `tier_b` may be NULL for a single-tier check.
+ *
+ * Always sets RateLimit-Limit/Remaining/Reset/Policy on `response` — success
+ * or rejection — reporting whichever tier has fewer points remaining,
+ * matching the reference's CombinedRateLimiter ("lowest wins";
+ * rate-limiter.ts). On rejection also fills the same
+ * {"error":"RateLimitExceeded",...} body and Retry-After header Wolfram's
+ * own built-in limiter uses, and returns false; returns true otherwise.
  */
 static bool check_endpoint_rate_limit(wf_rate_limiter *tier_a,
                                       wf_rate_limiter *tier_b,
@@ -2055,17 +2059,47 @@ static bool check_endpoint_rate_limit(wf_rate_limiter *tier_a,
                                       wf_xrpc_response *response) {
     if (!key) key = "unknown";
     wf_rate_limiter *tiers[2] = {tier_a, tier_b};
-    unsigned int retry_after = 0;
+    wf_rate_limit_status statuses[2] = {0};
+    wf_status results[2] = {WF_OK, WF_OK};
     bool limited = false;
+    int reported = -1;
+
     for (int i = 0; i < 2; i++) {
         if (!tiers[i]) continue;
-        unsigned int ra = 0;
-        if (wf_rate_limiter_consume(tiers[i], key, 1, &ra) != WF_OK) {
-            limited = true;
-            if (ra > retry_after) retry_after = ra;
+        results[i] = wf_rate_limiter_consume_status(tiers[i], key, 1,
+                                                     &statuses[i]);
+        if (results[i] != WF_OK) limited = true;
+        if (reported < 0 ||
+            statuses[i].remaining < statuses[reported].remaining) {
+            reported = i;
         }
     }
+
+    if (reported >= 0) {
+        char num[16];
+        snprintf(num, sizeof(num), "%u", statuses[reported].limit);
+        wf_xrpc_response_add_header(response, "RateLimit-Limit", num);
+        snprintf(num, sizeof(num), "%u", statuses[reported].reset_at);
+        wf_xrpc_response_add_header(response, "RateLimit-Reset", num);
+        snprintf(num, sizeof(num), "%u", statuses[reported].remaining);
+        wf_xrpc_response_add_header(response, "RateLimit-Remaining", num);
+        snprintf(num, sizeof(num), "%u;w=%u", statuses[reported].limit,
+                statuses[reported].duration_seconds);
+        wf_xrpc_response_add_header(response, "RateLimit-Policy", num);
+    }
+
     if (!limited) return true;
+
+    /* Retry-After: the furthest-out reset among the tiers that actually
+     * rejected this request. */
+    time_t now = time(NULL);
+    unsigned int retry_after = 0;
+    for (int i = 0; i < 2; i++) {
+        if (!tiers[i] || results[i] == WF_OK) continue;
+        unsigned int ra = statuses[i].reset_at > (unsigned int)now
+            ? statuses[i].reset_at - (unsigned int)now : 1;
+        if (ra > retry_after) retry_after = ra;
+    }
     char message[128];
     snprintf(message, sizeof(message),
              "Rate limit exceeded. Retry after %u seconds.", retry_after);
