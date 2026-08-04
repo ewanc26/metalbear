@@ -60,6 +60,13 @@ static char *join_path(const char *directory, const char *name);
 static bool admin_authenticated(metalbear_server *server,
                               const wf_xrpc_request *req);
 
+/* Forward-declared: defined near create_session, its first user, but
+ * request_account_delete (much earlier in this file) needs it too. */
+static bool check_endpoint_rate_limit(wf_rate_limiter *tier_a,
+                                      wf_rate_limiter *tier_b,
+                                      const char *key,
+                                      wf_xrpc_response *response);
+
 struct metalbear_server {
     wf_xrpc_server *xrpc;
     /* When this process began serving, for the uptime gauge at /metrics. */
@@ -76,6 +83,25 @@ struct metalbear_server {
     metalbear_oauth_store *oauth;
     metalbear_account_registry *registry;
     wf_rate_limiter *rate_limiter;
+    /*
+     * The reference PDS rate-limits a handful of account-security-sensitive
+     * endpoints more tightly than the general per-IP budget above, some with
+     * two simultaneous tiers (both always charged; either can reject) and
+     * some keyed by identifier or DID rather than IP. See createSession.ts,
+     * requestPasswordReset.ts, requestAccountDelete.ts,
+     * requestEmailConfirmation.ts and requestEmailUpdate.ts upstream for the
+     * exact points/durationMs this mirrors.
+     */
+    wf_rate_limiter *rl_create_session_day;
+    wf_rate_limiter *rl_create_session_5min;
+    wf_rate_limiter *rl_request_password_reset_day;
+    wf_rate_limiter *rl_request_password_reset_hour;
+    wf_rate_limiter *rl_request_account_delete_day;
+    wf_rate_limiter *rl_request_account_delete_hour;
+    wf_rate_limiter *rl_request_email_confirmation_day;
+    wf_rate_limiter *rl_request_email_confirmation_hour;
+    wf_rate_limiter *rl_request_email_update_day;
+    wf_rate_limiter *rl_request_email_update_hour;
     metalbear_email *email;
     char *service_did;
     char *public_url;
@@ -793,6 +819,11 @@ static wf_status request_account_delete(void *ctx,
     if (!acct) {
         wf_xrpc_response_set_error(response, 401, "InvalidToken",
                                    "Invalid access token");
+        return WF_OK;
+    }
+    if (!check_endpoint_rate_limit(server->rl_request_account_delete_day,
+                                   server->rl_request_account_delete_hour,
+                                   acct->did, response)) {
         return WF_OK;
     }
     char token[33];
@@ -2006,11 +2037,71 @@ static cJSON *session_json(metalbear_server *server,
     return root;
 }
 
+/*
+ * Consume from up to two rate-limiter tiers under the same key, matching the
+ * reference PDS's MethodRateLimit[] semantics for multi-tier endpoints
+ * (createSession, requestPasswordReset, requestAccountDelete,
+ * requestEmailConfirmation, requestEmailUpdate): every tier is always
+ * charged — never short-circuited on the first hit — and the request is
+ * rejected if any tier is empty, reporting whichever tier's retry-after is
+ * longest. `tier_b` may be NULL for a single-tier check. On rejection fills
+ * `response` with the same {"error":"RateLimitExceeded",...} shape and
+ * Retry-After header Wolfram's own built-in limiter uses, and returns
+ * false; returns true (response untouched) otherwise.
+ */
+static bool check_endpoint_rate_limit(wf_rate_limiter *tier_a,
+                                      wf_rate_limiter *tier_b,
+                                      const char *key,
+                                      wf_xrpc_response *response) {
+    if (!key) key = "unknown";
+    wf_rate_limiter *tiers[2] = {tier_a, tier_b};
+    unsigned int retry_after = 0;
+    bool limited = false;
+    for (int i = 0; i < 2; i++) {
+        if (!tiers[i]) continue;
+        unsigned int ra = 0;
+        if (wf_rate_limiter_consume(tiers[i], key, 1, &ra) != WF_OK) {
+            limited = true;
+            if (ra > retry_after) retry_after = ra;
+        }
+    }
+    if (!limited) return true;
+    char message[128];
+    snprintf(message, sizeof(message),
+             "Rate limit exceeded. Retry after %u seconds.", retry_after);
+    wf_xrpc_response_set_error(response, 429, "RateLimitExceeded", message);
+    char ra_str[16];
+    snprintf(ra_str, sizeof(ra_str), "%u", retry_after);
+    wf_xrpc_response_add_header(response, "Retry-After", ra_str);
+    return false;
+}
+
 static wf_status create_session(void *ctx, const wf_xrpc_request *request,
                                 wf_xrpc_response *response) {
     metalbear_server *server = ctx;
     metalbear_account_context *acct = NULL;
     char *app_password_name = NULL;
+
+    /* Keyed by identifier+IP so this can't be used either to lock a
+     * legitimate user out (an attacker hammering their identifier from many
+     * IPs) or to brute-force many identifiers from one IP while staying
+     * under any single per-identifier budget. */
+    {
+        const cJSON *identifier = request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "identifier")
+            : NULL;
+        const char *id_str =
+            cJSON_IsString(identifier) ? identifier->valuestring : "";
+        char key[320];
+        snprintf(key, sizeof(key), "%s-%s", id_str,
+                request->client_ip ? request->client_ip : "unknown");
+        if (!check_endpoint_rate_limit(server->rl_create_session_day,
+                                       server->rl_create_session_5min, key,
+                                       response)) {
+            return WF_OK;
+        }
+    }
+
     metalbear_credential_kind credential = valid_login(
         server, request->params, &acct, &app_password_name);
     if (credential == METALBEAR_CREDENTIAL_INVALID || !acct) {
@@ -3894,6 +3985,11 @@ static wf_status request_email_confirmation(void *ctx,
                                    "Invalid access token");
         return WF_OK;
     }
+    if (!check_endpoint_rate_limit(server->rl_request_email_confirmation_day,
+                                   server->rl_request_email_confirmation_hour,
+                                   acct->did, response)) {
+        return WF_OK;
+    }
     char *email = NULL;
     int confirmed = 0;
     if (metalbear_account_get_email(acct->account, &email, &confirmed) !=
@@ -3970,6 +4066,11 @@ static wf_status request_email_update(void *ctx,
     if (!acct) {
         wf_xrpc_response_set_error(response, 401, "InvalidToken",
                                    "Invalid access token");
+        return WF_OK;
+    }
+    if (!check_endpoint_rate_limit(server->rl_request_email_update_day,
+                                   server->rl_request_email_update_hour,
+                                   acct->did, response)) {
         return WF_OK;
     }
     char *email = NULL;
@@ -4109,6 +4210,11 @@ static wf_status request_password_reset(void *ctx,
                                         const wf_xrpc_request *request,
                                         wf_xrpc_response *response) {
     metalbear_server *server = ctx;
+    if (!check_endpoint_rate_limit(server->rl_request_password_reset_day,
+                                   server->rl_request_password_reset_hour,
+                                   request->client_ip, response)) {
+        return WF_OK;
+    }
     cJSON *email_param = request->params
         ? cJSON_GetObjectItemCaseSensitive(request->params, "email")
         : NULL;
@@ -7257,6 +7363,21 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                                                    (size_t)window, 0);
     }
 
+    /* Endpoint-specific budgets, matching the reference PDS's values exactly
+     * (see the metalbear_server struct's rl_* fields for the source files).
+     * Not configurable — these protect account security, not general API
+     * capacity, so they should not silently loosen with METALBEAR_RATE_LIMIT. */
+    server->rl_create_session_day = wf_rate_limiter_new(300, 86400, 0);
+    server->rl_create_session_5min = wf_rate_limiter_new(30, 300, 0);
+    server->rl_request_password_reset_day = wf_rate_limiter_new(50, 86400, 0);
+    server->rl_request_password_reset_hour = wf_rate_limiter_new(15, 3600, 0);
+    server->rl_request_account_delete_day = wf_rate_limiter_new(15, 86400, 0);
+    server->rl_request_account_delete_hour = wf_rate_limiter_new(5, 3600, 0);
+    server->rl_request_email_confirmation_day = wf_rate_limiter_new(15, 86400, 0);
+    server->rl_request_email_confirmation_hour = wf_rate_limiter_new(5, 3600, 0);
+    server->rl_request_email_update_day = wf_rate_limiter_new(15, 86400, 0);
+    server->rl_request_email_update_hour = wf_rate_limiter_new(5, 3600, 0);
+
     /* Open moderation report store */
     char *reports_path = join_path(config->data_directory, "reports.sqlite3");
     if (!reports_path ||
@@ -7647,6 +7768,21 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     if (server->rate_limiter)
         wf_xrpc_server_set_rate_limiter(server->xrpc, server->rate_limiter);
 
+    /* Single-tier, IP-keyed endpoint budgets that the framework enforces on
+     * its own once attached — no handler-side code needed. Ownership of each
+     * limiter transfers to server->xrpc; freed on wf_xrpc_server_free. Values
+     * match the reference PDS exactly (createAccount.ts, deleteAccount.ts,
+     * resetPassword.ts). */
+    wf_xrpc_server_set_route_rate_limiter(
+        server->xrpc, "POST", "/xrpc/com.atproto.server.createAccount",
+        wf_rate_limiter_new(100, 300, 0));
+    wf_xrpc_server_set_route_rate_limiter(
+        server->xrpc, "POST", "/xrpc/com.atproto.server.deleteAccount",
+        wf_rate_limiter_new(50, 300, 0));
+    wf_xrpc_server_set_route_rate_limiter(
+        server->xrpc, "POST", "/xrpc/com.atproto.server.resetPassword",
+        wf_rate_limiter_new(50, 300, 0));
+
     /* Initialize email module if configured */
     if (config->smtp_host && config->smtp_host[0] &&
         config->from_address && config->from_address[0]) {
@@ -7766,6 +7902,16 @@ void metalbear_server_free(metalbear_server *server) {
     metalbear_update_watcher_free(server->update_watcher);
     metalbear_report_store_free(server->reports);
     wf_rate_limiter_free(server->rate_limiter);
+    wf_rate_limiter_free(server->rl_create_session_day);
+    wf_rate_limiter_free(server->rl_create_session_5min);
+    wf_rate_limiter_free(server->rl_request_password_reset_day);
+    wf_rate_limiter_free(server->rl_request_password_reset_hour);
+    wf_rate_limiter_free(server->rl_request_account_delete_day);
+    wf_rate_limiter_free(server->rl_request_account_delete_hour);
+    wf_rate_limiter_free(server->rl_request_email_confirmation_day);
+    wf_rate_limiter_free(server->rl_request_email_confirmation_hour);
+    wf_rate_limiter_free(server->rl_request_email_update_day);
+    wf_rate_limiter_free(server->rl_request_email_update_hour);
     metalbear_log_close();
     free(server->service_did);
     free(server->public_url);
