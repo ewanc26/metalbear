@@ -485,8 +485,24 @@ char *mb_scope_normalize(const char *scope_str) {
                 buf_len = snprintf(buf, sizeof(buf), "blob:%s",
                                    perm->u.blob.collection);
                 break;
+            case MB_SCOPE_TYPE_IDENTITY:
+                buf_len = snprintf(buf, sizeof(buf), "identity:%s",
+                                   perm->u.identity.action);
+                break;
+            case MB_SCOPE_TYPE_ACCOUNT:
+                buf_len = snprintf(buf, sizeof(buf), "account:%s",
+                                   perm->u.account.action);
+                break;
+            case MB_SCOPE_TYPE_RPC:
+                buf_len = snprintf(buf, sizeof(buf), "rpc:%s",
+                                   perm->u.rpc.nsid);
+                break;
+            case MB_SCOPE_TYPE_INCLUDE:
+                buf_len = snprintf(buf, sizeof(buf), "include:%s",
+                                   perm->u.static_scope.value);
+                break;
             default:
-                continue;  /* Skip unsupported types for normalization */
+                continue;
         }
         
         if (buf_len >= sizeof(buf)) continue;
