@@ -13,6 +13,13 @@
  *     by its CID (safe base32 charset), with the MIME type in a sidecar
  *     "<cid>.mime" file. Re-opening the same path reloads the blobs.
  *
+ * The store also tracks which record URIs reference each blob
+ * (metalbear_blob_store_associate / _dissociate / _is_referenced) — the repo
+ * write path (repo_store.c) uses this to keep a blob alive only as long as
+ * some record still names it, deleting it the moment the last one stops,
+ * mirroring the reference PDS's record_blob bookkeeping. A file-backed
+ * store persists associations in a "<cid>.refs" sidecar.
+ *
  * Ownership: outputs from metalbear_blob_store_get (out_data, out_mime) are
  * heap-allocated and freed with free() by the caller. The CID is the caller's
  * string (e.g. the canonical raw multicodec CID from metalbear_cid_of_bytes).
@@ -23,6 +30,7 @@
 
 #include "wolfram/util.h"
 #include "metalbear/repo_store.h"
+#include <cJSON.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -74,6 +82,55 @@ wf_status metalbear_blob_store_list(metalbear_blob_store *store, char ***out_cid
 
 /** Free a CID array returned by metalbear_blob_store_list. Safe to call with NULL. */
 void metalbear_blob_store_list_free(char **cids, size_t count);
+
+/*
+ * Recursively find blob references within a record's JSON value and invoke
+ * `cb(cid, ctx)` once per occurrence (callers dedupe as needed). A modern
+ * blob ref is {"$type":"blob","ref":{"$link":"<cid>"},...}; a legacy blob is
+ * {"cid":"<cid>","mimeType":...} with no $type member. Shared by every
+ * write-path caller that needs a record's referenced blob CIDs: write-time
+ * association/dereference, listMissingBlobs, and checkAccountStatus's
+ * expectedBlobs.
+ */
+void metalbear_blob_walk_refs(const cJSON *node,
+                              void (*cb)(const char *cid, void *ctx),
+                              void *ctx);
+
+/*
+ * Associate `record_uri` with the blob `cid` (idempotent: associating the
+ * same pair twice is a no-op). Returns WF_ERR_NOT_FOUND if no blob is stored
+ * under `cid` — a record must not reference an unuploaded blob — WF_ERR_ALLOC
+ * on OOM, or WF_ERR_INVALID_ARG on bad inputs. Persisted for file-backed
+ * stores (survives a restart).
+ */
+wf_status metalbear_blob_store_associate(metalbear_blob_store *store,
+                                          const char *cid,
+                                          const char *record_uri);
+
+/*
+ * Remove `record_uri`'s association with `cid`. If that was the blob's last
+ * remaining association, the blob is deleted from the store outright — this
+ * mirrors the reference PDS's deleteDereferencedBlobs: a blob kept alive only
+ * by a record write that no longer references it is garbage, removed
+ * immediately rather than on a timer. Returns WF_OK whether or not
+ * `record_uri` actually held an association, or WF_ERR_NOT_FOUND if `cid` is
+ * unknown to the store.
+ *
+ * A caller processing a write that both drops and re-adds a reference to the
+ * same CID (e.g. putRecord replacing a record but keeping one of its blobs)
+ * must associate the new value's blobs BEFORE dissociating the old value's,
+ * so a still-wanted blob's reference count never touches zero.
+ */
+wf_status metalbear_blob_store_dissociate(metalbear_blob_store *store,
+                                           const char *cid,
+                                           const char *record_uri);
+
+/*
+ * WF_OK if `cid` currently has at least one record association,
+ * WF_ERR_NOT_FOUND if the CID is unknown to the store or has none.
+ */
+wf_status metalbear_blob_store_is_referenced(metalbear_blob_store *store,
+                                              const char *cid);
 
 /*
  * Server integration (requires WOLFRAM_BUILD_SERVER). Registers
