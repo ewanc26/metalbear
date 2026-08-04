@@ -59,6 +59,11 @@ static void test_static_scopes(void) {
     perm = mb_scope_permission_parse("invalid:scope");
     ASSERT(perm == NULL, "should not parse");
     PASS();
+
+    TEST("near-miss static scope 'atprotz' must not match 'atproto'");
+    perm = mb_scope_permission_parse("atprotz");
+    ASSERT(perm == NULL, "should not parse — 7 chars but not 'atproto'");
+    PASS();
 }
 
 /* Test repo scope parsing */
@@ -204,6 +209,86 @@ static void test_scope_normalization(void) {
     
     free(normalized);
     PASS();
+
+    TEST("normalize identity scope");
+    normalized = mb_scope_normalize("atproto identity:update");
+    ASSERT(normalized != NULL, "should normalize");
+    ASSERT(strstr(normalized, "identity:update") != NULL,
+           "identity scope should be preserved: got '%s'", normalized);
+    free(normalized);
+    PASS();
+
+    TEST("normalize account scope");
+    normalized = mb_scope_normalize("atproto account:delete");
+    ASSERT(normalized != NULL, "should normalize");
+    ASSERT(strstr(normalized, "account:delete") != NULL,
+           "account scope should be preserved: got '%s'", normalized);
+    free(normalized);
+    PASS();
+
+    TEST("normalize rpc scope");
+    normalized = mb_scope_normalize("atproto rpc:com.atproto.repo.*");
+    ASSERT(normalized != NULL, "should normalize");
+    ASSERT(strstr(normalized, "rpc:com.atproto.repo.*") != NULL,
+           "rpc scope should be preserved: got '%s'", normalized);
+    free(normalized);
+    PASS();
+}
+
+/* Test dynamic scope types beyond repo and blob */
+static void test_dynamic_scopes(void) {
+    TEST("identity scope parse");
+    mb_scope_permission *perm = mb_scope_permission_parse("identity:update");
+    ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_IDENTITY,
+           "should parse identity:update");
+    ASSERT(strcmp(perm->u.identity.action, "update") == 0,
+           "action should be 'update'");
+    mb_scope_permission_free(perm);
+    PASS();
+
+    TEST("identity wildcard scope parse");
+    perm = mb_scope_permission_parse("identity:*");
+    ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_IDENTITY,
+           "should parse identity:*");
+    ASSERT(strcmp(perm->u.identity.action, "*") == 0,
+           "action should be '*'");
+    mb_scope_permission_free(perm);
+    PASS();
+
+    TEST("account scope parse");
+    perm = mb_scope_permission_parse("account:delete");
+    ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_ACCOUNT,
+           "should parse account:delete");
+    ASSERT(strcmp(perm->u.account.action, "delete") == 0,
+           "action should be 'delete'");
+    mb_scope_permission_free(perm);
+    PASS();
+
+    TEST("rpc scope parse");
+    perm = mb_scope_permission_parse("rpc:com.atproto.repo.*");
+    ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_RPC,
+           "should parse rpc:com.atproto.repo.*");
+    ASSERT(strcmp(perm->u.rpc.nsid, "com.atproto.repo.*") == 0,
+           "nsid should match");
+    mb_scope_permission_free(perm);
+    PASS();
+
+    TEST("include scope parse");
+    perm = mb_scope_permission_parse("include:transition:email");
+    ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_INCLUDE,
+           "should parse include:transition:email");
+    mb_scope_permission_free(perm);
+    PASS();
+
+    TEST("invalid identity scope rejected");
+    perm = mb_scope_permission_parse("identity:invalid");
+    ASSERT(perm == NULL, "identity:invalid should not parse");
+    PASS();
+
+    TEST("invalid account scope rejected");
+    perm = mb_scope_permission_parse("account:invalid");
+    ASSERT(perm == NULL, "account:invalid should not parse");
+    PASS();
 }
 
 int main(void) {
@@ -215,6 +300,7 @@ int main(void) {
     test_scope_set();
     test_scope_matching();
     test_scope_normalization();
+    test_dynamic_scopes();
     
     printf("\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);
