@@ -67,6 +67,18 @@ target_link_libraries(metalbear PRIVATE metalbear_core)
 # for `--version`.
 target_compile_definitions(metalbear PRIVATE
     METALBEAR_VERSION="${PROJECT_VERSION}")
+if(UNIX AND NOT APPLE)
+    # metalbear_core links C++ translation units (account.cpp and friends),
+    # so this binary depends on libstdc++/libgcc_s even though main.c is C.
+    # Both the Alpine and Debian runtime images copy only this one file and
+    # never install those packages — matching the Dockerfiles' documented
+    # "single self-contained binary" design — so on a musl runtime the
+    # dynamic linker fails outright (libstdc++.so.6: No such file or
+    # directory) and on glibc it depends on some other package having pulled
+    # libstdc++ in as a side effect. Link both statically so the binary
+    # never depends on either being present.
+    target_link_options(metalbear PRIVATE -static-libgcc -static-libstdc++)
+endif()
 
 if(METALBEAR_BUILD_TESTS)
     enable_testing()
