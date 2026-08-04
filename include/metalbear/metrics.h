@@ -66,12 +66,14 @@ uint64_t metalbear_metrics_get(metalbear_metric metric);
  * enumerated up front, because the set is not fixed — the AppView proxy
  * forwards NSIDs this server has never heard of.
  *
- * The table is bounded. An unbounded label set is how a metrics endpoint
- * becomes the thing that exhausts a host's memory, and an NSID arrives from
- * the network. Requests beyond the bound are still counted, under the name
- * `other`, so the totals stay honest.
+ * The table grows on demand up to a hard cap. An unbounded label set is how a
+ * metrics endpoint becomes the thing that exhausts a host's memory, and an
+ * NSID arrives from the network, so the cap stays as the safety valve; it is
+ * sized for a host proxying the whole AppView surface and beyond. Requests
+ * beyond the cap are still counted, under the name `other`, so the totals stay
+ * honest.
  */
-#define METALBEAR_METRICS_MAX_ROUTES 128
+#define METALBEAR_METRICS_MAX_ROUTES 4096
 
 /* Record one finished request. `nsid` may be NULL for a plain HTTP route, in
  * which case `path` names it. */
