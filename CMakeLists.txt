@@ -96,6 +96,12 @@ if(METALBEAR_BUILD_TESTS)
     target_link_libraries(test_metalbear_oauth PRIVATE metalbear_core)
     add_test(NAME metalbear_oauth COMMAND test_metalbear_oauth)
 
+    add_executable(test_metalbear_oauth_metadata test/test_oauth_metadata.c)
+    target_link_libraries(test_metalbear_oauth_metadata PRIVATE metalbear_core)
+    target_include_directories(test_metalbear_oauth_metadata PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}" "${WOLFRAM_SOURCE_DIR}/test")
+    add_test(NAME metalbear_oauth_metadata COMMAND test_metalbear_oauth_metadata)
+
     add_executable(test_metalbear_oauth_scope test/test_oauth_scope.c)
     target_link_libraries(test_metalbear_oauth_scope PRIVATE metalbear_core)
     target_include_directories(test_metalbear_oauth_scope PRIVATE
