@@ -222,6 +222,18 @@ it locally.
 - Compare-and-swap failures return `WF_ERR_CONFLICT` and must surface as the
   lexicon's `InvalidSwap`, which clients branch on to retry an optimistic
   write. Deleting an absent record is a no-op success, not a 404.
+- Every create/put/delete/applyWrites handler tracks which blobs a record
+  references (`metalbear_blob_store_associate`/`_dissociate`, driven by
+  `metalbear_blob_walk_refs`), deleting a blob outright the moment no record
+  references it — mirrors the reference PDS's `record_blob` bookkeeping. A
+  record may reference a blob that has not been uploaded yet (the
+  `listMissingBlobs` migration flow depends on this); association is
+  best-effort and never rejects the write. When a record is replaced but
+  keeps referencing the SAME blob CID, dissociating the old value must skip
+  any CID the new value still names — the (cid, uri) pair does not change,
+  so an unconditional dissociate would delete a blob the record still uses.
+  `untrack_superseded_blobs` is the one function that gets this right; do
+  not reintroduce a separate unconditional dissociate helper.
 
 ## Validation
 
