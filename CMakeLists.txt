@@ -179,6 +179,12 @@ if(METALBEAR_BUILD_TESTS)
     target_include_directories(test_metalbear_blob_store PRIVATE
         "${METALBEAR_CJSON_SOURCE_DIR}")
     add_test(NAME metalbear_blob_store COMMAND test_metalbear_blob_store)
+
+    add_executable(test_metalbear_metrics test/test_metrics.c)
+    target_link_libraries(test_metalbear_metrics PRIVATE metalbear_core)
+    target_include_directories(test_metalbear_metrics PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_metrics COMMAND test_metalbear_metrics)
 endif()
 
 # C++ dev tools (replacements for the Python tools of the same name). Guarded
