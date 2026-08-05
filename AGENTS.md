@@ -53,10 +53,10 @@ the same way.
   same commit — no separate bump commit without a tag.
 - **Create a GitHub release for every version bump**: after tagging, create a
   release via `gh release create v<major>.<minor>.<patch> --title "v<major>.<minor>.<patch>" --generate-notes` (the tag is named by that single positional; a second positional would be treated as an upload file). The release must be created in the same commit as the tag — no separate release without a tag.
-- **Bump both projects together**: when a release touches both MetalBear and
-  Wolfram (the common case), tag both repositories from their respective roots
-  with the same version string, in a single operation so neither is ever
-  ahead.
+- **Version independently**: MetalBear and Wolfram are sibling projects, not a
+  single release unit. Bump each on its own history and let their versions
+  drift; there is no requirement that they share a version string or release
+  together.
 
 ## Reuse and safety
 
