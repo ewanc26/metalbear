@@ -407,7 +407,7 @@ void metalbear_sequencer_repo_event(
      * (below) serialises commit->ops and each op.path after the else block
      * ends; block scope would leave them dangling. */
     wf_subscribe_repo_op *ops = NULL;
-    char (*paths)[512] = NULL;
+    char(*paths)[512] = NULL;
     if (repo_event->kind == METALBEAR_REPO_STORE_EVENT_SYNC) {
         event.type = WF_SUBSCRIBE_EVENT_SYNC;
         snprintf(event.data.sync.did, sizeof(event.data.sync.did), "%s",
