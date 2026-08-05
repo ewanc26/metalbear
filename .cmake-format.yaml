@@ -1,0 +1,7 @@
+line_width: 80
+tab_size: 2
+max_subgroups_hwrap: 3
+max_pargs_hwrap: 4
+separate_ctrl_name_with_space: false
+separate_fn_name_with_space: false
+dangle_parens: false
