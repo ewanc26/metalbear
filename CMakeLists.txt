@@ -184,6 +184,13 @@ if(METALBEAR_BUILD_TESTS)
         "${METALBEAR_CJSON_SOURCE_DIR}")
     add_test(NAME metalbear_rate_limits COMMAND test_metalbear_rate_limits)
 
+    add_executable(test_metalbear_proxy test/test_proxy.c)
+    target_link_libraries(test_metalbear_proxy PRIVATE metalbear_core
+        Threads::Threads)
+    target_include_directories(test_metalbear_proxy PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_proxy COMMAND test_metalbear_proxy)
+
     add_executable(test_metalbear_oauth_device_session
         test/test_oauth_device_session.c)
     target_link_libraries(test_metalbear_oauth_device_session PRIVATE
