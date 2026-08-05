@@ -235,6 +235,70 @@ static void test_scope_normalization(void) {
     PASS();
 }
 
+/* Per-collection read enforcement (issue: narrow OAuth grants must be
+ * limited to exactly the reads their scope implies -- not "any repo scope
+ * matches" and not "the scope set is merely non-empty"). server.c's
+ * authenticate_request gates real requests on exactly this function, so its
+ * per-collection precision is what makes that gate meaningful rather than a
+ * no-op. */
+static void test_read_scope_denial(void) {
+    TEST("empty scope set denies read of anything");
+    mb_scope_set set;
+    mb_scope_set_parse("", &set);
+    ASSERT(!mb_scope_set_is_full_access(&set),
+           "empty set must not be full access");
+    ASSERT(!mb_scope_set_allows_read(&set, "app.bsky.feed.post"),
+           "an empty scope set must not imply any read -- a non-empty check "
+           "alone is not sufficient enforcement");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("action-restricted scope allows read of its own collection only");
+    mb_scope_set_parse("repo:app.bsky.feed.post?action=create", &set);
+    ASSERT(mb_scope_set_allows_read(&set, "app.bsky.feed.post"),
+           "a scope naming the collection allows reading it, regardless of "
+           "which write action it grants");
+    ASSERT(!mb_scope_set_allows_read(&set, "app.bsky.graph.follow"),
+           "the same scope must NOT allow reading an unrelated collection -- "
+           "\"any repo scope matches\" would wrongly allow this");
+    ASSERT(!mb_scope_set_allows_read(&set, "app.bsky.actor.profile"),
+           "nor any other unrelated collection");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("multiple narrow scopes each cover only their own collection");
+    mb_scope_set_parse(
+        "repo:app.bsky.feed.post?action=create "
+        "repo:app.bsky.graph.follow?action=create", &set);
+    ASSERT(mb_scope_set_allows_read(&set, "app.bsky.feed.post"),
+           "first named collection is readable");
+    ASSERT(mb_scope_set_allows_read(&set, "app.bsky.graph.follow"),
+           "second named collection is readable");
+    ASSERT(!mb_scope_set_allows_read(&set, "app.bsky.feed.like"),
+           "a third, unnamed collection is not");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("wildcard repo scope allows read of any collection");
+    mb_scope_set_parse("repo:*?action=create", &set);
+    ASSERT(mb_scope_set_allows_read(&set, "app.bsky.feed.post"),
+           "wildcard collection covers reads too");
+    ASSERT(mb_scope_set_allows_read(&set, "any.other.collection"),
+           "including collections never explicitly named");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("a non-repo scope alone denies every collection read");
+    mb_scope_set_parse("transition:generic", &set);
+    ASSERT(!mb_scope_set_is_full_access(&set),
+           "transition:generic is not full access");
+    ASSERT(!mb_scope_set_allows_read(&set, "app.bsky.feed.post"),
+           "a scope set with no repo permission at all must deny every "
+           "collection read, not fall back to allowing it");
+    mb_scope_set_free(&set);
+    PASS();
+}
+
 /* Test dynamic scope types beyond repo and blob */
 static void test_dynamic_scopes(void) {
     TEST("identity scope parse");
@@ -301,6 +365,7 @@ int main(void) {
     test_scope_matching();
     test_scope_normalization();
     test_dynamic_scopes();
+    test_read_scope_denial();
     
     printf("\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);
