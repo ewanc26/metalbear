@@ -1271,12 +1271,11 @@ int main(void) {
     char *desktop_refresh =
         cJSON_IsString(refresh) ? strdup(refresh->valuestring) : NULL;
     CHECK(desktop_access && desktop_refresh);
-    CHECK(cJSON_IsString(
-        cJSON_GetObjectItemCaseSensitive(json, "email")));
+    CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(json, "email")));
     CHECK(
         cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(json, "emailConfirmed")));
-    CHECK(
-        cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(json, "emailAuthFactor")));
+    CHECK(cJSON_IsBool(
+        cJSON_GetObjectItemCaseSensitive(json, "emailAuthFactor")));
     cJSON_Delete(json);
     wf_response_free(&response);
 
