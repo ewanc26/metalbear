@@ -49,15 +49,15 @@
 /* ------------------------------------------------------------------ */
 
 typedef struct acct {
-    const char   *did;
+    const char *did;
     metalbear_repo_store *repo;
     metalbear_blob_store *blobs;
-    char          path[256];   /* file-backed repo store path (temp) */
+    char path[256]; /* file-backed repo store path (temp) */
 } acct_t;
 
 typedef struct registry {
     acct_t *a;
-    size_t  n;
+    size_t n;
 } registry_t;
 
 /* Pull the target DID out of a request: prefer `did` then `repo` in the
@@ -72,8 +72,7 @@ static const char *did_from_req(const wf_xrpc_request *req) {
         if (cJSON_IsString(r) && r->valuestring && *r->valuestring)
             return r->valuestring;
     }
-    if (req->authed_subject && *req->authed_subject)
-        return req->authed_subject;
+    if (req->authed_subject && *req->authed_subject) return req->authed_subject;
     return NULL;
 }
 
@@ -101,7 +100,6 @@ static wf_status blob_resolver(void *ctx, const wf_xrpc_request *req,
     *out_repo = (metalbear_repo_store *)repo;
     return status;
 }
-
 
 /*
  * Test auth middleware: derive the authenticated DID from a
@@ -131,10 +129,9 @@ static wf_status auth_cb(wf_xrpc_request *req, void *ctx) {
 
 static int raw_http(const char *host, uint16_t port, const char *method,
                     const char *path, const unsigned char *body,
-                    size_t body_len, const char *content_type,
-                    const char *auth, unsigned char **out_body,
-                    size_t *out_len, char **out_content_type,
-                    long *out_status) {
+                    size_t body_len, const char *content_type, const char *auth,
+                    unsigned char **out_body, size_t *out_len,
+                    char **out_content_type, long *out_status) {
     *out_body = NULL;
     *out_len = 0;
     *out_content_type = NULL;
@@ -147,7 +144,10 @@ static int raw_http(const char *host, uint16_t port, const char *method,
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) { close(sock); return -1; }
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+        close(sock);
+        return -1;
+    }
     if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         close(sock);
         return -1;
@@ -168,19 +168,32 @@ static int raw_http(const char *host, uint16_t port, const char *method,
     rh += snprintf(req + rh, sizeof(req) - (size_t)rh,
                    "Connection: close\r\n\r\n");
 
-    if (send(sock, req, (size_t)rh, 0) < 0) { close(sock); return -1; }
+    if (send(sock, req, (size_t)rh, 0) < 0) {
+        close(sock);
+        return -1;
+    }
     if (body && body_len > 0) {
-        if (send(sock, body, body_len, 0) < 0) { close(sock); return -1; }
+        if (send(sock, body, body_len, 0) < 0) {
+            close(sock);
+            return -1;
+        }
     }
 
     size_t cap = 65536, got = 0;
     unsigned char *buf = (unsigned char *)malloc(cap);
-    if (!buf) { close(sock); return -1; }
+    if (!buf) {
+        close(sock);
+        return -1;
+    }
     for (;;) {
         if (got == cap) {
             cap *= 2;
             unsigned char *nb = (unsigned char *)realloc(buf, cap);
-            if (!nb) { free(buf); close(sock); return -1; }
+            if (!nb) {
+                free(buf);
+                close(sock);
+                return -1;
+            }
             buf = nb;
         }
         ssize_t n = recv(sock, buf + got, cap - got, 0);
@@ -191,13 +204,16 @@ static int raw_http(const char *host, uint16_t port, const char *method,
 
     const char *sep = NULL;
     for (size_t i = 0; i + 3 < got; i++) {
-        if (buf[i] == '\r' && buf[i + 1] == '\n' &&
-            buf[i + 2] == '\r' && buf[i + 3] == '\n') {
+        if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' &&
+            buf[i + 3] == '\n') {
             sep = (const char *)&buf[i + 4];
             break;
         }
     }
-    if (!sep) { free(buf); return -1; }
+    if (!sep) {
+        free(buf);
+        return -1;
+    }
 
     size_t head_len = (size_t)(sep - (char *)buf);
     sscanf((const char *)buf, "HTTP/%*s %ld", out_status);
@@ -212,7 +228,11 @@ static int raw_http(const char *host, uint16_t port, const char *method,
             while (ve < end && *ve != '\r' && *ve != '\n') ve++;
             size_t vl = (size_t)(ve - v);
             char *ct = (char *)malloc(vl + 1);
-            if (ct) { memcpy(ct, v, vl); ct[vl] = '\0'; *out_content_type = ct; }
+            if (ct) {
+                memcpy(ct, v, vl);
+                ct[vl] = '\0';
+                *out_content_type = ct;
+            }
             break;
         }
         p++;
@@ -220,7 +240,11 @@ static int raw_http(const char *host, uint16_t port, const char *method,
 
     size_t blen = got - (size_t)(sep - (char *)buf);
     unsigned char *body_out = (unsigned char *)malloc(blen ? blen : 1);
-    if (!body_out) { free(buf); free(*out_content_type); return -1; }
+    if (!body_out) {
+        free(buf);
+        free(*out_content_type);
+        return -1;
+    }
     memcpy(body_out, sep, blen);
     *out_body = body_out;
     *out_len = blen;
@@ -247,18 +271,17 @@ static int run(void) {
     int failures = 0;
 
     acct_t accounts[2] = {
-        { .did = "did:plc:alpha" },
-        { .did = "did:plc:beta" },
+        {.did = "did:plc:alpha"},
+        {.did = "did:plc:beta"},
     };
-    registry_t reg = { accounts, 2 };
+    registry_t reg = {accounts, 2};
 
     for (size_t i = 0; i < reg.n; i++) {
         temp_path(accounts[i].path, sizeof(accounts[i].path),
                   (i == 0) ? "alpha" : "beta");
-        wf_status s = metalbear_repo_store_open(accounts[i].path, accounts[i].did,
-                                         (i == 0) ? "a.example.com"
-                                                  : "b.example.com",
-                                         &accounts[i].repo);
+        wf_status s = metalbear_repo_store_open(
+            accounts[i].path, accounts[i].did,
+            (i == 0) ? "a.example.com" : "b.example.com", &accounts[i].repo);
         WF_CHECK(s == WF_OK && accounts[i].repo != NULL);
         if (s != WF_OK) {
             for (size_t j = 0; j < i; j++) {
@@ -279,7 +302,7 @@ static int run(void) {
     WF_CHECK(metalbear_xrpc_server_register_pds_repo_resolver(
                  server, resolver, &reg, NULL, NULL) == WF_OK);
     WF_CHECK(metalbear_xrpc_server_register_blob_store_resolver(
-                  server, blob_resolver, &reg) == WF_OK);
+                 server, blob_resolver, &reg) == WF_OK);
 
     uint16_t port = wf_xrpc_server_port(server);
     WF_CHECK(port != 0);
@@ -291,14 +314,15 @@ static int run(void) {
     /* ── createRecord routes to the correct store per DID ──────────── */
     char body[512];
     for (size_t i = 0; i < reg.n; i++) {
-        snprintf(body, sizeof(body),
-                 "{\"repo\":\"%s\",\"collection\":\"com.example.posts\","
-                 "\"rkey\":\"sharedrkey\","
-                 "\"record\":{\"$type\":\"com.example.posts\",\"text\":\"%s\"}}",
-                 accounts[i].did, (i == 0) ? "alpha-text" : "beta-text");
+        snprintf(
+            body, sizeof(body),
+            "{\"repo\":\"%s\",\"collection\":\"com.example.posts\","
+            "\"rkey\":\"sharedrkey\","
+            "\"record\":{\"$type\":\"com.example.posts\",\"text\":\"%s\"}}",
+            accounts[i].did, (i == 0) ? "alpha-text" : "beta-text");
         wf_response res = {0};
-        wf_status s = wf_xrpc_procedure(client,
-            "com.atproto.repo.createRecord", body, &res);
+        wf_status s = wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                                        body, &res);
         WF_CHECK(s == WF_OK && res.status == 200);
         wf_response_free(&res);
     }
@@ -311,14 +335,14 @@ static int run(void) {
             {"rkey", "sharedrkey"},
         };
         wf_response res = {0};
-        wf_status s = wf_xrpc_query_params(client,
-            "com.atproto.repo.getRecord", params, 3, &res);
+        wf_status s = wf_xrpc_query_params(client, "com.atproto.repo.getRecord",
+                                           params, 3, &res);
         WF_CHECK(s == WF_OK && res.status == 200);
         cJSON *root = cJSON_ParseWithLength(res.body, res.body_len);
-        cJSON *val = root ? cJSON_GetObjectItemCaseSensitive(root, "value")
-                          : NULL;
-        cJSON *text = val ? cJSON_GetObjectItemCaseSensitive(val, "text")
-                          : NULL;
+        cJSON *val =
+            root ? cJSON_GetObjectItemCaseSensitive(root, "value") : NULL;
+        cJSON *text =
+            val ? cJSON_GetObjectItemCaseSensitive(val, "text") : NULL;
         WF_CHECK(text && cJSON_IsString(text) &&
                  strcmp(text->valuestring,
                         (i == 0) ? "alpha-text" : "beta-text") == 0);
@@ -334,8 +358,8 @@ static int run(void) {
                  "\"record\":{\"$type\":\"com.example.posts\",\"text\":\"x\"}}",
                  accounts[0].did);
         wf_response res = {0};
-        wf_status s = wf_xrpc_procedure(client,
-            "com.atproto.repo.createRecord", body, &res);
+        wf_status s = wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                                        body, &res);
         WF_CHECK(s == WF_OK && res.status == 200);
         wf_response_free(&res);
 
@@ -344,8 +368,8 @@ static int run(void) {
             {"collection", "com.example.posts"},
             {"rkey", "alphaonly"},
         };
-        s = wf_xrpc_query_params(client, "com.atproto.repo.getRecord",
-                                 params, 3, &res);
+        s = wf_xrpc_query_params(client, "com.atproto.repo.getRecord", params,
+                                 3, &res);
         /* Non-2xx yields WF_ERR_HTTP but still populates res.status. */
         WF_CHECK(res.status == 404);
         wf_response_free(&res);
@@ -353,14 +377,14 @@ static int run(void) {
 
     /* ── describeRepo reports the per-DID did/handle ──────────────── */
     for (size_t i = 0; i < reg.n; i++) {
-        wf_xrpc_param params[] = { {"did", (char *)accounts[i].did} };
+        wf_xrpc_param params[] = {{"did", (char *)accounts[i].did}};
         wf_response res = {0};
-        wf_status s = wf_xrpc_query_params(client,
-            "com.atproto.repo.describeRepo", params, 1, &res);
+        wf_status s = wf_xrpc_query_params(
+            client, "com.atproto.repo.describeRepo", params, 1, &res);
         WF_CHECK(s == WF_OK && res.status == 200);
         cJSON *root = cJSON_ParseWithLength(res.body, res.body_len);
-        cJSON *did = root ? cJSON_GetObjectItemCaseSensitive(root, "did")
-                          : NULL;
+        cJSON *did =
+            root ? cJSON_GetObjectItemCaseSensitive(root, "did") : NULL;
         WF_CHECK(did && cJSON_IsString(did) &&
                  strcmp(did->valuestring, accounts[i].did) == 0);
         cJSON_Delete(root);
@@ -369,14 +393,14 @@ static int run(void) {
 
     /* ── unknown DID -> 400 RepoNotFound ──────────────────────────── */
     {
-        wf_xrpc_param params[] = { {"did", (char *)"did:plc:unknown"} };
+        wf_xrpc_param params[] = {{"did", (char *)"did:plc:unknown"}};
         wf_response res = {0};
-        wf_xrpc_query_params(client, "com.atproto.repo.describeRepo",
-                              params, 1, &res);
+        wf_xrpc_query_params(client, "com.atproto.repo.describeRepo", params, 1,
+                             &res);
         WF_CHECK(res.status == 400);
         cJSON *root = cJSON_ParseWithLength(res.body, res.body_len);
-        cJSON *err = root ? cJSON_GetObjectItemCaseSensitive(root, "error")
-                          : NULL;
+        cJSON *err =
+            root ? cJSON_GetObjectItemCaseSensitive(root, "error") : NULL;
         WF_CHECK(err && cJSON_IsString(err) &&
                  strcmp(err->valuestring, "RepoNotFound") == 0);
         cJSON_Delete(root);
@@ -388,45 +412,49 @@ static int run(void) {
     const char *mime = "image/png";
     char auth[64];
     snprintf(auth, sizeof(auth), "Bearer %s", accounts[0].did);
-    unsigned char *up_body = NULL; size_t up_len = 0; char *up_ct = NULL;
+    unsigned char *up_body = NULL;
+    size_t up_len = 0;
+    char *up_ct = NULL;
     long up_status = 0;
-    if (raw_http("127.0.0.1", port, "POST",
-                 "/xrpc/com.atproto.repo.uploadBlob", payload,
-                 sizeof(payload), mime, auth, &up_body, &up_len, &up_ct,
-                 &up_status) != 0) {
+    if (raw_http("127.0.0.1", port, "POST", "/xrpc/com.atproto.repo.uploadBlob",
+                 payload, sizeof(payload), mime, auth, &up_body, &up_len,
+                 &up_ct, &up_status) != 0) {
         WF_CHECK(0);
     } else {
         WF_CHECK(up_status == 200);
         char *cid = NULL;
         if (up_status == 200) {
             cJSON *root = cJSON_ParseWithLength((const char *)up_body, up_len);
-            cJSON *blob = root ? cJSON_GetObjectItemCaseSensitive(root, "blob")
-                               : NULL;
-            cJSON *ref = blob ? cJSON_GetObjectItemCaseSensitive(blob, "ref")
-                              : NULL;
-            cJSON *link = ref ? cJSON_GetObjectItemCaseSensitive(ref, "$link")
-                              : NULL;
+            cJSON *blob =
+                root ? cJSON_GetObjectItemCaseSensitive(root, "blob") : NULL;
+            cJSON *ref =
+                blob ? cJSON_GetObjectItemCaseSensitive(blob, "ref") : NULL;
+            cJSON *link =
+                ref ? cJSON_GetObjectItemCaseSensitive(ref, "$link") : NULL;
             WF_CHECK(link && cJSON_IsString(link) && link->valuestring);
-            if (link && cJSON_IsString(link))
-                cid = strdup(link->valuestring);
+            if (link && cJSON_IsString(link)) cid = strdup(link->valuestring);
             cJSON_Delete(root);
         }
-        free(up_body); free(up_ct);
+        free(up_body);
+        free(up_ct);
 
         if (cid) {
             /* getBlob on the owning DID returns the bytes. */
             char gb_path[256];
             snprintf(gb_path, sizeof(gb_path),
                      "/xrpc/com.atproto.sync.getBlob?cid=%s", cid);
-            unsigned char *gb_body = NULL; size_t gb_len = 0;
-            char *gb_ct = NULL; long gb_status = 0;
-            if (raw_http("127.0.0.1", port, "GET", gb_path, NULL, 0, NULL,
-                         auth, &gb_body, &gb_len, &gb_ct, &gb_status) == 0) {
+            unsigned char *gb_body = NULL;
+            size_t gb_len = 0;
+            char *gb_ct = NULL;
+            long gb_status = 0;
+            if (raw_http("127.0.0.1", port, "GET", gb_path, NULL, 0, NULL, auth,
+                         &gb_body, &gb_len, &gb_ct, &gb_status) == 0) {
                 WF_CHECK(gb_status == 200);
                 WF_CHECK(gb_len == sizeof(payload) &&
                          memcmp(gb_body, payload, gb_len) == 0);
                 WF_CHECK(gb_ct && strcmp(gb_ct, mime) == 0);
-                free(gb_body); free(gb_ct);
+                free(gb_body);
+                free(gb_ct);
             } else {
                 WF_CHECK(0);
             }
@@ -434,12 +462,15 @@ static int run(void) {
             /* getBlob on the OTHER DID 404s (blob store isolation). */
             char auth2[64];
             snprintf(auth2, sizeof(auth2), "Bearer %s", accounts[1].did);
-            unsigned char *gb2 = NULL; size_t gb2_len = 0;
-            char *gb2_ct = NULL; long gb2_status = 0;
+            unsigned char *gb2 = NULL;
+            size_t gb2_len = 0;
+            char *gb2_ct = NULL;
+            long gb2_status = 0;
             if (raw_http("127.0.0.1", port, "GET", gb_path, NULL, 0, NULL,
                          auth2, &gb2, &gb2_len, &gb2_ct, &gb2_status) == 0) {
                 WF_CHECK(gb2_status == 404);
-                free(gb2); free(gb2_ct);
+                free(gb2);
+                free(gb2_ct);
             } else {
                 WF_CHECK(0);
             }

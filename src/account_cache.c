@@ -20,9 +20,9 @@ struct metalbear_account_cache {
     } *entries;
 };
 
-metalbear_account_cache *metalbear_account_cache_new(const char *service_did,
-                                                     const char *public_url,
-                                                     const char *data_directory) {
+metalbear_account_cache *
+metalbear_account_cache_new(const char *service_did, const char *public_url,
+                            const char *data_directory) {
     if (!service_did || !data_directory) return NULL;
     metalbear_account_cache *cache = calloc(1, sizeof(*cache));
     if (!cache) return NULL;
@@ -64,9 +64,10 @@ void metalbear_account_cache_free(metalbear_account_cache *cache) {
     free(cache);
 }
 
-metalbear_account_context *metalbear_account_cache_get(
-    metalbear_account_cache *cache, metalbear_account_registry *registry,
-    const char *did) {
+metalbear_account_context *
+metalbear_account_cache_get(metalbear_account_cache *cache,
+                            metalbear_account_registry *registry,
+                            const char *did) {
     if (!cache || !registry || !did) return NULL;
 
     pthread_mutex_lock(&cache->lock);
@@ -81,7 +82,8 @@ metalbear_account_context *metalbear_account_cache_get(
 
     /* Not cached yet: resolve the registry entry and open its bundle. */
     metalbear_account_entry *entry = NULL;
-    if (metalbear_account_registry_find_by_did(registry, did, &entry) != WF_OK ||
+    if (metalbear_account_registry_find_by_did(registry, did, &entry) !=
+            WF_OK ||
         !entry) {
         metalbear_account_entry_free(entry);
         return NULL;

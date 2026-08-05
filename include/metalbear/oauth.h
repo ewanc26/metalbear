@@ -54,16 +54,13 @@ wf_status metalbear_oauth_create_par(metalbear_oauth_store *store,
  * it) speaks for. */
 wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
                                     const char *request_uri,
-                                    const char *client_id,
-                                    const char *subject,
-                                    char **out_code,
-                                    char **out_redirect_uri,
+                                    const char *client_id, const char *subject,
+                                    char **out_code, char **out_redirect_uri,
                                     char **out_state);
 
 /* Exchange a code using S256 PKCE and the same DPoP key used at PAR. */
 wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
-                                        const char *code,
-                                        const char *client_id,
+                                        const char *code, const char *client_id,
                                         const char *redirect_uri,
                                         const char *code_verifier,
                                         const char *dpop_jkt,
@@ -72,17 +69,17 @@ wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
 /* Rotate a refresh token and retain its client, scope, and DPoP binding. */
 wf_status metalbear_oauth_refresh(metalbear_oauth_store *store,
                                   const char *refresh_token,
-                                  const char *client_id,
-                                  const char *dpop_jkt,
+                                  const char *client_id, const char *dpop_jkt,
                                   metalbear_oauth_grant *out);
 wf_status metalbear_oauth_revoke(metalbear_oauth_store *store,
                                  const char *token);
 
 /* Verify a self-issued access token plus its request-bound DPoP proof. */
-wf_status metalbear_oauth_verify_request(
-    metalbear_oauth_store *store, const char *authorization,
-    const char *dpop_proof, const char *method, const char *uri,
-    wf_oauth_verified_token **out);
+wf_status metalbear_oauth_verify_request(metalbear_oauth_store *store,
+                                         const char *authorization,
+                                         const char *dpop_proof,
+                                         const char *method, const char *uri,
+                                         wf_oauth_verified_token **out);
 
 /*
  * A device session: proof, held by a browser as a cookie, that this browser

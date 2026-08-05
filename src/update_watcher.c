@@ -26,14 +26,17 @@ struct metalbear_update_watcher {
 
 /* ---- helper: semver comparison ---- */
 
-typedef struct { int major, minor, patch; } semver;
+typedef struct {
+    int major, minor, patch;
+} semver;
 
 static bool parse_semver(const char *s, semver *v) {
     if (!s || !s[0]) return false;
     while (*s && (*s < '0' || *s > '9')) s++;
     if (!*s) return false;
     v->major = v->minor = v->patch = 0;
-    if (sscanf(s, "%d.%d.%d", &v->major, &v->minor, &v->patch) < 1) return false;
+    if (sscanf(s, "%d.%d.%d", &v->major, &v->minor, &v->patch) < 1)
+        return false;
     return true;
 }
 
@@ -79,7 +82,8 @@ static char *http_get(const char *url) {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "MetalBear-update-watcher/" METALBEAR_VERSION);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT,
+                     "MetalBear-update-watcher/" METALBEAR_VERSION);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     CURLcode res = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
@@ -123,7 +127,8 @@ static void check_updates(metalbear_update_watcher *w) {
                          latest, w->current_metalbear_version,
                          w->metalbear_repo, latest);
             } else {
-                LOG_INFO("MetalBear is up-to-date (%s)", w->current_metalbear_version);
+                LOG_INFO("MetalBear is up-to-date (%s)",
+                         w->current_metalbear_version);
             }
             free(latest);
         } else {
@@ -136,10 +141,11 @@ static void check_updates(metalbear_update_watcher *w) {
             if (is_newer(w->current_wolfram_version, latest)) {
                 LOG_WARN("Wolfram %s is available (running %s) — "
                          "https://github.com/%s/releases/tag/%s",
-                         latest, w->current_wolfram_version,
-                         w->wolfram_repo, latest);
+                         latest, w->current_wolfram_version, w->wolfram_repo,
+                         latest);
             } else {
-                LOG_INFO("Wolfram is up-to-date (%s)", w->current_wolfram_version);
+                LOG_INFO("Wolfram is up-to-date (%s)",
+                         w->current_wolfram_version);
             }
             free(latest);
         } else {
@@ -166,24 +172,24 @@ static void *update_watcher_main(void *arg) {
 
 /* ---- public API ---- */
 
-wf_status metalbear_update_watcher_open(
-    const metalbear_update_watcher_config *config,
-    metalbear_update_watcher **out) {
+wf_status
+metalbear_update_watcher_open(const metalbear_update_watcher_config *config,
+                              metalbear_update_watcher **out) {
     if (!config || !out || !config->enabled) {
         *out = NULL;
         return WF_OK;
     }
     metalbear_update_watcher *w = calloc(1, sizeof(*w));
     if (!w) return WF_ERR_ALLOC;
-    w->interval_seconds = config->interval_seconds > 0
-                              ? config->interval_seconds
-                              : 86400;
+    w->interval_seconds =
+        config->interval_seconds > 0 ? config->interval_seconds : 86400;
     if (config->metalbear_repo && config->metalbear_repo[0])
         w->metalbear_repo = strdup(config->metalbear_repo);
     if (config->wolfram_repo && config->wolfram_repo[0])
         w->wolfram_repo = strdup(config->wolfram_repo);
     if (config->current_metalbear_version)
-        w->current_metalbear_version = strdup(config->current_metalbear_version);
+        w->current_metalbear_version =
+            strdup(config->current_metalbear_version);
     if (config->current_wolfram_version)
         w->current_wolfram_version = strdup(config->current_wolfram_version);
     if (pthread_create(&w->thread, NULL, update_watcher_main, w) != 0) {

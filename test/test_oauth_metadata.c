@@ -49,26 +49,40 @@ static int raw_get(const char *host, uint16_t port, const char *path,
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) { close(sock); return -1; }
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+        close(sock);
+        return -1;
+    }
     if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         close(sock);
         return -1;
     }
 
     char req[256];
-    int rh = snprintf(req, sizeof(req),
-                      "GET %s HTTP/1.1\r\nHost: %s:%u\r\nConnection: close\r\n\r\n",
-                      path, host, (unsigned)port);
-    if (send(sock, req, (size_t)rh, 0) < 0) { close(sock); return -1; }
+    int rh =
+        snprintf(req, sizeof(req),
+                 "GET %s HTTP/1.1\r\nHost: %s:%u\r\nConnection: close\r\n\r\n",
+                 path, host, (unsigned)port);
+    if (send(sock, req, (size_t)rh, 0) < 0) {
+        close(sock);
+        return -1;
+    }
 
     size_t cap = 65536, got = 0;
     unsigned char *buf = (unsigned char *)malloc(cap);
-    if (!buf) { close(sock); return -1; }
+    if (!buf) {
+        close(sock);
+        return -1;
+    }
     for (;;) {
         if (got == cap) {
             cap *= 2;
             unsigned char *nb = (unsigned char *)realloc(buf, cap);
-            if (!nb) { free(buf); close(sock); return -1; }
+            if (!nb) {
+                free(buf);
+                close(sock);
+                return -1;
+            }
             buf = nb;
         }
         ssize_t n = recv(sock, buf + got, cap - got, 0);
@@ -79,17 +93,23 @@ static int raw_get(const char *host, uint16_t port, const char *path,
 
     const char *sep = NULL;
     for (size_t i = 0; i + 3 < got; i++) {
-        if (buf[i] == '\r' && buf[i + 1] == '\n' &&
-            buf[i + 2] == '\r' && buf[i + 3] == '\n') {
+        if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' &&
+            buf[i + 3] == '\n') {
             sep = (const char *)&buf[i + 4];
             break;
         }
     }
-    if (!sep) { free(buf); return -1; }
+    if (!sep) {
+        free(buf);
+        return -1;
+    }
     sscanf((const char *)buf, "HTTP/%*s %ld", out_status);
     size_t blen = got - (size_t)(sep - (char *)buf);
     unsigned char *body_out = (unsigned char *)malloc(blen ? blen : 1);
-    if (!body_out) { free(buf); return -1; }
+    if (!body_out) {
+        free(buf);
+        return -1;
+    }
     memcpy(body_out, sep, blen);
     *out_body = body_out;
     *out_len = blen;
@@ -108,13 +128,20 @@ static bool array_contains_string(const cJSON *arr, const char *needle) {
 
 static int no_op_resolver(void *ctx, const char *hint, char *out,
                           size_t out_len) {
-    (void)ctx; (void)hint; (void)out; (void)out_len;
+    (void)ctx;
+    (void)hint;
+    (void)out;
+    (void)out_len;
     return 0;
 }
 
 static int no_op_verifier(void *ctx, const char *identifier,
                           const char *password, char *out, size_t out_len) {
-    (void)ctx; (void)identifier; (void)password; (void)out; (void)out_len;
+    (void)ctx;
+    (void)identifier;
+    (void)password;
+    (void)out;
+    (void)out_len;
     return 0;
 }
 
@@ -130,7 +157,10 @@ static int run(void) {
     metalbear_oauth_store *store = NULL;
     WF_CHECK(metalbear_oauth_store_open(path, "https://pds.example.com",
                                         &store) == WF_OK);
-    if (!store) { unlink(path); return wf_test_fail_count - failures_before; }
+    if (!store) {
+        unlink(path);
+        return wf_test_fail_count - failures_before;
+    }
 
     wf_xrpc_server *server = wf_xrpc_server_start("127.0.0.1", 0, 1);
     WF_CHECK(server != NULL);
@@ -140,11 +170,13 @@ static int run(void) {
         return wf_test_fail_count - failures_before;
     }
     WF_CHECK(metalbear_oauth_routes_register(
-                 server, store, "https://pds.example.com", NULL,
-                 no_op_resolver, no_op_verifier, NULL) == WF_OK);
+                 server, store, "https://pds.example.com", NULL, no_op_resolver,
+                 no_op_verifier, NULL) == WF_OK);
 
     uint16_t port = wf_xrpc_server_port(server);
-    unsigned char *body = NULL; size_t len = 0; long status = 0;
+    unsigned char *body = NULL;
+    size_t len = 0;
+    long status = 0;
     WF_CHECK(raw_get("127.0.0.1", port,
                      "/.well-known/oauth-authorization-server", &body, &len,
                      &status) == 0);
@@ -179,16 +211,17 @@ static int run(void) {
     }
     free(body);
 
-    unsigned char *pr_body = NULL; size_t pr_len = 0; long pr_status = 0;
-    WF_CHECK(raw_get("127.0.0.1", port,
-                     "/.well-known/oauth-protected-resource", &pr_body,
-                     &pr_len, &pr_status) == 0);
+    unsigned char *pr_body = NULL;
+    size_t pr_len = 0;
+    long pr_status = 0;
+    WF_CHECK(raw_get("127.0.0.1", port, "/.well-known/oauth-protected-resource",
+                     &pr_body, &pr_len, &pr_status) == 0);
     WF_CHECK(pr_status == 200);
     cJSON *pr_root = cJSON_ParseWithLength((const char *)pr_body, pr_len);
     WF_CHECK(pr_root != NULL);
     if (pr_root) {
-        cJSON *docs = cJSON_GetObjectItemCaseSensitive(
-            pr_root, "resource_documentation");
+        cJSON *docs =
+            cJSON_GetObjectItemCaseSensitive(pr_root, "resource_documentation");
         WF_CHECK(cJSON_IsString(docs) &&
                  strcmp(docs->valuestring, "https://atproto.com") == 0);
         cJSON_Delete(pr_root);

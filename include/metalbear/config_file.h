@@ -38,8 +38,7 @@ typedef struct metalbear_config_file metalbear_config_file;
  * On failure returns non-WF_OK and writes a human-readable reason (including
  * the offending line number) into `err`, which may be NULL.
  */
-wf_status metalbear_config_file_load(const char *path,
-                                     metalbear_config *config,
+wf_status metalbear_config_file_load(const char *path, metalbear_config *config,
                                      metalbear_config_file **out_owner,
                                      char *err, size_t err_len);
 

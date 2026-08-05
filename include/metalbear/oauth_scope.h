@@ -2,13 +2,15 @@
  * oauth_scope.h — OAuth scope parsing and matching for AT Protocol
  *
  * Supports both static and dynamic scopes:
- *   - Static: "atproto", "transition:email", "transition:generic", "transition:chat.bsky"
+ *   - Static: "atproto", "transition:email", "transition:generic",
+ * "transition:chat.bsky"
  *   - Dynamic: "repo:<collection>?action=<action>", "blob:*", etc.
  *
  * Scope format (repo):
- *   repo:com.example.foo                    — all actions on specific collection
- *   repo:com.example.foo?action=create      — only create on specific collection
- *   repo:*?action=create&action=update      — create/update on all collections
+ *   repo:com.example.foo                    — all actions on specific
+ * collection repo:com.example.foo?action=create      — only create on specific
+ * collection repo:*?action=create&action=update      — create/update on all
+ * collections
  *
  * Actions: create, update, delete
  * Default actions: all three if not specified
@@ -47,7 +49,8 @@ typedef enum mb_repo_action {
     MB_REPO_ACTION_CREATE = 1 << 0,
     MB_REPO_ACTION_UPDATE = 1 << 1,
     MB_REPO_ACTION_DELETE = 1 << 2,
-    MB_REPO_ACTION_ALL = MB_REPO_ACTION_CREATE | MB_REPO_ACTION_UPDATE | MB_REPO_ACTION_DELETE,
+    MB_REPO_ACTION_ALL =
+        MB_REPO_ACTION_CREATE | MB_REPO_ACTION_UPDATE | MB_REPO_ACTION_DELETE,
 } mb_repo_action;
 
 /* Parsed scope permission */
@@ -55,23 +58,23 @@ typedef struct mb_scope_permission {
     mb_scope_type type;
     union {
         struct {
-            char *value;  /* "atproto", "transition:email", etc. */
+            char *value; /* "atproto", "transition:email", etc. */
         } static_scope;
         struct {
-            char *collection;  /* NSID or "*" */
+            char *collection; /* NSID or "*" */
             mb_repo_action actions;
         } repo;
         struct {
-            char *collection;  /* NSID or "*" for blob permissions */
+            char *collection; /* NSID or "*" for blob permissions */
         } blob;
         struct {
-            char *action;  /* "update" or "*" */
+            char *action; /* "update" or "*" */
         } identity;
         struct {
-            char *action;  /* "delete" or "*" */
+            char *action; /* "delete" or "*" */
         } account;
         struct {
-            char *nsid;  /* NSID pattern */
+            char *nsid; /* NSID pattern */
         } rpc;
     } u;
 } mb_scope_permission;
@@ -108,17 +111,15 @@ bool mb_scope_set_is_full_access(const mb_scope_set *set);
  * @param action The action being performed (create, update, or delete)
  * @return true if the operation is allowed
  */
-bool mb_scope_set_allows_repo(const mb_scope_set *set,
-                               const char *collection,
-                               mb_repo_action action);
+bool mb_scope_set_allows_repo(const mb_scope_set *set, const char *collection,
+                              mb_repo_action action);
 
 /**
  * Check if a scope set allows reading a collection.
  * Read access is granted if any repo permission matches the collection
  * (since repo permissions grant both read and write).
  */
-bool mb_scope_set_allows_read(const mb_scope_set *set,
-                               const char *collection);
+bool mb_scope_set_allows_read(const mb_scope_set *set, const char *collection);
 
 /**
  * Normalize a scope string (deduplicate, sort, validate).

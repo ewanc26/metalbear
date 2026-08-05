@@ -41,10 +41,10 @@ static void test_backup_create_restore(void) {
     sqlite3 *db = NULL;
     assert(sqlite3_open(TEST_DB, &db) == SQLITE_OK);
     assert(sqlite3_exec(db,
-        "CREATE TABLE test(id INTEGER PRIMARY KEY, value TEXT);"
-        "INSERT INTO test(value) VALUES('hello');"
-        "INSERT INTO test(value) VALUES('world');",
-        NULL, NULL, NULL) == SQLITE_OK);
+                        "CREATE TABLE test(id INTEGER PRIMARY KEY, value TEXT);"
+                        "INSERT INTO test(value) VALUES('hello');"
+                        "INSERT INTO test(value) VALUES('world');",
+                        NULL, NULL, NULL) == SQLITE_OK);
     sqlite3_close(db);
     /* Create backup */
     assert(metalbear_backup_create(TEST_DIR, TEST_BACKUP) == WF_OK);
@@ -132,15 +132,15 @@ static void test_sequencer_retention(void) {
     printf("  PASS\n");
 }
 
-
 /* Read the pruning high-water mark straight from the log. */
 static int64_t read_pruned_through(const char *path) {
     sqlite3 *db = NULL;
     sqlite3_stmt *stmt = NULL;
     int64_t value = -1;
     if (sqlite3_open(path, &db) == SQLITE_OK &&
-        sqlite3_prepare_v2(db, "SELECT value FROM meta "
-                               "WHERE key='pruned_through';",
+        sqlite3_prepare_v2(db,
+                           "SELECT value FROM meta "
+                           "WHERE key='pruned_through';",
                            -1, &stmt, NULL) == SQLITE_OK &&
         sqlite3_step(stmt) == SQLITE_ROW) {
         value = sqlite3_column_int64(stmt, 0);

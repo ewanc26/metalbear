@@ -41,10 +41,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#define DNS_TYPE_TXT   16
-#define DNS_TYPE_SOA    6
+#define DNS_TYPE_TXT 16
+#define DNS_TYPE_SOA 6
 #define DNS_TYPE_TSIG 250
-#define DNS_CLASS_IN    1
+#define DNS_CLASS_IN 1
 #define DNS_CLASS_ANY 255
 #define DNS_OPCODE_UPDATE 5
 #define TSIG_FUDGE 300
@@ -74,15 +74,14 @@ static void put_u8(msg *m, unsigned value) {
 }
 
 static void put_u16(msg *m, unsigned value) {
-    unsigned char b[2] = { (unsigned char)(value >> 8), (unsigned char)value };
+    unsigned char b[2] = {(unsigned char)(value >> 8), (unsigned char)value};
     put_bytes(m, b, 2);
 }
 
 static void put_u32(msg *m, unsigned long value) {
-    unsigned char b[4] = {
-        (unsigned char)(value >> 24), (unsigned char)(value >> 16),
-        (unsigned char)(value >> 8),  (unsigned char)value
-    };
+    unsigned char b[4] = {(unsigned char)(value >> 24),
+                          (unsigned char)(value >> 16),
+                          (unsigned char)(value >> 8), (unsigned char)value};
     put_bytes(m, b, 4);
 }
 
@@ -97,8 +96,11 @@ static void put_name(msg *m, const char *name) {
     while (*p) {
         const char *dot = strchr(p, '.');
         size_t label = dot ? (size_t)(dot - p) : strlen(p);
-        if (label == 0) break;          /* trailing dot */
-        if (label > 63) { m->overflow = true; return; }
+        if (label == 0) break; /* trailing dot */
+        if (label > 63) {
+            m->overflow = true;
+            return;
+        }
         put_u8(m, (unsigned)label);
         put_bytes(m, p, label);
         if (!dot) break;
@@ -133,22 +135,21 @@ static void put_name_canonical(msg *m, const char *name) {
  * before. Getting that backwards produces a signature the server rejects
  * while everything here looks correct.
  */
-static bool tsig_sign(msg *m, const char *key_name,
-                      const unsigned char *secret, size_t secret_len,
-                      unsigned original_id) {
+static bool tsig_sign(msg *m, const char *key_name, const unsigned char *secret,
+                      size_t secret_len, unsigned original_id) {
     const char *algorithm = "hmac-sha256";
 
     msg vars = {0};
     put_name_canonical(&vars, key_name);
     put_u16(&vars, DNS_CLASS_ANY);
-    put_u32(&vars, 0);                       /* TTL */
+    put_u32(&vars, 0); /* TTL */
     put_name_canonical(&vars, algorithm);
     time_t now = time(NULL);
-    put_u16(&vars, (unsigned)((uint64_t)now >> 32));   /* time signed, 48 bits */
+    put_u16(&vars, (unsigned)((uint64_t)now >> 32)); /* time signed, 48 bits */
     put_u32(&vars, (unsigned long)((uint64_t)now & 0xffffffffUL));
     put_u16(&vars, TSIG_FUDGE);
-    put_u16(&vars, 0);                       /* error */
-    put_u16(&vars, 0);                       /* other len */
+    put_u16(&vars, 0); /* error */
+    put_u16(&vars, 0); /* other len */
     if (vars.overflow || m->overflow) return false;
 
     /*
@@ -182,8 +183,8 @@ static bool tsig_sign(msg *m, const char *key_name,
     put_u16(m, mac_len);
     put_bytes(m, mac, mac_len);
     put_u16(m, original_id);
-    put_u16(m, 0);                           /* error */
-    put_u16(m, 0);                           /* other len */
+    put_u16(m, 0); /* error */
+    put_u16(m, 0); /* other len */
     if (m->overflow) return false;
     size_t rdlength = m->len - rdata_at;
     m->data[rdlength_at] = (unsigned char)(rdlength >> 8);
@@ -223,7 +224,7 @@ static bool exchange(const char *server, const char *port, const msg *request,
     for (struct addrinfo *a = addrs; a; a = a->ai_next) {
         fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
         if (fd < 0) continue;
-        struct timeval tv = { DNS_TIMEOUT_SECONDS, 0 };
+        struct timeval tv = {DNS_TIMEOUT_SECONDS, 0};
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
         if (connect(fd, a->ai_addr, a->ai_addrlen) == 0) break;
@@ -236,8 +237,8 @@ static bool exchange(const char *server, const char *port, const msg *request,
         return false;
     }
 
-    unsigned char prefix[2] = { (unsigned char)(request->len >> 8),
-                                (unsigned char)request->len };
+    unsigned char prefix[2] = {(unsigned char)(request->len >> 8),
+                               (unsigned char)request->len};
     bool ok = true;
     if (send(fd, prefix, 2, 0) != 2 ||
         send(fd, request->data, request->len, 0) != (ssize_t)request->len) {
@@ -286,21 +287,36 @@ static bool exchange(const char *server, const char *port, const msg *request,
  * allow that key to update that zone. */
 static const char *rcode_name(unsigned rcode) {
     switch (rcode) {
-    case 0: return "NOERROR";
-    case 1: return "FORMERR";
-    case 2: return "SERVFAIL";
-    case 3: return "NXDOMAIN";
-    case 4: return "NOTIMP";
-    case 5: return "REFUSED";
-    case 6: return "YXDOMAIN";
-    case 7: return "YXRRSET";
-    case 8: return "NXRRSET";
-    case 9: return "NOTAUTH";
-    case 10: return "NOTZONE";
-    case 16: return "BADSIG or BADVERS";
-    case 17: return "BADKEY";
-    case 18: return "BADTIME";
-    default: return "unknown";
+        case 0:
+            return "NOERROR";
+        case 1:
+            return "FORMERR";
+        case 2:
+            return "SERVFAIL";
+        case 3:
+            return "NXDOMAIN";
+        case 4:
+            return "NOTIMP";
+        case 5:
+            return "REFUSED";
+        case 6:
+            return "YXDOMAIN";
+        case 7:
+            return "YXRRSET";
+        case 8:
+            return "NXRRSET";
+        case 9:
+            return "NOTAUTH";
+        case 10:
+            return "NOTZONE";
+        case 16:
+            return "BADSIG or BADVERS";
+        case 17:
+            return "BADKEY";
+        case 18:
+            return "BADTIME";
+        default:
+            return "unknown";
     }
 }
 
@@ -329,13 +345,13 @@ wf_status metalbear_rfc2136_query_txt(const metalbear_rfc2136_config *config,
     msg m = {0};
     unsigned id = random_id();
     put_u16(&m, id);
-    put_u16(&m, 0x0100);              /* standard query, recursion desired off
-                                       * for an authoritative server; RD is
-                                       * harmless and widely expected */
-    put_u16(&m, 1);                   /* QDCOUNT */
+    put_u16(&m, 0x0100); /* standard query, recursion desired off
+                          * for an authoritative server; RD is
+                          * harmless and widely expected */
+    put_u16(&m, 1);      /* QDCOUNT */
     put_u16(&m, 0);
     put_u16(&m, 0);
-    put_u16(&m, 0);                   /* ARCOUNT, raised by tsig_sign */
+    put_u16(&m, 0); /* ARCOUNT, raised by tsig_sign */
     put_name(&m, name);
     put_u16(&m, DNS_TYPE_TXT);
     put_u16(&m, DNS_CLASS_IN);
@@ -375,21 +391,27 @@ wf_status metalbear_rfc2136_query_txt(const metalbear_rfc2136_config *config,
     unsigned qdcount = (unsigned)((reply[4] << 8) | reply[5]);
     for (unsigned i = 0; i < qdcount && at < reply_len; i++) {
         while (at < reply_len && reply[at] != 0) {
-            if ((reply[at] & 0xc0) == 0xc0) { at += 2; goto question_done; }
+            if ((reply[at] & 0xc0) == 0xc0) {
+                at += 2;
+                goto question_done;
+            }
             at += reply[at] + 1;
         }
         at++;
-question_done:
-        at += 4;                      /* QTYPE + QCLASS */
+    question_done:
+        at += 4; /* QTYPE + QCLASS */
     }
     for (unsigned i = 0; i < ancount && at + 10 <= reply_len; i++) {
         /* Owner name, which may be a compression pointer. */
         while (at < reply_len && reply[at] != 0) {
-            if ((reply[at] & 0xc0) == 0xc0) { at += 2; goto name_done; }
+            if ((reply[at] & 0xc0) == 0xc0) {
+                at += 2;
+                goto name_done;
+            }
             at += reply[at] + 1;
         }
         at++;
-name_done:
+    name_done:
         if (at + 10 > reply_len) break;
         unsigned type = (unsigned)((reply[at] << 8) | reply[at + 1]);
         unsigned rdlength = (unsigned)((reply[at + 8] << 8) | reply[at + 9]);
@@ -414,17 +436,16 @@ name_done:
 
 wf_status metalbear_rfc2136_update_txt(const metalbear_rfc2136_config *config,
                                        const char *name, const char *value,
-                                       int ttl, char *error,
-                                       size_t error_len) {
+                                       int ttl, char *error, size_t error_len) {
     msg m = {0};
     unsigned id = random_id();
     put_u16(&m, id);
     /* Opcode 5 (UPDATE) in bits 11-14 of the flags word. */
     put_u16(&m, DNS_OPCODE_UPDATE << 11);
-    put_u16(&m, 1);                   /* ZOCOUNT: the zone */
-    put_u16(&m, 0);                   /* PRCOUNT: no prerequisites */
-    put_u16(&m, value ? 2 : 1);       /* UPCOUNT */
-    put_u16(&m, 0);                   /* ADCOUNT, raised by tsig_sign */
+    put_u16(&m, 1);             /* ZOCOUNT: the zone */
+    put_u16(&m, 0);             /* PRCOUNT: no prerequisites */
+    put_u16(&m, value ? 2 : 1); /* UPCOUNT */
+    put_u16(&m, 0);             /* ADCOUNT, raised by tsig_sign */
 
     /* Zone section: the zone, as an SOA question. */
     put_name(&m, config->zone);
@@ -440,7 +461,7 @@ wf_status metalbear_rfc2136_update_txt(const metalbear_rfc2136_config *config,
     put_u16(&m, DNS_TYPE_TXT);
     put_u16(&m, DNS_CLASS_ANY);
     put_u32(&m, 0);
-    put_u16(&m, 0);                   /* RDLENGTH */
+    put_u16(&m, 0); /* RDLENGTH */
 
     if (value) {
         size_t value_len = strlen(value);

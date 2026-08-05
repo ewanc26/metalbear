@@ -43,9 +43,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static int rmtree_remove_cb(const char *path, const struct stat *sb,
-                            int type, struct FTW *ftwbuf) {
-    (void)sb; (void)type; (void)ftwbuf;
+static int rmtree_remove_cb(const char *path, const struct stat *sb, int type,
+                            struct FTW *ftwbuf) {
+    (void)sb;
+    (void)type;
+    (void)ftwbuf;
     return remove(path);
 }
 static void rmtree(const char *path) {
@@ -53,9 +55,13 @@ static void rmtree(const char *path) {
 }
 
 static int failures;
-#define CHECK(expr) do { if (!(expr)) { \
-    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-    failures++; } } while (0)
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        if (!(expr)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr);    \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
 
 static cJSON *json_response(wf_response *response) {
     return cJSON_ParseWithLength(response->body ? response->body : "",
@@ -80,7 +86,8 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
              handle, password, did, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
-                          &response) != WF_OK || response.status != 200) {
+                          &response) != WF_OK ||
+        response.status != 200) {
         wf_response_free(&response);
         return NULL;
     }
@@ -97,16 +104,15 @@ static char *create_app_password(wf_xrpc_client *client, const char *name) {
     char body[128];
     snprintf(body, sizeof(body), "{\"name\":\"%s\"}", name);
     wf_response response = {0};
-    if (wf_xrpc_procedure(client, "com.atproto.server.createAppPassword",
-                          body, &response) != WF_OK ||
+    if (wf_xrpc_procedure(client, "com.atproto.server.createAppPassword", body,
+                          &response) != WF_OK ||
         response.status != 200) {
         wf_response_free(&response);
         return NULL;
     }
     cJSON *json = json_response(&response);
     cJSON *password = cJSON_GetObjectItemCaseSensitive(json, "password");
-    char *out = cJSON_IsString(password) ? strdup(password->valuestring)
-                                         : NULL;
+    char *out = cJSON_IsString(password) ? strdup(password->valuestring) : NULL;
     cJSON_Delete(json);
     wf_response_free(&response);
     return out;
@@ -129,8 +135,8 @@ static wf_status oauth_form_post(wf_xrpc_client *client, const char *base,
                                  wf_response *out) {
     char url[256];
     snprintf(url, sizeof(url), "%s%s", base, path);
-    return wf_http_post(client, url, "application/x-www-form-urlencoded",
-                        body, NULL, 0, out);
+    return wf_http_post(client, url, "application/x-www-form-urlencoded", body,
+                        NULL, 0, out);
 }
 
 /*
@@ -164,7 +170,10 @@ int main(void) {
     };
     metalbear_server *server = metalbear_server_start(&config);
     CHECK(server != NULL);
-    if (!server) { rmtree(directory); return 1; }
+    if (!server) {
+        rmtree(directory);
+        return 1;
+    }
 
     char base[80];
     snprintf(base, sizeof(base), "http://127.0.0.1:%u",
@@ -176,8 +185,8 @@ int main(void) {
     const char *other_did = "did:plc:other";
     char *victim_token = create_account(client, "victim.example.com",
                                         victim_did, "victim-secret-pw");
-    char *other_token = create_account(client, "other.example.com",
-                                       other_did, "other-secret-pw");
+    char *other_token = create_account(client, "other.example.com", other_did,
+                                       "other-secret-pw");
     CHECK(victim_token != NULL);
     CHECK(other_token != NULL);
     if (!victim_token || !other_token) goto done;
@@ -198,42 +207,44 @@ int main(void) {
     char par_body[1024];
     snprintf(par_body, sizeof(par_body),
              "client_id=https%%3A%%2F%%2Fclient.example%%2Fmetadata.json&"
-             "redirect_uri=https%%3A%%2F%%2Fclient.example%%2Fcallback%%3Ffrom%%3Doauth&"
+             "redirect_uri=https%%3A%%2F%%2Fclient.example%%2Fcallback%%3Ffrom%"
+             "%3Doauth&"
              "scope=atproto+transition%%3Ageneric&state=state+%%26+value&"
              "code_challenge=%s&"
              "dpop_jkt=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
              pkce.challenge);
     wf_response response = {0};
-    CHECK(oauth_form_post(client, base, "/oauth/par", par_body,
-                          &response) == WF_OK);
+    CHECK(oauth_form_post(client, base, "/oauth/par", par_body, &response) ==
+          WF_OK);
     CHECK(response.status == 201);
     cJSON *par_json = json_response(&response);
-    cJSON *request_uri_j = par_json
-        ? cJSON_GetObjectItemCaseSensitive(par_json, "request_uri") : NULL;
+    cJSON *request_uri_j =
+        par_json ? cJSON_GetObjectItemCaseSensitive(par_json, "request_uri")
+                 : NULL;
     char request_uri[256] = "";
     if (cJSON_IsString(request_uri_j))
         snprintf(request_uri, sizeof(request_uri), "%s",
-                request_uri_j->valuestring);
+                 request_uri_j->valuestring);
     CHECK(request_uri[0] != '\0');
     cJSON_Delete(par_json);
     wf_response_free(&response);
 
     char authorize_url[512];
     snprintf(authorize_url, sizeof(authorize_url),
-            "%s/oauth/authorize?request_uri=%s&client_id=https%%3A%%2F%%2F"
-            "client.example%%2Fmetadata.json&login_hint=victim.example.com",
-            base, request_uri);
+             "%s/oauth/authorize?request_uri=%s&client_id=https%%3A%%2F%%2F"
+             "client.example%%2Fmetadata.json&login_hint=victim.example.com",
+             base, request_uri);
 
     /* ---- (a) unauthenticated: the vulnerability, now closed ------------ */
     {
-        wf_status s = wf_http_get_with_headers(client, authorize_url, NULL,
-                                               0, &response);
+        wf_status s =
+            wf_http_get_with_headers(client, authorize_url, NULL, 0, &response);
         CHECK(s == WF_ERR_HTTP);
         CHECK(response.status == 302);
         /* Sent to sign in, not handed a code. */
         CHECK(response.location != NULL);
-        CHECK(response.location &&
-              strncmp(response.location, "/oauth/consent?", strlen("/oauth/consent?")) == 0);
+        CHECK(response.location && strncmp(response.location, "/oauth/consent?",
+                                           strlen("/oauth/consent?")) == 0);
         CHECK(response.location && strstr(response.location, "login_hint="));
         /* The one thing that must never appear here: a live authorization
          * code for an account nobody has proven they control. */
@@ -256,10 +267,10 @@ int main(void) {
     if (victim_app_password) {
         char body[256];
         snprintf(body, sizeof(body),
-                "{\"identifier\":\"victim.example.com\",\"password\":\"%s\"}",
-                victim_app_password);
-        wf_status s = oauth_post(client, base, "/oauth/signin", body, NULL,
-                                 0, &response);
+                 "{\"identifier\":\"victim.example.com\",\"password\":\"%s\"}",
+                 victim_app_password);
+        wf_status s =
+            oauth_post(client, base, "/oauth/signin", body, NULL, 0, &response);
         CHECK(s == WF_ERR_HTTP);
         CHECK(response.status == 401);
         CHECK(response.set_cookie == NULL);
@@ -286,20 +297,22 @@ int main(void) {
     /* ---- (e) authorize now succeeds, cookie now set ---------------------*/
     if (device_cookie) {
         wf_http_header hdr = {"Cookie", device_cookie};
-        wf_status s = wf_http_get_with_headers(client, authorize_url, &hdr, 1,
-                                               &response);
+        wf_status s =
+            wf_http_get_with_headers(client, authorize_url, &hdr, 1, &response);
         CHECK(s == WF_ERR_HTTP);
         CHECK(response.status == 302);
         CHECK(response.location != NULL);
         CHECK(response.location &&
-              strncmp(response.location,
-                      "https://client.example/callback?from=oauth&code=",
-                      strlen("https://client.example/callback?from=oauth&code=")) == 0);
+              strncmp(
+                  response.location,
+                  "https://client.example/callback?from=oauth&code=",
+                  strlen("https://client.example/callback?from=oauth&code=")) ==
+                  0);
         CHECK(response.location && strstr(response.location, "code="));
-        CHECK(response.location && strstr(response.location,
-                                          "state=state%20%26%20value"));
-        CHECK(response.location && strstr(response.location,
-                                          "iss=https%3A%2F%2Fpds.example.com"));
+        CHECK(response.location &&
+              strstr(response.location, "state=state%20%26%20value"));
+        CHECK(response.location &&
+              strstr(response.location, "iss=https%3A%2F%2Fpds.example.com"));
         wf_response_free(&response);
     }
 
@@ -307,17 +320,17 @@ int main(void) {
     if (device_cookie) {
         char other_url[512];
         snprintf(other_url, sizeof(other_url),
-                "%s/oauth/authorize?request_uri=%s&client_id=https%%3A%%2F%%2F"
-                "client.example%%2Fmetadata.json&login_hint=other.example.com",
-                base, request_uri);
+                 "%s/oauth/authorize?request_uri=%s&client_id=https%%3A%%2F%%2F"
+                 "client.example%%2Fmetadata.json&login_hint=other.example.com",
+                 base, request_uri);
         wf_http_header hdr = {"Cookie", device_cookie};
-        wf_status s = wf_http_get_with_headers(client, other_url, &hdr, 1,
-                                               &response);
+        wf_status s =
+            wf_http_get_with_headers(client, other_url, &hdr, 1, &response);
         CHECK(s == WF_ERR_HTTP);
         CHECK(response.status == 302);
         CHECK(response.location != NULL);
-        CHECK(response.location &&
-              strncmp(response.location, "/oauth/consent?", strlen("/oauth/consent?")) == 0);
+        CHECK(response.location && strncmp(response.location, "/oauth/consent?",
+                                           strlen("/oauth/consent?")) == 0);
         CHECK(!(response.location && strstr(response.location, "code=")));
         wf_response_free(&response);
     }
@@ -335,13 +348,13 @@ int main(void) {
         /* The old cookie value, now revoked, must be refused just like no
          * cookie at all — not merely rejected by Max-Age on a browser that
          * has already stopped sending it. */
-        wf_status s = wf_http_get_with_headers(client, authorize_url, &hdr, 1,
-                                               &response);
+        wf_status s =
+            wf_http_get_with_headers(client, authorize_url, &hdr, 1, &response);
         CHECK(s == WF_ERR_HTTP);
         CHECK(response.status == 302);
         CHECK(response.location != NULL);
-        CHECK(response.location &&
-              strncmp(response.location, "/oauth/consent?", strlen("/oauth/consent?")) == 0);
+        CHECK(response.location && strncmp(response.location, "/oauth/consent?",
+                                           strlen("/oauth/consent?")) == 0);
         wf_response_free(&response);
     }
 

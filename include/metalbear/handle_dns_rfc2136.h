@@ -25,12 +25,12 @@ extern "C" {
 #endif
 
 typedef struct metalbear_rfc2136_config {
-    const char *server;     /* address of the authoritative server */
-    const char *port;       /* "53" unless the operator says otherwise */
-    const char *zone;       /* the zone being updated */
-    const char *key_name;   /* TSIG key name, as the server knows it */
+    const char *server;   /* address of the authoritative server */
+    const char *port;     /* "53" unless the operator says otherwise */
+    const char *zone;     /* the zone being updated */
+    const char *key_name; /* TSIG key name, as the server knows it */
     const unsigned char *secret;
-    size_t secret_len;      /* the decoded key, not its base64 */
+    size_t secret_len; /* the decoded key, not its base64 */
 } metalbear_rfc2136_config;
 
 /*
@@ -54,8 +54,7 @@ wf_status metalbear_rfc2136_query_txt(const metalbear_rfc2136_config *config,
  */
 wf_status metalbear_rfc2136_update_txt(const metalbear_rfc2136_config *config,
                                        const char *name, const char *value,
-                                       int ttl, char *error,
-                                       size_t error_len);
+                                       int ttl, char *error, size_t error_len);
 
 #ifdef __cplusplus
 }

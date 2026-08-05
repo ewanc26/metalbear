@@ -59,9 +59,8 @@ wf_status metalbear_handle_dns_open(const char *provider, const char *api_token,
  */
 wf_status metalbear_handle_dns_open_ex(const char *provider,
                                        const char *api_token,
-                                       const char *zone_id,
-                                       const char *server, int ttl,
-                                       metalbear_handle_dns **out);
+                                       const char *zone_id, const char *server,
+                                       int ttl, metalbear_handle_dns **out);
 
 void metalbear_handle_dns_free(metalbear_handle_dns *dns);
 

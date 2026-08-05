@@ -10,9 +10,14 @@
 #include <unistd.h>
 
 static int failures;
-#define CHECK(expression) do { if (!(expression)) { \
-    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expression); \
-    failures++; } } while (0)
+#define CHECK(expression)                                                      \
+    do {                                                                       \
+        if (!(expression)) {                                                   \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__,            \
+                    #expression);                                              \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
 
 int main(void) {
     char path[] = "/tmp/metalbear-auth-XXXXXX";
@@ -36,11 +41,11 @@ int main(void) {
 
     metalbear_session_tokens app_session = {0};
     CHECK(metalbear_auth_create_scoped_session(
-              store, METALBEAR_ACCESS_APP_PASSWORD, "desktop",
-              &app_session) == WF_OK);
+              store, METALBEAR_ACCESS_APP_PASSWORD, "desktop", &app_session) ==
+          WF_OK);
     metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
     CHECK(metalbear_auth_verify_access_scope(store, app_session.access_jwt,
-                                              &scope) == WF_OK);
+                                             &scope) == WF_OK);
     CHECK(scope == METALBEAR_ACCESS_APP_PASSWORD);
     metalbear_session_tokens app_rotated = {0};
     metalbear_session_tokens rejected = {0};
@@ -48,7 +53,7 @@ int main(void) {
                                         &app_rotated) == WF_OK);
     scope = METALBEAR_ACCESS_FULL;
     CHECK(metalbear_auth_verify_access_scope(store, app_rotated.access_jwt,
-                                              &scope) == WF_OK);
+                                             &scope) == WF_OK);
     CHECK(scope == METALBEAR_ACCESS_APP_PASSWORD);
     CHECK(metalbear_auth_revoke_app_password_sessions(store, "desktop") ==
           WF_OK);
@@ -89,8 +94,8 @@ int main(void) {
           strcmp(reused.refresh_jwt, first.refresh_jwt) != 0);
 
     CHECK(metalbear_auth_revoke_refresh(store, rotated.refresh_jwt) == WF_OK);
-    CHECK(metalbear_auth_rotate_refresh(store, rotated.refresh_jwt, &rejected) ==
-          WF_ERR_PERMISSION);
+    CHECK(metalbear_auth_rotate_refresh(store, rotated.refresh_jwt,
+                                        &rejected) == WF_ERR_PERMISSION);
     CHECK(metalbear_auth_rotate_refresh(store, reused.refresh_jwt, &rejected) ==
           WF_ERR_PERMISSION);
     CHECK(metalbear_auth_rotate_refresh(store, first.refresh_jwt, &rejected) ==

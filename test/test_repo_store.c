@@ -62,8 +62,8 @@ static int run_adopted_key(void) {
         unlink(path);
         return failures + 1;
     }
-    WF_CHECK(want_didkey &&
-             strcmp(metalbear_repo_store_signing_key_did(store), want_didkey) == 0);
+    WF_CHECK(want_didkey && strcmp(metalbear_repo_store_signing_key_did(store),
+                                   want_didkey) == 0);
 
     /* A commit signed by the adopted key must verify against it. */
     char *uri = NULL, *cid = NULL;
@@ -72,7 +72,8 @@ static int run_adopted_key(void) {
                  "{\"$type\":\"com.example.adopt\",\"n\":1}", NULL, &uri,
                  &cid) == WF_OK);
     int verified = 0;
-    WF_CHECK(metalbear_repo_store_verify_head(store, &verified, NULL) == WF_OK &&
+    WF_CHECK(metalbear_repo_store_verify_head(store, &verified, NULL) ==
+                 WF_OK &&
              verified == 1);
     free(uri);
     free(cid);
@@ -107,7 +108,8 @@ static int run_record_validation(void) {
     wf_lexicon_registry *lex = wf_lexicon_registry_new();
     WF_CHECK(lex != NULL);
     if (!lex) return failures + 1;
-    if (wf_lexicon_registry_load_dir(lex, METALBEAR_TEST_LEXICON_DIR) != WF_OK) {
+    if (wf_lexicon_registry_load_dir(lex, METALBEAR_TEST_LEXICON_DIR) !=
+        WF_OK) {
         fprintf(stderr, "SKIP: no lexicon corpus at %s\n",
                 METALBEAR_TEST_LEXICON_DIR);
         wf_lexicon_registry_free(lex);
@@ -130,8 +132,8 @@ static int run_record_validation(void) {
                           "\"createdAt\":\"2026-07-25T00:00:00Z\"}";
     status = METALBEAR_VALIDATION_VALID;
     WF_CHECK(metalbear_validate_record(lex, "app.bsky.feed.post", missing,
-                                       false, &status, &message) ==
-             WF_ERR_VALIDATION);
+                                       false, &status,
+                                       &message) == WF_ERR_VALIDATION);
     WF_CHECK(message != NULL);
     free(message);
     message = NULL;
@@ -176,16 +178,18 @@ static int run_record_validation(void) {
  * blob store itself imposes none. That enforcement is this same lexicon
  * record-validation path: app.bsky.embed.images#image declares an "image"
  * mimetype-glob accept list and maxSize:2000000, so a post embedding a blob
- * outside either bound must fail validation exactly like a missing required field
- * does, proving check_record's call into metalbear_validate_record actually
- * covers blob constraints and not just plain object/string/array schemas.
+ * outside either bound must fail validation exactly like a missing required
+ * field does, proving check_record's call into metalbear_validate_record
+ * actually covers blob constraints and not just plain object/string/array
+ * schemas.
  */
 static int run_blob_constraint_validation(void) {
     int failures = 0;
     wf_lexicon_registry *lex = wf_lexicon_registry_new();
     WF_CHECK(lex != NULL);
     if (!lex) return failures + 1;
-    if (wf_lexicon_registry_load_dir(lex, METALBEAR_TEST_LEXICON_DIR) != WF_OK) {
+    if (wf_lexicon_registry_load_dir(lex, METALBEAR_TEST_LEXICON_DIR) !=
+        WF_OK) {
         fprintf(stderr, "SKIP: no lexicon corpus at %s\n",
                 METALBEAR_TEST_LEXICON_DIR);
         wf_lexicon_registry_free(lex);
@@ -200,7 +204,9 @@ static int run_blob_constraint_validation(void) {
         "{\"$type\":\"app.bsky.feed.post\",\"text\":\"pic\","
         "\"embed\":{\"$type\":\"app.bsky.embed.images\",\"images\":["
         "{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
-        "\"ref\":{\"$link\":\"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku\"},\"mimeType\":\"image/png\","
+        "\"ref\":{\"$link\":"
+        "\"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku\"},"
+        "\"mimeType\":\"image/png\","
         "\"size\":2000000}}]},"
         "\"createdAt\":\"2026-07-25T00:00:00Z\"}";
     WF_CHECK(metalbear_validate_record(lex, "app.bsky.feed.post", good, false,
@@ -213,29 +219,34 @@ static int run_blob_constraint_validation(void) {
         "{\"$type\":\"app.bsky.feed.post\",\"text\":\"pic\","
         "\"embed\":{\"$type\":\"app.bsky.embed.images\",\"images\":["
         "{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
-        "\"ref\":{\"$link\":\"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku\"},\"mimeType\":\"image/png\","
+        "\"ref\":{\"$link\":"
+        "\"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku\"},"
+        "\"mimeType\":\"image/png\","
         "\"size\":2000001}}]},"
         "\"createdAt\":\"2026-07-25T00:00:00Z\"}";
     status = METALBEAR_VALIDATION_VALID;
     WF_CHECK(metalbear_validate_record(lex, "app.bsky.feed.post", too_big,
-                                       false, &status, &message) ==
-             WF_ERR_VALIDATION);
+                                       false, &status,
+                                       &message) == WF_ERR_VALIDATION);
     WF_CHECK(message != NULL);
     free(message);
     message = NULL;
 
-    /* A mimetype outside the "image" accept glob is rejected regardless of size. */
+    /* A mimetype outside the "image" accept glob is rejected regardless of
+     * size. */
     const char *wrong_mime =
         "{\"$type\":\"app.bsky.feed.post\",\"text\":\"pic\","
         "\"embed\":{\"$type\":\"app.bsky.embed.images\",\"images\":["
         "{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
-        "\"ref\":{\"$link\":\"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku\"},\"mimeType\":\"application/pdf\","
+        "\"ref\":{\"$link\":"
+        "\"bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku\"},"
+        "\"mimeType\":\"application/pdf\","
         "\"size\":100}}]},"
         "\"createdAt\":\"2026-07-25T00:00:00Z\"}";
     status = METALBEAR_VALIDATION_VALID;
     WF_CHECK(metalbear_validate_record(lex, "app.bsky.feed.post", wrong_mime,
-                                       false, &status, &message) ==
-             WF_ERR_VALIDATION);
+                                       false, &status,
+                                       &message) == WF_ERR_VALIDATION);
     WF_CHECK(message != NULL);
     free(message);
     message = NULL;
@@ -256,7 +267,8 @@ static int run_records_since_rev(void) {
 
     metalbear_repo_store *store = NULL;
     if (metalbear_repo_store_open(path, "did:plc:sincerev", "s.example.com",
-                                  &store) != WF_OK || !store) {
+                                  &store) != WF_OK ||
+        !store) {
         WF_CHECK(0);
         unlink(path);
         return failures + 1;
@@ -267,24 +279,30 @@ static int run_records_since_rev(void) {
                  store, "app.bsky.feed.post", "postone",
                  "{\"$type\":\"app.bsky.feed.post\",\"text\":\"one\"}", NULL,
                  &u, &c) == WF_OK);
-    free(u); free(c); u = c = NULL;
+    free(u);
+    free(c);
+    u = c = NULL;
 
-    /* The rev after the first write is the watermark an AppView would report. */
+    /* The rev after the first write is the watermark an AppView would report.
+     */
     char *rev_after_first = NULL, *cid_tmp = NULL;
-    WF_CHECK(metalbear_repo_store_get_head(store, &rev_after_first,
-                                           &cid_tmp) == WF_OK);
+    WF_CHECK(metalbear_repo_store_get_head(store, &rev_after_first, &cid_tmp) ==
+             WF_OK);
     free(cid_tmp);
 
     WF_CHECK(metalbear_repo_store_create_record(
                  store, "app.bsky.feed.post", "posttwo",
                  "{\"$type\":\"app.bsky.feed.post\",\"text\":\"two\"}", NULL,
                  &u, &c) == WF_OK);
-    free(u); free(c); u = c = NULL;
+    free(u);
+    free(c);
+    u = c = NULL;
 
     /* Only the second post is newer than that watermark. */
     char *js = NULL;
     WF_CHECK(metalbear_repo_store_records_since_rev(store, rev_after_first, 10,
-                                                    &js) == WF_OK && js);
+                                                    &js) == WF_OK &&
+             js);
     cJSON *d = js ? cJSON_Parse(js) : NULL;
     cJSON *recs = d ? cJSON_GetObjectItemCaseSensitive(d, "records") : NULL;
     WF_CHECK(recs && cJSON_IsArray(recs) && cJSON_GetArraySize(recs) == 1);
@@ -308,10 +326,12 @@ static int run_records_since_rev(void) {
     /* A rev at or past the head means the AppView is caught up: nothing to
      * splice, so callers send the upstream response through untouched. */
     char *head_rev = NULL;
-    WF_CHECK(metalbear_repo_store_get_head(store, &head_rev, &cid_tmp) == WF_OK);
+    WF_CHECK(metalbear_repo_store_get_head(store, &head_rev, &cid_tmp) ==
+             WF_OK);
     free(cid_tmp);
-    WF_CHECK(metalbear_repo_store_records_since_rev(store, head_rev, 10,
-                                                    &js) == WF_OK && js);
+    WF_CHECK(metalbear_repo_store_records_since_rev(store, head_rev, 10, &js) ==
+                 WF_OK &&
+             js);
     d = js ? cJSON_Parse(js) : NULL;
     recs = d ? cJSON_GetObjectItemCaseSensitive(d, "records") : NULL;
     WF_CHECK(recs && cJSON_IsArray(recs) && cJSON_GetArraySize(recs) == 0);
@@ -324,7 +344,8 @@ static int run_records_since_rev(void) {
      * from someone else's history would be worse than showing a stale one, so
      * the sanity check returns nothing. */
     WF_CHECK(metalbear_repo_store_records_since_rev(store, "2222222222222", 10,
-                                                    &js) == WF_OK && js);
+                                                    &js) == WF_OK &&
+             js);
     d = js ? cJSON_Parse(js) : NULL;
     recs = d ? cJSON_GetObjectItemCaseSensitive(d, "records") : NULL;
     WF_CHECK(recs && cJSON_IsArray(recs) && cJSON_GetArraySize(recs) == 0);
@@ -347,14 +368,15 @@ static int run_unit(void) {
 
     metalbear_repo_store *store = NULL;
     wf_status s = metalbear_repo_store_open(path, "did:plc:testpds",
-                                     "test.example.com", &store);
+                                            "test.example.com", &store);
     WF_CHECK(s == WF_OK && store != NULL);
     if (s != WF_OK) {
         unlink(path);
         return failures + 1;
     }
     metalbear_repo_store_stats empty_stats = {1, 1};
-    WF_CHECK(metalbear_repo_store_get_stats(NULL, &empty_stats) == WF_ERR_INVALID_ARG);
+    WF_CHECK(metalbear_repo_store_get_stats(NULL, &empty_stats) ==
+             WF_ERR_INVALID_ARG);
     WF_CHECK(empty_stats.repo_blocks == 0 && empty_stats.indexed_records == 0);
     WF_CHECK(metalbear_repo_store_get_stats(store, NULL) == WF_ERR_INVALID_ARG);
     WF_CHECK(metalbear_repo_store_get_stats(store, &empty_stats) == WF_OK);
@@ -364,8 +386,8 @@ static int run_unit(void) {
     char *uri1 = NULL, *cid1 = NULL;
     s = metalbear_repo_store_create_record(
         store, "com.example.posts", NULL,
-        "{\"$type\":\"com.example.posts\",\"text\":\"hello\"}",
-        NULL, &uri1, &cid1);
+        "{\"$type\":\"com.example.posts\",\"text\":\"hello\"}", NULL, &uri1,
+        &cid1);
     WF_CHECK(s == WF_OK && uri1 && cid1);
     const char *rkey1 = strrchr(uri1, '/') + 1;
     WF_CHECK(strcmp(uri1, "at://did:plc:testpds/com.example.posts/") != 0);
@@ -374,7 +396,7 @@ static int run_unit(void) {
     /* getRecord returns the same data + stable CID. */
     char *recj = NULL, *reccid = NULL;
     s = metalbear_repo_store_get_record(store, "com.example.posts", rkey1,
-                                 &recj, &reccid);
+                                        &recj, &reccid);
     WF_CHECK(s == WF_OK && recj && reccid);
     WF_CHECK(strstr(recj, "\"text\"") != NULL && strstr(recj, "hello") != NULL);
     WF_CHECK(strcmp(reccid, cid1) == 0);
@@ -385,8 +407,8 @@ static int run_unit(void) {
     char *uri2 = NULL, *cid2 = NULL;
     s = metalbear_repo_store_create_record(
         store, "com.example.likes", NULL,
-        "{\"$type\":\"com.example.likes\",\"subject\":\"at://x\"}",
-        NULL, &uri2, &cid2);
+        "{\"$type\":\"com.example.likes\",\"subject\":\"at://x\"}", NULL, &uri2,
+        &cid2);
     WF_CHECK(s == WF_OK && uri2 && cid2);
     const char *rkey2 = strrchr(uri2, '/') + 1;
 
@@ -401,27 +423,29 @@ static int run_unit(void) {
     WF_CHECK(strcmp(strrchr(uri3, '/') + 1, rkey2) == 0);
     char *recj2 = NULL, *reccid2 = NULL;
     s = metalbear_repo_store_get_record(store, "com.example.likes", rkey2,
-                                 &recj2, &reccid2);
+                                        &recj2, &reccid2);
     WF_CHECK(s == WF_OK && recj2 && strstr(recj2, "at://y") != NULL &&
-            strstr(recj2, "\"extra\":5") != NULL);
+             strstr(recj2, "\"extra\":5") != NULL);
     free(recj2);
     free(reccid2);
 
     /* listRecords enumerates a collection via the records index. */
     char *list_json = NULL;
-    s = metalbear_repo_store_list_records(store, "com.example.posts", NULL, false,
-                                    50, &list_json);
+    s = metalbear_repo_store_list_records(store, "com.example.posts", NULL,
+                                          false, 50, &list_json);
     WF_CHECK(s == WF_OK && list_json);
     if (list_json) {
         cJSON *lj = cJSON_Parse(list_json);
         WF_CHECK(lj && cJSON_IsObject(lj));
-        cJSON *recs = lj ? cJSON_GetObjectItemCaseSensitive(lj, "records") : NULL;
+        cJSON *recs =
+            lj ? cJSON_GetObjectItemCaseSensitive(lj, "records") : NULL;
         WF_CHECK(recs && cJSON_IsArray(recs) && cJSON_GetArraySize(recs) == 1);
         cJSON *first = recs ? cJSON_GetArrayItem(recs, 0) : NULL;
         WF_CHECK(first && cJSON_IsObject(first));
-        WF_CHECK(first && cJSON_GetObjectItemCaseSensitive(first, "uri") &&
-                 strcmp(cJSON_GetObjectItemCaseSensitive(first, "uri")->valuestring,
-                        uri1) == 0);
+        WF_CHECK(
+            first && cJSON_GetObjectItemCaseSensitive(first, "uri") &&
+            strcmp(cJSON_GetObjectItemCaseSensitive(first, "uri")->valuestring,
+                   uri1) == 0);
         WF_CHECK(first && cJSON_GetObjectItemCaseSensitive(first, "value") &&
                  strstr(cJSON_PrintUnformatted(
                             cJSON_GetObjectItemCaseSensitive(first, "value")),
@@ -440,13 +464,13 @@ static int run_unit(void) {
 
     /* deleteRecord removes the record (not found afterwards). */
     s = metalbear_repo_store_delete_record(store, "com.example.likes", rkey2,
-                                  NULL, NULL);
+                                           NULL, NULL);
     WF_CHECK(s == WF_OK);
     s = metalbear_repo_store_get_record(store, "com.example.likes", rkey2,
-                                 &recj, &reccid);
+                                        &recj, &reccid);
     WF_CHECK(s == WF_ERR_NOT_FOUND);
     s = metalbear_repo_store_delete_record(store, "com.example.likes", "nope",
-                                  NULL, NULL);
+                                           NULL, NULL);
     WF_CHECK(s == WF_ERR_NOT_FOUND);
 
     /* A failed compare-and-swap must be distinguishable from a malformed
@@ -484,9 +508,11 @@ static int run_unit(void) {
              "\"value\":{\"$type\":\"com.example.posts\",\"text\":\"bb\"}},"
              "{\"$type\":\"com.atproto.repo.applyWrites#delete\","
              "\"collection\":\"com.example.posts\",\"rkey\":\"%s\"}"
-             "]", rkey1, rkey1);
+             "]",
+             rkey1, rkey1);
     char *ccid = NULL, *crev = NULL, *cres = NULL;
-    s = metalbear_repo_store_apply_writes(store, writes, NULL, &ccid, &crev, &cres);
+    s = metalbear_repo_store_apply_writes(store, writes, NULL, &ccid, &crev,
+                                          &cres);
     if (s != WF_OK)
         fprintf(stderr, "DEBUG applyWrites: status=%d rkey1=%s writes=%s\n",
                 (int)s, rkey1, writes);
@@ -498,7 +524,8 @@ static int run_unit(void) {
     if (crev && cres) {
         WF_CHECK(strlen(crev) > 0);
         cJSON *resarr = cJSON_Parse(cres);
-        WF_CHECK(resarr && cJSON_IsArray(resarr) && cJSON_GetArraySize(resarr) == 3);
+        WF_CHECK(resarr && cJSON_IsArray(resarr) &&
+                 cJSON_GetArraySize(resarr) == 3);
         /* `results` is a closed union: every entry must carry the $type that
          * discriminates it, in write order create/update/delete. */
         static const char *const want_types[] = {
@@ -506,7 +533,8 @@ static int run_unit(void) {
             "com.atproto.repo.applyWrites#updateResult",
             "com.atproto.repo.applyWrites#deleteResult",
         };
-        for (int i = 0; resarr && i < cJSON_GetArraySize(resarr) && i < 3; i++) {
+        for (int i = 0; resarr && i < cJSON_GetArraySize(resarr) && i < 3;
+             i++) {
             cJSON *e = cJSON_GetArrayItem(resarr, i);
             cJSON *ty = e ? cJSON_GetObjectItemCaseSensitive(e, "$type") : NULL;
             WF_CHECK(ty && cJSON_IsString(ty) &&
@@ -516,7 +544,7 @@ static int run_unit(void) {
     }
     /* rkey1 must now be gone; a fresh post was created in com.example.posts. */
     s = metalbear_repo_store_get_record(store, "com.example.posts", rkey1,
-                                 &recj, &reccid);
+                                        &recj, &reccid);
     WF_CHECK(s == WF_ERR_NOT_FOUND);
 
     /* Full and revision-filtered CAR exports are rooted at the current head. */
@@ -533,7 +561,8 @@ static int run_unit(void) {
 
     export_bytes = NULL;
     export_len = 0;
-    s = metalbear_repo_store_export(store, since_rev, &export_bytes, &export_len);
+    s = metalbear_repo_store_export(store, since_rev, &export_bytes,
+                                    &export_len);
     WF_CHECK(s == WF_OK && export_bytes && export_len > 0);
     memset(&exported, 0, sizeof(exported));
     s = wf_car_parse(export_bytes, export_len, &exported);
@@ -546,8 +575,8 @@ static int run_unit(void) {
     const char *selected_cids[] = {ccid ? ccid : "", ccid ? ccid : ""};
     export_bytes = NULL;
     export_len = 0;
-    s = metalbear_repo_store_get_blocks(store, selected_cids, 2,
-                                 &export_bytes, &export_len);
+    s = metalbear_repo_store_get_blocks(store, selected_cids, 2, &export_bytes,
+                                        &export_len);
     WF_CHECK(s == WF_OK && export_bytes && export_len > 0);
     memset(&exported, 0, sizeof(exported));
     s = wf_car_parse(export_bytes, export_len, &exported);
@@ -556,18 +585,20 @@ static int run_unit(void) {
     wf_car_free(&exported);
     free(export_bytes);
     const char *missing_cids[] = {
-        "bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    };
-    s = metalbear_repo_store_get_blocks(store, missing_cids, 1,
-                                 &export_bytes, &export_len);
+        "bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"};
+    s = metalbear_repo_store_get_blocks(store, missing_cids, 1, &export_bytes,
+                                        &export_len);
     WF_CHECK(s == WF_ERR_NOT_FOUND || s == WF_ERR_INVALID_ARG);
     free(since_rev);
 
     WF_CHECK(metalbear_repo_store_set_handle(store, "not a handle") ==
              WF_ERR_INVALID_ARG);
-    WF_CHECK(strcmp(metalbear_repo_store_handle(store), "test.example.com") == 0);
-    WF_CHECK(metalbear_repo_store_set_handle(store, "renamed.example.com") == WF_OK);
-    WF_CHECK(strcmp(metalbear_repo_store_handle(store), "renamed.example.com") == 0);
+    WF_CHECK(strcmp(metalbear_repo_store_handle(store), "test.example.com") ==
+             0);
+    WF_CHECK(metalbear_repo_store_set_handle(store, "renamed.example.com") ==
+             WF_OK);
+    WF_CHECK(
+        strcmp(metalbear_repo_store_handle(store), "renamed.example.com") == 0);
 
     /* describeRepo: did + handle + collections + rev. */
     char *desc = NULL;
@@ -606,14 +637,17 @@ static int run_unit(void) {
         "did:plc:testpds", "renamed.example.com",
         metalbear_repo_store_signing_key_did(store), "https://pds.example.com");
     WF_CHECK(doc != NULL);
-    WF_CHECK(cJSON_GetObjectItemCaseSensitive(doc, "verificationMethods") == NULL);
+    WF_CHECK(cJSON_GetObjectItemCaseSensitive(doc, "verificationMethods") ==
+             NULL);
     cJSON *vms = cJSON_GetObjectItemCaseSensitive(doc, "verificationMethod");
     WF_CHECK(vms && cJSON_IsArray(vms) && cJSON_GetArraySize(vms) == 1);
     cJSON *vm = vms ? cJSON_GetArrayItem(vms, 0) : NULL;
     cJSON *vm_id = vm ? cJSON_GetObjectItemCaseSensitive(vm, "id") : NULL;
     cJSON *vm_type = vm ? cJSON_GetObjectItemCaseSensitive(vm, "type") : NULL;
-    cJSON *vm_ctrl = vm ? cJSON_GetObjectItemCaseSensitive(vm, "controller") : NULL;
-    cJSON *vm_key = vm ? cJSON_GetObjectItemCaseSensitive(vm, "publicKeyMultibase") : NULL;
+    cJSON *vm_ctrl =
+        vm ? cJSON_GetObjectItemCaseSensitive(vm, "controller") : NULL;
+    cJSON *vm_key =
+        vm ? cJSON_GetObjectItemCaseSensitive(vm, "publicKeyMultibase") : NULL;
     WF_CHECK(vm_id && cJSON_IsString(vm_id) &&
              strcmp(vm_id->valuestring, "did:plc:testpds#atproto") == 0);
     WF_CHECK(vm_type && cJSON_IsString(vm_type) &&
@@ -627,7 +661,8 @@ static int run_unit(void) {
     cJSON *svc = cJSON_GetObjectItemCaseSensitive(doc, "service");
     WF_CHECK(svc && cJSON_IsArray(svc) && cJSON_GetArraySize(svc) == 1);
     cJSON *svc0 = svc ? cJSON_GetArrayItem(svc, 0) : NULL;
-    WF_CHECK(svc0 && cJSON_IsString(cJSON_GetObjectItemCaseSensitive(svc0, "type")) &&
+    WF_CHECK(svc0 &&
+             cJSON_IsString(cJSON_GetObjectItemCaseSensitive(svc0, "type")) &&
              strcmp(cJSON_GetObjectItemCaseSensitive(svc0, "type")->valuestring,
                     "AtprotoPersonalDataServer") == 0);
     /* alsoKnownAs round-trips through the handle accessor. */
@@ -640,7 +675,8 @@ static int run_unit(void) {
     wf_commit cm;
     s = metalbear_repo_store_verify_head(store, &verified, &cm);
     if (s != WF_OK || !verified)
-        fprintf(stderr, "DEBUG verify: status=%d verified=%d\n", (int)s, verified);
+        fprintf(stderr, "DEBUG verify: status=%d verified=%d\n", (int)s,
+                verified);
     WF_CHECK(s == WF_OK && verified == 1);
     WF_CHECK(strcmp(cm.did, "did:plc:testpds") == 0);
     WF_CHECK(cm.sig_len == 64);
@@ -652,10 +688,12 @@ static int run_unit(void) {
     /* Persistence: reopen and the head still verifies, DID preserved. */
     metalbear_repo_store_free(store);
     store = NULL;
-    s = metalbear_repo_store_open(path, "did:plc:testpds", "test.example.com", &store);
+    s = metalbear_repo_store_open(path, "did:plc:testpds", "test.example.com",
+                                  &store);
     WF_CHECK(s == WF_OK && store != NULL);
     WF_CHECK(strcmp(metalbear_repo_store_did(store), "did:plc:testpds") == 0);
-    WF_CHECK(strcmp(metalbear_repo_store_handle(store), "renamed.example.com") == 0);
+    WF_CHECK(
+        strcmp(metalbear_repo_store_handle(store), "renamed.example.com") == 0);
     metalbear_repo_store_stats reopened_stats = {0};
     WF_CHECK(metalbear_repo_store_get_stats(store, &reopened_stats) == WF_OK);
     WF_CHECK(reopened_stats.repo_blocks == populated_stats.repo_blocks);
@@ -669,8 +707,9 @@ static int run_unit(void) {
      * would point at an intermediate commit rather than the head we saw. */
     int pre_verified = 0;
     wf_commit pre_commit;
-    WF_CHECK(metalbear_repo_store_verify_head(store, &pre_verified, &pre_commit) ==
-             WF_OK && pre_verified == 1);
+    WF_CHECK(metalbear_repo_store_verify_head(store, &pre_verified,
+                                              &pre_commit) == WF_OK &&
+             pre_verified == 1);
     wf_cid head_before = pre_commit.cid;
 
     const char *batch_writes =
@@ -686,8 +725,8 @@ static int run_unit(void) {
         "\"value\":{\"$type\":\"com.example.batch\",\"n\":3}}"
         "]";
     char *bcid = NULL, *brev = NULL, *bres = NULL;
-    s = metalbear_repo_store_apply_writes(store, batch_writes, NULL, &bcid, &brev,
-                                          &bres);
+    s = metalbear_repo_store_apply_writes(store, batch_writes, NULL, &bcid,
+                                          &brev, &bres);
     WF_CHECK(s == WF_OK && bcid && brev && bres);
     int post_verified = 0;
     wf_commit post_commit;
@@ -714,14 +753,17 @@ static int run_unit(void) {
         free(br);
         free(brc);
     }
-    free(bcid); free(brev); free(bres);
+    free(bcid);
+    free(brev);
+    free(bres);
 
     /* A batch that fails part-way must leave the repo untouched: the valid
      * first write must not survive, and the head must not move. */
     int mid_verified = 0;
     wf_commit mid_commit;
-    WF_CHECK(metalbear_repo_store_verify_head(store, &mid_verified, &mid_commit) ==
-             WF_OK && mid_verified == 1);
+    WF_CHECK(metalbear_repo_store_verify_head(store, &mid_verified,
+                                              &mid_commit) == WF_OK &&
+             mid_verified == 1);
     const char *bad_writes =
         "["
         "{\"$type\":\"com.atproto.repo.applyWrites#create\","
@@ -734,12 +776,15 @@ static int run_unit(void) {
     s = metalbear_repo_store_apply_writes(store, bad_writes, NULL, &xcid, &xrev,
                                           &xres);
     WF_CHECK(s != WF_OK);
-    free(xcid); free(xrev); free(xres);
+    free(xcid);
+    free(xrev);
+    free(xres);
     char *rolled = NULL, *rolledc = NULL;
     WF_CHECK(metalbear_repo_store_get_record(store, "com.example.batch",
                                              "batchddd", &rolled,
                                              &rolledc) == WF_ERR_NOT_FOUND);
-    free(rolled); free(rolledc);
+    free(rolled);
+    free(rolledc);
     int after_verified = 0;
     wf_commit after_commit;
     WF_CHECK(metalbear_repo_store_verify_head(store, &after_verified,
@@ -755,11 +800,13 @@ static int run_unit(void) {
      * silently succeeds while writing nothing. */
     const char *dup_json = "{\"$type\":\"com.example.dup\",\"text\":\"same\"}";
     char *dup_uri1 = NULL, *dup_cid1 = NULL, *dup_uri2 = NULL, *dup_cid2 = NULL;
-    s = metalbear_repo_store_create_record(store, "com.example.dup", "dupkeyone",
-                                           dup_json, NULL, &dup_uri1, &dup_cid1);
+    s = metalbear_repo_store_create_record(store, "com.example.dup",
+                                           "dupkeyone", dup_json, NULL,
+                                           &dup_uri1, &dup_cid1);
     WF_CHECK(s == WF_OK && dup_uri1 && dup_cid1);
-    s = metalbear_repo_store_create_record(store, "com.example.dup", "dupkeytwo",
-                                           dup_json, NULL, &dup_uri2, &dup_cid2);
+    s = metalbear_repo_store_create_record(store, "com.example.dup",
+                                           "dupkeytwo", dup_json, NULL,
+                                           &dup_uri2, &dup_cid2);
     WF_CHECK(s == WF_OK && dup_uri2 && dup_cid2);
     /* Same content, so the same record CID — but both must be readable. */
     if (dup_cid1 && dup_cid2) WF_CHECK(strcmp(dup_cid1, dup_cid2) == 0);
@@ -767,16 +814,23 @@ static int run_unit(void) {
     s = metalbear_repo_store_get_record(store, "com.example.dup", "dupkeyone",
                                         &dupr, &duprc);
     WF_CHECK(s == WF_OK);
-    free(dupr); free(duprc); dupr = duprc = NULL;
+    free(dupr);
+    free(duprc);
+    dupr = duprc = NULL;
     s = metalbear_repo_store_get_record(store, "com.example.dup", "dupkeytwo",
                                         &dupr, &duprc);
     WF_CHECK(s == WF_OK);
-    free(dupr); free(duprc);
+    free(dupr);
+    free(duprc);
     /* The head must still verify after both writes. */
     int dup_verified = 0;
-    WF_CHECK(metalbear_repo_store_verify_head(store, &dup_verified, NULL) == WF_OK &&
+    WF_CHECK(metalbear_repo_store_verify_head(store, &dup_verified, NULL) ==
+                 WF_OK &&
              dup_verified == 1);
-    free(dup_uri1); free(dup_cid1); free(dup_uri2); free(dup_cid2);
+    free(dup_uri1);
+    free(dup_cid1);
+    free(dup_uri2);
+    free(dup_cid2);
 
     /* listRecords ordering + pagination. Five records with sortable rkeys:
      * the default order is newest-rkey-first (descending), `reverse` flips
@@ -788,8 +842,8 @@ static int run_unit(void) {
         char *purl = NULL, *pcid = NULL;
         s = metalbear_repo_store_put_record(
             store, "com.example.page", page_rkeys[i],
-            "{\"$type\":\"com.example.page\",\"n\":1}", NULL, NULL,
-            &purl, &pcid);
+            "{\"$type\":\"com.example.page\",\"n\":1}", NULL, NULL, &purl,
+            &pcid);
         WF_CHECK(s == WF_OK);
         free(purl);
         free(pcid);
@@ -807,16 +861,16 @@ static int run_unit(void) {
         cJSON *e = cJSON_GetArrayItem(pr, i);
         cJSON *u = e ? cJSON_GetObjectItemCaseSensitive(e, "uri") : NULL;
         WF_CHECK(u && cJSON_IsString(u) &&
-                 strcmp(strrchr(u->valuestring, '/') + 1,
-                        page_rkeys[4 - i]) == 0);
+                 strcmp(strrchr(u->valuestring, '/') + 1, page_rkeys[4 - i]) ==
+                     0);
     }
     cJSON_Delete(pd);
     free(pj);
 
     /* reverse=true: ascending by rkey. */
     pj = NULL;
-    s = metalbear_repo_store_list_records(store, "com.example.page", NULL,
-                                          true, 50, &pj);
+    s = metalbear_repo_store_list_records(store, "com.example.page", NULL, true,
+                                          50, &pj);
     WF_CHECK(s == WF_OK && pj);
     pd = pj ? cJSON_Parse(pj) : NULL;
     pr = pd ? cJSON_GetObjectItemCaseSensitive(pd, "records") : NULL;
@@ -852,7 +906,8 @@ static int run_unit(void) {
         }
         cJSON *nc = pd ? cJSON_GetObjectItemCaseSensitive(pd, "cursor") : NULL;
         free(page_cursor);
-        page_cursor = (nc && cJSON_IsString(nc)) ? strdup(nc->valuestring) : NULL;
+        page_cursor =
+            (nc && cJSON_IsString(nc)) ? strdup(nc->valuestring) : NULL;
         cJSON_Delete(pd);
         free(pj);
         if (!page_cursor) break;
@@ -899,7 +954,8 @@ static int run_did_immutability(void) {
         unlink(path);
         return failures + 1;
     }
-    WF_CHECK(strcmp(metalbear_repo_store_did(store), "did:plc:originalowner1234") == 0);
+    WF_CHECK(strcmp(metalbear_repo_store_did(store),
+                    "did:plc:originalowner1234") == 0);
     metalbear_repo_store_free(store);
 
     /* Re-opening under the same DID is the normal path and must still work. */
@@ -908,7 +964,8 @@ static int run_did_immutability(void) {
                                   "orig.example.com", &store);
     WF_CHECK(s == WF_OK && store != NULL);
     if (store) {
-        WF_CHECK(strcmp(metalbear_repo_store_did(store), "did:plc:originalowner1234") == 0);
+        WF_CHECK(strcmp(metalbear_repo_store_did(store),
+                        "did:plc:originalowner1234") == 0);
         metalbear_repo_store_free(store);
     }
 
@@ -934,7 +991,7 @@ static int run_server(void) {
 
     metalbear_repo_store *store = NULL;
     wf_status s = metalbear_repo_store_open(path, "did:plc:srvpds",
-                                     "srv.example.com", &store);
+                                            "srv.example.com", &store);
     WF_CHECK(s == WF_OK && store != NULL);
     if (s != WF_OK) {
         unlink(path);
@@ -950,7 +1007,8 @@ static int run_server(void) {
     }
     uint16_t port = wf_xrpc_server_port(server);
     WF_CHECK(port != 0);
-    WF_CHECK(metalbear_xrpc_server_register_pds_repo(server, store, NULL, NULL) == WF_OK);
+    WF_CHECK(metalbear_xrpc_server_register_pds_repo(server, store, NULL,
+                                                     NULL) == WF_OK);
 
     char base[64];
     snprintf(base, sizeof(base), "http://127.0.0.1:%u", (unsigned)port);
@@ -971,7 +1029,7 @@ static int run_server(void) {
     cJSON *cid = cJSON_GetObjectItemCaseSensitive(root, "cid");
     cJSON *commit = cJSON_GetObjectItemCaseSensitive(root, "commit");
     WF_CHECK(uri && cJSON_IsString(uri) && cid && cJSON_IsString(cid) &&
-            commit && cJSON_IsObject(commit));
+             commit && cJSON_IsObject(commit));
     const char *uri_str = uri ? uri->valuestring : "";
     const char *sl = strrchr(uri_str, '/');
     char rk_buf[32];
@@ -988,14 +1046,14 @@ static int run_server(void) {
         {"collection", "com.example.posts"},
         {"rkey", (char *)rk},
     };
-    s = wf_xrpc_query_params(client, "com.atproto.repo.getRecord", params,
-                              2, &res);
+    s = wf_xrpc_query_params(client, "com.atproto.repo.getRecord", params, 2,
+                             &res);
     WF_CHECK(s == WF_OK && res.status == 200);
     root = cJSON_ParseWithLength(res.body, res.body_len);
     cJSON *val = root ? cJSON_GetObjectItemCaseSensitive(root, "value") : NULL;
     cJSON *text = val ? cJSON_GetObjectItemCaseSensitive(val, "text") : NULL;
     WF_CHECK(text && cJSON_IsString(text) &&
-            strcmp(text->valuestring, "viahttp") == 0);
+             strcmp(text->valuestring, "viahttp") == 0);
     cJSON_Delete(root);
     wf_response_free(&res);
 
