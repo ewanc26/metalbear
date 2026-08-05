@@ -62,6 +62,13 @@ typedef struct metalbear_config {
     /* Maximum blob upload size in bytes (refpds PDS_BLOB_UPLOAD_LIMIT).
      * 0 => no limit. Enforced in the blob upload path. */
     int64_t blob_upload_limit;
+    /* Whether com.atproto.repo.importRepo accepts requests at all (refpds
+     * PDS_ACCEPTING_REPO_IMPORTS). Defaults true; an operator who wants the
+     * bulk-replace path closed off entirely can disable it. */
+    bool accepting_imports;
+    /* Maximum importRepo CAR body size in bytes (refpds
+     * PDS_MAX_REPO_IMPORT_SIZE). 0 => no limit. */
+    int64_t max_import_size;
     /*
      * Per-client request budget: `rate_limit` requests per `rate_limit_window`
      * seconds. Both default to the historical 100/60 when zero.
