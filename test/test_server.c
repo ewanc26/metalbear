@@ -1355,6 +1355,25 @@ int main(void) {
     CHECK(commit_cid && commit_rev);
     cJSON_Delete(json);
     wf_response_free(&response);
+
+    /* queryLabels: MetalBear is a PDS with no label storage. The reference
+     * PDS does not serve this endpoint at all -- it is an AppView
+     * responsibility, fed by a labeler's own subscribeLabels firehose.
+     * Confirm the honest MethodNotImplemented rather than a fabricated
+     * empty result. */
+    wf_xrpc_param query_labels_params[] = {
+        {"uriPatterns", "at://did:plc:metalbeartest/app.bsky.feed.post/first"},
+    };
+    CHECK(wf_xrpc_query_params(client, "com.atproto.label.queryLabels",
+                               query_labels_params, 1,
+                               &response) == WF_ERR_HTTP);
+    CHECK(response.status == 501);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                 "MethodNotImplemented") == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
     wf_subscribe_event live_event = {0};
     CHECK(firehose >= 0 &&
           firehose_read_until(firehose, WF_SUBSCRIBE_EVENT_COMMIT,
