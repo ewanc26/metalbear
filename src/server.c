@@ -3025,6 +3025,11 @@ static wf_status proxy_appview(metalbear_server *server,
         snprintf(auth, sizeof(auth), "Authorization: Bearer %s", service_token);
         hdrs = curl_slist_append(hdrs, auth);
     }
+    if (req->client_ip && req->client_ip[0]) {
+        char xff[128];
+        snprintf(xff, sizeof(xff), "X-Forwarded-For: %s", req->client_ip);
+        hdrs = curl_slist_append(hdrs, xff);
+    }
 
     proxy_buf_t body_out = {0};
     proxy_headers hdrs_out = {0};
@@ -3154,6 +3159,11 @@ static wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
         char ct[256];
         snprintf(ct, sizeof(ct), "Content-Type: %s", req->content_type);
         hdrs = curl_slist_append(hdrs, ct);
+    }
+    if (req->client_ip && req->client_ip[0]) {
+        char xff[128];
+        snprintf(xff, sizeof(xff), "X-Forwarded-For: %s", req->client_ip);
+        hdrs = curl_slist_append(hdrs, xff);
     }
     /* libcurl sets Host from the target URL; do not override it with the
      * original request's Host or Cloudflare-style frontends will reject the
