@@ -480,13 +480,20 @@ typedef bool (*metalbear_xrpc_repo_access_guard)(void *ctx,
  * every record the store holds is served.
  *
  * The registry is borrowed and must outlive the server.
+ *
+ * `accepting_imports` and `max_import_size` gate com.atproto.repo.importRepo
+ * (refpds PDS_ACCEPTING_REPO_IMPORTS / PDS_MAX_REPO_IMPORT_SIZE):
+ * accepting_imports false refuses every import with an honest
+ * "Service is not accepting repo imports"; max_import_size > 0 caps the CAR
+ * body's byte length (0 = unlimited).
  */
 wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url,
     metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx,
     const wf_lexicon_registry *lexicons,
-    metalbear_xrpc_repo_access_guard guard, void *guard_ctx);
+    metalbear_xrpc_repo_access_guard guard, void *guard_ctx,
+    bool accepting_imports, int64_t max_import_size);
 
 /** Outcome of checking a record against the lexicon corpus. */
 typedef enum metalbear_validation_status {
