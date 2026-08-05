@@ -22,7 +22,7 @@ It hosts multiple accounts, mints `did:plc` identities, serves the firehose,
 and federates: as of 0.4.1 a MetalBear instance is consumed by Bluesky's
 relays and its posts are indexed by the Bluesky AppView.
 
-**Version:** 0.13.10
+![version](https://img.shields.io/github/v/release/ewanc26/metalbear?label=version)
 
 ## Core Features
 
