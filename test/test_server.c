@@ -468,6 +468,30 @@ int main(void) {
         }
     }
 
+    /* === GET /operator.json ===
+     * Public operator metadata; the software section must name the exact
+     * versions the build links, MetalBear and Wolfram alike, so the landing
+     * page can show the pair without a second admin-gated call. */
+    {
+        char op_url[160];
+        snprintf(op_url, sizeof(op_url), "%s/operator.json", base);
+        CHECK(wf_http_get(client, op_url, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *op = json_response(&response);
+        CHECK(op != NULL);
+        cJSON *software = cJSON_GetObjectItemCaseSensitive(op, "software");
+        CHECK(cJSON_IsObject(software));
+        cJSON *mver = cJSON_GetObjectItemCaseSensitive(software, "version");
+        CHECK(cJSON_IsString(mver) &&
+              strcmp(mver->valuestring, METALBEAR_VERSION) == 0);
+        cJSON *wver = cJSON_GetObjectItemCaseSensitive(software,
+                                                       "wolframVersion");
+        CHECK(cJSON_IsString(wver) &&
+              strcmp(wver->valuestring, WOLFRAM_VERSION_STRING) == 0);
+        cJSON_Delete(op);
+        wf_response_free(&response);
+    }
+
     char well_known_url[160];
     snprintf(well_known_url, sizeof(well_known_url),
              "%s/.well-known/atproto-did", base);
