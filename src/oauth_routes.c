@@ -180,17 +180,24 @@ static wf_status oauth_metadata(void *ctx, const wf_xrpc_request *req,
     cJSON_AddItemToObject(root, "dpop_signing_alg_values_supported",
                           dpop_algs);
 
-    /* "none" only. Nothing in this codebase parses or verifies a
-     * client_assertion JWT — grep for "assertion" in src/oauth*.c and there
-     * is nothing to find. Advertising "private_key_jwt" here (as this
-     * endpoint used to) is exactly the kind of fabricated capability
-     * AGENTS.md warns against: a confidential client that read this
-     * metadata and attempted assertion-based auth would find no verifier on
-     * the other end. */
+    /* Both "none" (public clients) and "private_key_jwt" (confidential
+     * clients) are honored by the token endpoint: oauth_token verifies an
+     * RFC 7523 client_assertion JWT against the client's published JWKS
+     * (see client_jwks_resolve + oauth_token below). Mirrors the reference
+     * PDS's Client.AUTH_METHODS_SUPPORTED. */
     cJSON *token_methods = cJSON_CreateArray();
     cJSON_AddItemToArray(token_methods, cJSON_CreateString("none"));
+    cJSON_AddItemToArray(token_methods, cJSON_CreateString("private_key_jwt"));
     cJSON_AddItemToObject(root, "token_endpoint_auth_methods_supported",
                           token_methods);
+
+    /* ES256 only: wf_oauth_verify_client_assertion (wolfram's oauth/verify.c)
+     * accepts ES256 and rejects every other algorithm. */
+    cJSON *token_algs = cJSON_CreateArray();
+    cJSON_AddItemToArray(token_algs, cJSON_CreateString("ES256"));
+    cJSON_AddItemToObject(root,
+                          "token_endpoint_auth_signing_alg_values_supported",
+                          token_algs);
 
     cJSON *locales = cJSON_CreateArray();
     cJSON_AddItemToArray(locales, cJSON_CreateString("en-US"));
@@ -587,6 +594,202 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
     return WF_OK;
 }
 
+/* ------------------------------------------------------------------ */
+/* private_key_jwt client authentication                               */
+/*                                                                     */
+/* A confidential client identifies itself at the token endpoint with  */
+/* an RFC 7523 client_assertion JWT signed by a key it publishes in    */
+/* its metadata document (client_id is that document's URL). We fetch  */
+/* the metadata, take its `jwks` (or `jwks_uri`), and verify the       */
+/* assertion against it with wolfram's wf_oauth_verify_client_assertion. */
+/* ------------------------------------------------------------------ */
+
+typedef struct http_buf {
+    char *data;
+    size_t len;
+    size_t cap;
+} http_buf;
+
+static size_t http_write_cb(char *ptr, size_t size, size_t nmemb,
+                            void *userdata) {
+    http_buf *buf = (http_buf *)userdata;
+    size_t total = size * nmemb;
+    if (buf->len + total + 1 > buf->cap) {
+        size_t newcap = (buf->cap + total) * 2;
+        char *grown = realloc(buf->data, newcap);
+        if (!grown) return 0;
+        buf->data = grown;
+        buf->cap = newcap;
+    }
+    memcpy(buf->data + buf->len, ptr, total);
+    buf->len += total;
+    buf->data[buf->len] = '\0';
+    return total;
+}
+
+/* Fetch `url` and parse it as JSON. */
+static wf_status http_get_json(const char *url, cJSON **out_json) {
+    CURL *curl = NULL;
+    http_buf body = {0};
+    CURLcode rc;
+    cJSON *json = NULL;
+    wf_status status = WF_ERR_NETWORK;
+
+    if (!url || !out_json) return WF_ERR_INVALID_ARG;
+    *out_json = NULL;
+
+    curl = curl_easy_init();
+    if (!curl) return WF_ERR_ALLOC;
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "application/json");
+    rc = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
+    if (rc != CURLE_OK || !body.data) goto done;
+
+    json = cJSON_ParseWithLength(body.data, body.len);
+    if (!json) { status = WF_ERR_PARSE; goto done; }
+    *out_json = json;
+    json = NULL;
+    status = WF_OK;
+done:
+    free(body.data);
+    cJSON_Delete(json);
+    return status;
+}
+
+/* Does `host` equal `name`, optionally followed by a port? Guards the
+ * loopback carve-out below against prefix tricks like
+ * `127.0.0.1.evil.example`. */
+static bool host_is(const char *host, const char *name) {
+    size_t n = strlen(name);
+    if (strncasecmp(host, name, n) != 0) return false;
+    char c = host[n];
+    return c == '\0' || c == ':';
+}
+
+/* A client_id is a URL the token endpoint fetches on every request, and the
+ * client chooses it — so it is an SSRF surface. Only https is acceptable in
+ * production; loopback http is allowed so offline tests and local
+ * deployments can serve a metadata document without TLS. */
+static bool client_id_fetchable(const char *client_id) {
+    if (!client_id || !client_id[0]) return false;
+    if (strncasecmp(client_id, "https://", 8) == 0) return true;
+    if (strncasecmp(client_id, "http://", 7) == 0) {
+        const char *host = client_id + 7;
+        return host_is(host, "127.0.0.1") || host_is(host, "localhost") ||
+               host_is(host, "[::1]");
+    }
+    return false;
+}
+
+/* Resolve a client's signing JWKS from its metadata document. `client_id`
+ * is the metadata document URL. On success *out_jwks is the JWKS JSON (an
+ * object with a `keys` array); the caller must free it with cJSON_Delete.
+ * WF_ERR_NOT_FOUND if the metadata declares token_endpoint_auth_method
+ * "none"; WF_ERR_PARSE on an unresolvable/invalid document. */
+static wf_status client_jwks_resolve(const char *client_id,
+                                     cJSON **out_jwks) {
+    cJSON *metadata = NULL, *jwks = NULL, *jwks_uri = NULL;
+    const cJSON *auth_method;
+    wf_status status;
+
+    if (!client_id || !client_id[0] || !out_jwks) return WF_ERR_INVALID_ARG;
+    *out_jwks = NULL;
+
+    if (!client_id_fetchable(client_id)) return WF_ERR_INVALID_ARG;
+
+    status = http_get_json(client_id, &metadata);
+    if (status != WF_OK) return status;
+
+    /* A public client must not present a client_assertion; the reference
+     * provider routes on this field and would ignore the assertion. */
+    auth_method = cJSON_GetObjectItemCaseSensitive(metadata,
+                                                   "token_endpoint_auth_method");
+    if (cJSON_IsString(auth_method) &&
+        strcmp(auth_method->valuestring, "none") == 0) {
+        status = WF_ERR_NOT_FOUND;
+        goto done;
+    }
+
+    jwks = cJSON_GetObjectItemCaseSensitive(metadata, "jwks");
+    if (cJSON_IsObject(jwks)) {
+        *out_jwks = cJSON_Duplicate(jwks, 1);
+        if (!*out_jwks) { status = WF_ERR_ALLOC; goto done; }
+        status = WF_OK;
+        goto done;
+    }
+
+    /* Metadata that only points at a jwks_uri is equally valid. */
+    jwks_uri = cJSON_GetObjectItemCaseSensitive(metadata, "jwks_uri");
+    if (cJSON_IsString(jwks_uri) && jwks_uri->valuestring[0]) {
+        status = http_get_json(jwks_uri->valuestring, out_jwks);
+        goto done;
+    }
+
+    status = WF_ERR_PARSE; /* metadata carries neither jwks nor jwks_uri */
+done:
+    cJSON_Delete(metadata);
+    return status;
+}
+
+/* Verify an RFC 7523 client assertion against the client's published JWKS.
+ * On success *out_client_id is a heap copy of the authenticated client_id
+ * (the assertion's iss/sub, which must equal the presented client_id);
+ * the caller frees it. */
+static wf_status client_assertion_authenticate(oauth_route_ctx *rctx,
+                                               const char *client_id,
+                                               const char *assertion,
+                                               char **out_client_id) {
+    cJSON *jwks = NULL;
+    cJSON *keys_arr = NULL;
+    wf_oauth_trusted_keys *keys = NULL;
+    wf_oauth_client_assertion_verified *verified = NULL;
+    wf_status status;
+
+    if (!out_client_id) return WF_ERR_INVALID_ARG;
+    *out_client_id = NULL;
+
+    status = client_jwks_resolve(client_id, &jwks);
+    if (status != WF_OK) return status;
+
+    keys_arr = cJSON_GetObjectItemCaseSensitive(jwks, "keys");
+    if (!cJSON_IsArray(keys_arr) || cJSON_GetArraySize(keys_arr) == 0) {
+        status = WF_ERR_PARSE;
+        goto done;
+    }
+    status = wf_oauth_trusted_keys_new(&keys);
+    if (status != WF_OK) goto done;
+    {
+        cJSON *key;
+        cJSON_ArrayForEach(key, keys_arr) {
+            char *jwk_json;
+            wf_status add;
+            if (!cJSON_IsObject(key)) continue;
+            jwk_json = cJSON_PrintUnformatted(key);
+            if (!jwk_json) { status = WF_ERR_ALLOC; goto done; }
+            add = wf_oauth_trusted_keys_add_jwk(keys, jwk_json);
+            free(jwk_json);
+            if (add != WF_OK) { status = add; goto done; }
+        }
+    }
+    status = wf_oauth_verify_client_assertion(assertion, client_id,
+                                              rctx->public_url, keys,
+                                              &verified);
+    if (status != WF_OK) goto done;
+    *out_client_id = strdup(verified->client_id);
+    if (!*out_client_id) { status = WF_ERR_ALLOC; goto done; }
+    status = WF_OK;
+done:
+    wf_oauth_client_assertion_verified_free(verified);
+    wf_oauth_trusted_keys_free(keys);
+    cJSON_Delete(jwks);
+    return status;
+}
+
 static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
                              wf_xrpc_response *resp) {
     oauth_route_ctx *rctx = ctx;
@@ -604,6 +807,39 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                    "grant_type is required");
         return WF_OK;
+    }
+
+    /* private_key_jwt client authentication (RFC 7523). When a
+     * client_assertion is present it authenticates the client; the verified
+     * client_id is the authority, not the untrusted form field alone. */
+    cJSON *client_assertion = cJSON_GetObjectItemCaseSensitive(
+        body, "client_assertion");
+    char *auth_client_id = NULL;
+    if (cJSON_IsString(client_assertion) &&
+        client_assertion->valuestring[0]) {
+        cJSON *assertion_type = cJSON_GetObjectItemCaseSensitive(
+            body, "client_assertion_type");
+        cJSON *form_cid = cJSON_GetObjectItemCaseSensitive(body, "client_id");
+        if (!cJSON_IsString(assertion_type) ||
+            strcmp(assertion_type->valuestring,
+                   "urn:ietf:params:oauth:client-assertion-type:jwt-bearer") !=
+                0 ||
+            !cJSON_IsString(form_cid) || !form_cid->valuestring[0]) {
+            cJSON_Delete(body);
+            wf_xrpc_response_set_error(
+                resp, 400, "invalid_client",
+                "Invalid client_assertion_type or missing client_id");
+            return WF_OK;
+        }
+        wf_status ast = client_assertion_authenticate(
+            rctx, form_cid->valuestring, client_assertion->valuestring,
+            &auth_client_id);
+        if (ast != WF_OK) {
+            cJSON_Delete(body);
+            wf_xrpc_response_set_error(resp, 400, "invalid_client",
+                                       "Client authentication failed");
+            return WF_OK;
+        }
     }
 
     metalbear_oauth_grant grant = {0};
@@ -625,11 +861,11 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
                                        "Missing required parameters");
             return WF_OK;
         }
-        status = metalbear_oauth_exchange_code(rctx->store, code->valuestring,
-                                                cid->valuestring,
-                                                redir->valuestring,
-                                                verifier->valuestring,
-                                                jkt->valuestring, &grant);
+        status = metalbear_oauth_exchange_code(
+            rctx->store, code->valuestring,
+            auth_client_id ? auth_client_id : cid->valuestring,
+            redir->valuestring, verifier->valuestring, jkt->valuestring,
+            &grant);
     } else if (strcmp(grant_type->valuestring, "refresh_token") == 0) {
         cJSON *refresh = cJSON_GetObjectItemCaseSensitive(body,
                                                           "refresh_token");
@@ -643,12 +879,14 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
                                        "Missing required parameters");
             return WF_OK;
         }
-        status = metalbear_oauth_refresh(rctx->store, refresh->valuestring,
-                                          cid->valuestring, jkt->valuestring,
-                                          &grant);
+        status = metalbear_oauth_refresh(
+            rctx->store, refresh->valuestring,
+            auth_client_id ? auth_client_id : cid->valuestring,
+            jkt->valuestring, &grant);
     }
 
     cJSON_Delete(body);
+    free(auth_client_id);
 
     if (status != WF_OK) {
         wf_xrpc_response_set_error(resp, 400, "invalid_grant",
