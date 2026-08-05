@@ -998,6 +998,9 @@ static wf_status operator_info(void *ctx, const wf_xrpc_request *request,
     if (sw) {
         cJSON_AddStringToObject(sw, "name", "MetalBear");
         cJSON_AddStringToObject(sw, "version", METALBEAR_VERSION);
+        /* The SDK version, so the frontend landing page can name the pair it
+         * is running without a second admin-gated call. */
+        cJSON_AddStringToObject(sw, "wolframVersion", WOLFRAM_VERSION_STRING);
         cJSON_AddStringToObject(sw, "repository",
                                 "https://github.com/ewanc26/metalbear");
         cJSON_AddStringToObject(sw, "license", "AGPL-3.0-only");

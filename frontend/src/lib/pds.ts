@@ -28,7 +28,14 @@ export interface RepoInfo {
 
 export interface OperatorInfo {
 	operator?: { name?: string; email?: string; url?: string; supportUrl?: string };
-	software?: { name?: string; version?: string; repository?: string; license?: string };
+	software?: {
+		name?: string;
+		version?: string;
+		/** The SDK version this build is linked against. */
+		wolframVersion?: string;
+		repository?: string;
+		license?: string;
+	};
 	description?: string;
 	development?: boolean;
 }

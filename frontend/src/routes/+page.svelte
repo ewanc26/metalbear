@@ -231,9 +231,14 @@
 						class="text-emerald-500 hover:text-emerald-400"
 						href="https://github.com/ewanc26/metalbear">MetalBear</a
 					>
-					{#if info?.software?.version}<span class="font-mono text-xs text-slate-500"
-							>{info.software.version}</span
-						>{/if}
+					{#if info?.software?.version}
+						<span class="font-mono text-xs text-slate-500">{info.software.version}</span>
+					{/if}
+					{#if info?.software?.wolframVersion}
+						<span class="font-mono text-xs text-slate-500"
+							>· Wolfram {info.software.wolframVersion}</span
+						>
+					{/if}
 				</h2>
 				<p class="mt-1.5 text-sm text-slate-400">
 					An AT Protocol Personal Data Server written from scratch in C23, on the
