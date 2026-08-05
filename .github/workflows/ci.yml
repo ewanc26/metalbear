@@ -51,3 +51,68 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure -j"$(nproc)"
+
+  # Formatting check: clang-format on changed lines only. The existing tree
+  # predates this config and has not been mass-reformatted, so only
+  # new/modified lines are required to conform — see .clang-format.
+  format:
+    name: clang-format (changed lines)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format
+
+      - name: Determine diff base
+        id: base
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "ref=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check formatting of changed lines
+        run: |
+          BASE="${{ steps.base.outputs.ref }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE" 2>/dev/null; then
+            echo "No usable diff base (e.g. first commit on a new branch) — skipping."
+            exit 0
+          fi
+          OUT="$(git-clang-format --diff "$BASE" -- '*.c' '*.h' '*.cpp' '*.hpp' '*.cc' 2>&1)"
+          echo "$OUT"
+          if [ -n "$OUT" ] && [ "$OUT" != "no modified files to format" ] && [ "$OUT" != "clang-format did not modify any files" ]; then
+            echo "::error::Changed lines are not clang-format clean (diff above). Run: git-clang-format \"$BASE\" -- '*.c' '*.h' '*.cpp' '*.hpp' '*.cc', review, and commit the result."
+            exit 1
+          fi
+
+      - name: Check CMake formatting (informational)
+        continue-on-error: true
+        run: |
+          pip install --quiet cmakelang
+          cmake-format --check CMakeLists.txt || echo "::warning::CMakeLists.txt is not cmake-format clean yet (non-blocking until the tree is reformatted)."
+
+  # Mechanical codebase-health scan (desloppify). Informational only: its
+  # score is 75% subjective design review, which needs an LLM in the loop
+  # that this workflow doesn't run — so this surfaces the objective/mechanical
+  # signal (duplication, dead code, unused imports, security smells) rather
+  # than gating merges on an unreviewed score.
+  desloppify-scan:
+    name: desloppify (mechanical scan, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run mechanical scan
+        run: |
+          uvx --from git+https://github.com/peteromallet/desloppify.git desloppify scan --path .
+          uvx --from git+https://github.com/peteromallet/desloppify.git desloppify status
