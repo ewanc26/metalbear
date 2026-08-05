@@ -89,7 +89,7 @@ std::string ssl_error_string() {
 }
 
 void set_sock_timeout(int fd, int which, double seconds) {
-    struct timeval tv{};
+    struct timeval tv {};
     tv.tv_sec = static_cast<long>(seconds);
     tv.tv_usec =
         static_cast<long>((seconds - static_cast<long>(seconds)) * 1e6);
@@ -100,7 +100,7 @@ void set_sock_timeout(int fd, int which, double seconds) {
 // non-blocking connect with a 10s deadline, walking every resolved address.
 int connect_with_timeout(const std::string &host, int port,
                          double timeout_sec) {
-    struct addrinfo hints{};
+    struct addrinfo hints {};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     struct addrinfo *res = nullptr;
@@ -127,7 +127,7 @@ int connect_with_timeout(const std::string &host, int port,
             fd_set wfd;
             FD_ZERO(&wfd);
             FD_SET(fd, &wfd);
-            struct timeval tv{};
+            struct timeval tv {};
             tv.tv_sec = static_cast<long>(timeout_sec);
             tv.tv_usec = static_cast<long>(
                 (timeout_sec - static_cast<long>(timeout_sec)) * 1e6);
@@ -226,7 +226,7 @@ ssize_t read_some(SSL *ssl, uint8_t *out, size_t n) {
         int e = SSL_get_error(ssl, rc);
         if (e == SSL_ERROR_ZERO_RETURN) return 0;
         if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
-            struct pollfd pfd{};
+            struct pollfd pfd {};
             pfd.fd = SSL_get_fd(ssl);
             pfd.events = (e == SSL_ERROR_WANT_READ) ? POLLIN : POLLOUT;
             if (poll(&pfd, 1, -1) < 0) {
@@ -257,7 +257,7 @@ void ssl_write_all(SSL *ssl, const std::string &data) {
         }
         int e = SSL_get_error(ssl, n);
         if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
-            struct pollfd pfd{};
+            struct pollfd pfd {};
             pfd.fd = SSL_get_fd(ssl);
             pfd.events = (e == SSL_ERROR_WANT_READ) ? POLLIN : POLLOUT;
             poll(&pfd, 1, -1);
@@ -513,7 +513,7 @@ int main(int argc, char *argv[]) {
         for (int rc = SSL_connect(tls.ssl); rc != 1;) {
             int e = SSL_get_error(tls.ssl, rc);
             if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
-                struct pollfd pfd{};
+                struct pollfd pfd {};
                 pfd.fd = guard.fd;
                 pfd.events = (e == SSL_ERROR_WANT_READ) ? POLLIN : POLLOUT;
                 poll(&pfd, 1, -1);
