@@ -27,9 +27,13 @@
 #include <unistd.h>
 
 static int failures;
-#define CHECK(expr) do { if (!(expr)) { \
-    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-    failures++; } } while (0)
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        if (!(expr)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr);    \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
 
 /* The key both sides share. "secret bytes here!!" in base64. */
 static const char *KEY_NAME = "metalbear-key";
@@ -116,8 +120,8 @@ static bool verify_tsig(const unsigned char *msg, size_t len) {
     at = skip_name(msg, len, at);
     size_t algo_len = at - algo_start;
     if (at + 10 > len) return false;
-    const unsigned char *time_signed = msg + at;   /* 6 bytes */
-    const unsigned char *fudge = msg + at + 6;     /* 2 bytes */
+    const unsigned char *time_signed = msg + at; /* 6 bytes */
+    const unsigned char *fudge = msg + at + 6;   /* 2 bytes */
     unsigned mac_len = (unsigned)((msg[at + 8] << 8) | msg[at + 9]);
     at += 10;
     if (at + mac_len > len) return false;
@@ -135,14 +139,24 @@ static bool verify_tsig(const unsigned char *msg, size_t len) {
 
     unsigned char vars[512];
     size_t v = 0;
-    memcpy(vars + v, msg + name_start, name_len); v += name_len;
-    vars[v++] = 0x00; vars[v++] = 0xff;            /* class ANY */
-    vars[v++] = 0; vars[v++] = 0; vars[v++] = 0; vars[v++] = 0;  /* TTL 0 */
-    memcpy(vars + v, msg + algo_start, algo_len); v += algo_len;
-    memcpy(vars + v, time_signed, 6); v += 6;
-    memcpy(vars + v, fudge, 2); v += 2;
-    vars[v++] = 0; vars[v++] = 0;                  /* error */
-    vars[v++] = 0; vars[v++] = 0;                  /* other len */
+    memcpy(vars + v, msg + name_start, name_len);
+    v += name_len;
+    vars[v++] = 0x00;
+    vars[v++] = 0xff; /* class ANY */
+    vars[v++] = 0;
+    vars[v++] = 0;
+    vars[v++] = 0;
+    vars[v++] = 0; /* TTL 0 */
+    memcpy(vars + v, msg + algo_start, algo_len);
+    v += algo_len;
+    memcpy(vars + v, time_signed, 6);
+    v += 6;
+    memcpy(vars + v, fudge, 2);
+    v += 2;
+    vars[v++] = 0;
+    vars[v++] = 0; /* error */
+    vars[v++] = 0;
+    vars[v++] = 0; /* other len */
 
     unsigned char digest_input[sizeof(signed_copy) + sizeof(vars)];
     memcpy(digest_input, signed_copy, tsig_at);
@@ -169,16 +183,25 @@ static void *serve(void *arg) {
             if (n <= 0) break;
             got += (size_t)n;
         }
-        if (got != 2) { close(fd); continue; }
+        if (got != 2) {
+            close(fd);
+            continue;
+        }
         size_t want = (size_t)((prefix[0] << 8) | prefix[1]);
-        if (want > sizeof(ns.request)) { close(fd); continue; }
+        if (want > sizeof(ns.request)) {
+            close(fd);
+            continue;
+        }
         got = 0;
         while (got < want) {
             ssize_t n = recv(fd, ns.request + got, want - got, 0);
             if (n <= 0) break;
             got += (size_t)n;
         }
-        if (got != want) { close(fd); continue; }
+        if (got != want) {
+            close(fd);
+            continue;
+        }
         ns.request_len = got;
         ns.tsig_verified = verify_tsig(ns.request, ns.request_len);
         ns.is_update = ((ns.request[2] >> 3) & 0x0f) == 5;
@@ -191,9 +214,12 @@ static void *serve(void *arg) {
         memcpy(reply, ns.request, 12);
         reply[2] = (unsigned char)(ns.request[2] | 0x80);
         reply[3] = (unsigned char)ns.rcode_to_send;
-        reply[6] = 0; reply[7] = 0;      /* ANCOUNT */
-        reply[8] = 0; reply[9] = 0;
-        reply[10] = 0; reply[11] = 0;
+        reply[6] = 0;
+        reply[7] = 0; /* ANCOUNT */
+        reply[8] = 0;
+        reply[9] = 0;
+        reply[10] = 0;
+        reply[11] = 0;
 
         if (!ns.is_update) {
             /* Echo the question, then answer it if a value is configured. */
@@ -204,20 +230,25 @@ static void *serve(void *arg) {
                 size_t value_len = strlen(ns.answer);
                 memcpy(reply + rl, ns.request + 12, qend - 12 - 4);
                 rl += qend - 12 - 4;
-                reply[rl++] = 0; reply[rl++] = 16;      /* TXT */
-                reply[rl++] = 0; reply[rl++] = 1;       /* IN */
-                reply[rl++] = 0; reply[rl++] = 0;
-                reply[rl++] = 0; reply[rl++] = 60;      /* TTL */
+                reply[rl++] = 0;
+                reply[rl++] = 16; /* TXT */
+                reply[rl++] = 0;
+                reply[rl++] = 1; /* IN */
+                reply[rl++] = 0;
+                reply[rl++] = 0;
+                reply[rl++] = 0;
+                reply[rl++] = 60; /* TTL */
                 reply[rl++] = 0;
                 reply[rl++] = (unsigned char)(value_len + 1);
                 reply[rl++] = (unsigned char)value_len;
                 memcpy(reply + rl, ns.answer, value_len);
                 rl += value_len;
-                reply[6] = 0; reply[7] = 1;
+                reply[6] = 0;
+                reply[7] = 1;
             }
         }
-        unsigned char out_prefix[2] = { (unsigned char)(rl >> 8),
-                                        (unsigned char)rl };
+        unsigned char out_prefix[2] = {(unsigned char)(rl >> 8),
+                                       (unsigned char)rl};
         send(fd, out_prefix, 2, 0);
         send(fd, reply, rl, 0);
         close(fd);
@@ -314,8 +345,8 @@ static void test_publish_is_idempotent(void) {
     snprintf(ns.answer, sizeof(ns.answer), "did=did:plc:bob");
     metalbear_handle_dns *dns = open_publisher();
     if (!dns) return;
-    CHECK(metalbear_handle_dns_publish(dns, "bob.example.com",
-                                       "did:plc:bob") == WF_OK);
+    CHECK(metalbear_handle_dns_publish(dns, "bob.example.com", "did:plc:bob") ==
+          WF_OK);
     CHECK(ns.served == 1);
     CHECK(!ns.is_update);
     metalbear_handle_dns_free(dns);
@@ -369,7 +400,7 @@ static void test_retract_of_an_absent_record_sends_no_update(void) {
  */
 static void test_a_refused_update_is_a_failure(void) {
     reset();
-    ns.rcode_to_send = 9;   /* NOTAUTH */
+    ns.rcode_to_send = 9; /* NOTAUTH */
     metalbear_handle_dns *dns = open_publisher();
     if (!dns) return;
     CHECK(metalbear_handle_dns_publish(dns, "frank.example.com",
@@ -385,13 +416,12 @@ static void test_a_refused_update_is_a_failure(void) {
  */
 static void test_incomplete_configuration_is_refused(void) {
     metalbear_handle_dns *dns = NULL;
-    CHECK(metalbear_handle_dns_open_ex("rfc2136", "key:c2VjcmV0",
-                                       "example.com", NULL, 300, &dns)
-          != WF_OK);
+    CHECK(metalbear_handle_dns_open_ex("rfc2136", "key:c2VjcmV0", "example.com",
+                                       NULL, 300, &dns) != WF_OK);
     CHECK(dns == NULL);
     CHECK(metalbear_handle_dns_open_ex("rfc2136", "no-colon-here",
-                                       "example.com", "127.0.0.1", 300, &dns)
-          != WF_OK);
+                                       "example.com", "127.0.0.1", 300,
+                                       &dns) != WF_OK);
     CHECK(dns == NULL);
     /* And the plain open, which cannot supply a server, refuses it too. */
     CHECK(metalbear_handle_dns_open("rfc2136", "key:c2VjcmV0", "example.com",

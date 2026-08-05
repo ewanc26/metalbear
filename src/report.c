@@ -25,7 +25,8 @@ wf_status metalbear_report_store_open(const char *path,
         return WF_ERR_INTERNAL;
     }
     if (sqlite3_open(path, &store->db) != SQLITE_OK ||
-        sqlite3_exec(store->db,
+        sqlite3_exec(
+            store->db,
             "PRAGMA journal_mode=WAL;"
             "CREATE TABLE IF NOT EXISTS reports("
             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -40,7 +41,8 @@ wf_status metalbear_report_store_open(const char *path,
             "reported_by TEXT NOT NULL,"
             "created_at TEXT NOT NULL);"
             "CREATE INDEX IF NOT EXISTS idx_reports_did ON reports(did);"
-            "CREATE INDEX IF NOT EXISTS idx_reports_created_at ON reports(created_at);",
+            "CREATE INDEX IF NOT EXISTS idx_reports_created_at ON "
+            "reports(created_at);",
             NULL, NULL, NULL) != SQLITE_OK) {
         sqlite3_close(store->db);
         pthread_mutex_destroy(&store->mutex);
@@ -58,16 +60,11 @@ void metalbear_report_store_free(metalbear_report_store *store) {
     free(store);
 }
 
-wf_status metalbear_report_store_create(metalbear_report_store *store,
-                                        const char *reporter_did,
-                                        const char *reason_type,
-                                        const char *reason,
-                                        const char *subject_type,
-                                        const char *subject_uri,
-                                        const char *subject_cid,
-                                        const char *mod_tool_name,
-                                        const char *mod_tool_meta,
-                                        int64_t *out_id) {
+wf_status metalbear_report_store_create(
+    metalbear_report_store *store, const char *reporter_did,
+    const char *reason_type, const char *reason, const char *subject_type,
+    const char *subject_uri, const char *subject_cid, const char *mod_tool_name,
+    const char *mod_tool_meta, int64_t *out_id) {
     if (!store || !reporter_did || !reason_type || !subject_type ||
         !subject_uri || !out_id)
         return WF_ERR_INVALID_ARG;
@@ -94,9 +91,12 @@ wf_status metalbear_report_store_create(metalbear_report_store *store,
     sqlite3_bind_text(stmt, 3, reason ? reason : "", -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 4, subject_type, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 5, subject_uri, -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 6, subject_cid ? subject_cid : "", -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 7, mod_tool_name ? mod_tool_name : "", -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 8, mod_tool_meta ? mod_tool_meta : "", -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 6, subject_cid ? subject_cid : "", -1,
+                      SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 7, mod_tool_name ? mod_tool_name : "", -1,
+                      SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 8, mod_tool_meta ? mod_tool_meta : "", -1,
+                      SQLITE_STATIC);
     sqlite3_bind_text(stmt, 9, reporter_did, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 10, created_at, -1, SQLITE_STATIC);
 
@@ -110,8 +110,8 @@ wf_status metalbear_report_store_create(metalbear_report_store *store,
     return st;
 }
 
-wf_status metalbear_report_store_get(metalbear_report_store *store,
-                                     int64_t id, metalbear_report **out) {
+wf_status metalbear_report_store_get(metalbear_report_store *store, int64_t id,
+                                     metalbear_report **out) {
     if (!store || !out || id <= 0) return WF_ERR_INVALID_ARG;
     *out = NULL;
     sqlite3_stmt *stmt = NULL;
@@ -169,7 +169,6 @@ void metalbear_report_free(metalbear_report *report) {
 
 void metalbear_report_list_free(metalbear_report *reports, size_t count) {
     if (!reports) return;
-    for (size_t i = 0; i < count; i++)
-        metalbear_report_free(&reports[i]);
+    for (size_t i = 0; i < count; i++) metalbear_report_free(&reports[i]);
     free(reports);
 }

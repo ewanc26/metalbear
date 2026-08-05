@@ -50,7 +50,8 @@ static char *account_dir_for_did(const metalbear_config *config,
     if (!enc_did) return NULL;
     size_t root_len = strlen(config->data_directory);
     size_t enc_len = strlen(enc_did);
-    bool root_slash = root_len > 0 && config->data_directory[root_len - 1] == '/';
+    bool root_slash =
+        root_len > 0 && config->data_directory[root_len - 1] == '/';
     size_t n = root_len + (root_slash ? 0 : 1) + enc_len + 1;
     char *dir = malloc(n);
     if (dir)
@@ -68,11 +69,9 @@ static char *path_join(const char *dir, const char *name) {
     return p;
 }
 
-
 static const char *required_env(const char *name) {
     const char *value = getenv(name);
-    if (!value || !value[0])
-        LOG_ERROR("missing required %s", name);
+    if (!value || !value[0]) LOG_ERROR("missing required %s", name);
     return value;
 }
 
@@ -97,7 +96,8 @@ static int did_env_is_usable(const char *name, const char *value) {
         LOG_ERROR("%s is not a valid DID: %s", name, value);
         return 0;
     }
-    if (strncmp(value, "did:plc:", 8) == 0 && !wf_syntax_did_plc_is_valid(value)) {
+    if (strncmp(value, "did:plc:", 8) == 0 &&
+        !wf_syntax_did_plc_is_valid(value)) {
         fprintf(stderr,
                 "MetalBear [ERROR] %s is not a valid did:plc: %s\n"
                 "  A did:plc identifier is exactly 24 characters from the "
@@ -111,7 +111,8 @@ static int did_env_is_usable(const char *name, const char *value) {
 }
 
 static void print_usage(FILE *out, const char *argv0) {
-    fprintf(out,
+    fprintf(
+        out,
         "MetalBear %s — an AT Protocol Personal Data Server\n"
         "\n"
         "Usage: %s [options]\n"
@@ -120,8 +121,10 @@ static void print_usage(FILE *out, const char *argv0) {
         "  -h, --help      print this message and exit\n"
         "\n"
         "MetalBear is configured entirely through a config file and the\n"
-        "environment, not through flags. Settings are read from ./config.toml or\n"
-        "the path in METALBEAR_CONFIG, and every value can also be given as an\n"
+        "environment, not through flags. Settings are read from ./config.toml "
+        "or\n"
+        "the path in METALBEAR_CONFIG, and every value can also be given as "
+        "an\n"
         "environment variable, which overrides the file.\n"
         "\n"
         "METALBEAR_SERVICE_DID and METALBEAR_USER_DOMAIN are required. See\n"
@@ -175,7 +178,8 @@ int main(int argc, char **argv) {
      */
     metalbear_config_file *config_owner = NULL;
     const char *config_path = getenv("METALBEAR_CONFIG");
-    if (!config_path && access("config.toml", R_OK) == 0) config_path = "config.toml";
+    if (!config_path && access("config.toml", R_OK) == 0)
+        config_path = "config.toml";
 
     metalbear_config config = {
         .listen_address = "127.0.0.1",
@@ -207,66 +211,75 @@ int main(int argc, char **argv) {
                                        cfg_err, sizeof(cfg_err)) != WF_OK) {
             /* A config file that cannot be read is fatal: starting with
              * defaults would silently ignore what the operator asked for. */
-            LOG_ERROR("%s", cfg_err[0] ? cfg_err : "could not read config file");
+            LOG_ERROR("%s",
+                      cfg_err[0] ? cfg_err : "could not read config file");
             return 2;
         }
         LOG_INFO("loaded config from %s", config_path);
     }
 
-    /* Environment overrides the file, one setting at a time. */
-    #define ENV_STR(var, field) \
-        do { const char *v = getenv(var); if (v && v[0]) config.field = v; } while (0)
-    #define ENV_I64(var, field) \
-        do { const char *v = getenv(var); if (v && v[0]) { \
-                 char *e = NULL; long long n = strtoll(v, &e, 10); \
-                 if (e && !*e) config.field = (int64_t)n; } } while (0)
+/* Environment overrides the file, one setting at a time. */
+#define ENV_STR(var, field)                                                    \
+    do {                                                                       \
+        const char *v = getenv(var);                                           \
+        if (v && v[0]) config.field = v;                                       \
+    } while (0)
+#define ENV_I64(var, field)                                                    \
+    do {                                                                       \
+        const char *v = getenv(var);                                           \
+        if (v && v[0]) {                                                       \
+            char *e = NULL;                                                    \
+            long long n = strtoll(v, &e, 10);                                  \
+            if (e && !*e) config.field = (int64_t)n;                           \
+        }                                                                      \
+    } while (0)
 
-    ENV_STR("METALBEAR_LISTEN",            listen_address);
-    ENV_STR("METALBEAR_DATA",              data_directory);
-    ENV_STR("METALBEAR_SERVICE_DID",       service_did);
-    ENV_STR("METALBEAR_PUBLIC_URL",        public_url);
-    ENV_STR("METALBEAR_USER_DOMAIN",       user_domain);
-    ENV_STR("METALBEAR_PLC_ROTATION_KEY",  plc_rotation_key);
-    ENV_STR("METALBEAR_PLC_URL",           plc_url);
-    ENV_STR("METALBEAR_ADMIN_PASSWORD",    admin_password);
-    ENV_STR("METALBEAR_CRAWLERS",          crawlers);
-    ENV_STR("METALBEAR_APPVIEW_URL",       appview_url);
-    ENV_STR("METALBEAR_APPVIEW_DID",       appview_did);
-    ENV_STR("METALBEAR_LEXICON_DIR",       lexicon_dir);
-    ENV_STR("METALBEAR_ACCOUNT_EMAIL",     account_email);
-    ENV_STR("METALBEAR_OPERATOR_EMAIL",    operator_email);
-    ENV_STR("METALBEAR_OPERATOR_NAME",     operator_name);
-    ENV_STR("METALBEAR_OPERATOR_URL",      operator_url);
-    ENV_STR("METALBEAR_SUPPORT_URL",       support_url);
-    ENV_STR("METALBEAR_DESCRIPTION",       instance_description);
-    ENV_STR("METALBEAR_PRIVACY_POLICY",    privacy_policy_url);
-    ENV_STR("METALBEAR_TERMS_OF_SERVICE",  terms_of_service_url);
-    ENV_STR("METALBEAR_SMTP_HOST",         smtp_host);
-    ENV_STR("METALBEAR_SMTP_USERNAME",     smtp_username);
-    ENV_STR("METALBEAR_SMTP_PASSWORD",     smtp_password);
-    ENV_STR("METALBEAR_FROM_ADDRESS",      from_address);
-    ENV_STR("METALBEAR_FROM_NAME",         from_name);
-    ENV_STR("METALBEAR_DNS_PROVIDER",      dns_provider);
-    ENV_STR("METALBEAR_DNS_API_TOKEN",     dns_api_token);
-    ENV_STR("METALBEAR_DNS_ZONE_ID",       dns_zone_id);
-    ENV_STR("METALBEAR_DNS_SERVER",        dns_server);
+    ENV_STR("METALBEAR_LISTEN", listen_address);
+    ENV_STR("METALBEAR_DATA", data_directory);
+    ENV_STR("METALBEAR_SERVICE_DID", service_did);
+    ENV_STR("METALBEAR_PUBLIC_URL", public_url);
+    ENV_STR("METALBEAR_USER_DOMAIN", user_domain);
+    ENV_STR("METALBEAR_PLC_ROTATION_KEY", plc_rotation_key);
+    ENV_STR("METALBEAR_PLC_URL", plc_url);
+    ENV_STR("METALBEAR_ADMIN_PASSWORD", admin_password);
+    ENV_STR("METALBEAR_CRAWLERS", crawlers);
+    ENV_STR("METALBEAR_APPVIEW_URL", appview_url);
+    ENV_STR("METALBEAR_APPVIEW_DID", appview_did);
+    ENV_STR("METALBEAR_LEXICON_DIR", lexicon_dir);
+    ENV_STR("METALBEAR_ACCOUNT_EMAIL", account_email);
+    ENV_STR("METALBEAR_OPERATOR_EMAIL", operator_email);
+    ENV_STR("METALBEAR_OPERATOR_NAME", operator_name);
+    ENV_STR("METALBEAR_OPERATOR_URL", operator_url);
+    ENV_STR("METALBEAR_SUPPORT_URL", support_url);
+    ENV_STR("METALBEAR_DESCRIPTION", instance_description);
+    ENV_STR("METALBEAR_PRIVACY_POLICY", privacy_policy_url);
+    ENV_STR("METALBEAR_TERMS_OF_SERVICE", terms_of_service_url);
+    ENV_STR("METALBEAR_SMTP_HOST", smtp_host);
+    ENV_STR("METALBEAR_SMTP_USERNAME", smtp_username);
+    ENV_STR("METALBEAR_SMTP_PASSWORD", smtp_password);
+    ENV_STR("METALBEAR_FROM_ADDRESS", from_address);
+    ENV_STR("METALBEAR_FROM_NAME", from_name);
+    ENV_STR("METALBEAR_DNS_PROVIDER", dns_provider);
+    ENV_STR("METALBEAR_DNS_API_TOKEN", dns_api_token);
+    ENV_STR("METALBEAR_DNS_ZONE_ID", dns_zone_id);
+    ENV_STR("METALBEAR_DNS_SERVER", dns_server);
 
-    ENV_I64("METALBEAR_RATE_LIMIT",              rate_limit);
-    ENV_I64("METALBEAR_RATE_LIMIT_WINDOW",       rate_limit_window);
-    ENV_I64("METALBEAR_BLOB_UPLOAD_LIMIT",       blob_upload_limit);
-    ENV_I64("METALBEAR_MAX_IMPORT_SIZE",         max_import_size);
-    ENV_I64("METALBEAR_DID_CACHE_TTL",           did_cache_ttl_seconds);
-    ENV_I64("METALBEAR_DID_CACHE_ENTRIES",       did_cache_entries);
-    ENV_I64("METALBEAR_CRAWL_NOTIFY_SECONDS",    crawl_notify_seconds);
-    ENV_I64("METALBEAR_FIREHOSE_PING_SECONDS",   firehose_ping_seconds);
-    ENV_I64("METALBEAR_RETENTION_MAX_AGE",       retention_max_age_seconds);
-    ENV_I64("METALBEAR_RETENTION_MIN_EVENTS",    retention_min_events);
-    ENV_I64("METALBEAR_DNS_TTL",                 dns_record_ttl);
-    ENV_I64("METALBEAR_UPDATE_CHECK_INTERVAL",   update_check_interval);
-    ENV_STR("METALBEAR_UPDATE_METALBEAR_REPO",   update_metalbear_repo);
-    ENV_STR("METALBEAR_UPDATE_WOLFRAM_REPO",     update_wolfram_repo);
-    #undef ENV_STR
-    #undef ENV_I64
+    ENV_I64("METALBEAR_RATE_LIMIT", rate_limit);
+    ENV_I64("METALBEAR_RATE_LIMIT_WINDOW", rate_limit_window);
+    ENV_I64("METALBEAR_BLOB_UPLOAD_LIMIT", blob_upload_limit);
+    ENV_I64("METALBEAR_MAX_IMPORT_SIZE", max_import_size);
+    ENV_I64("METALBEAR_DID_CACHE_TTL", did_cache_ttl_seconds);
+    ENV_I64("METALBEAR_DID_CACHE_ENTRIES", did_cache_entries);
+    ENV_I64("METALBEAR_CRAWL_NOTIFY_SECONDS", crawl_notify_seconds);
+    ENV_I64("METALBEAR_FIREHOSE_PING_SECONDS", firehose_ping_seconds);
+    ENV_I64("METALBEAR_RETENTION_MAX_AGE", retention_max_age_seconds);
+    ENV_I64("METALBEAR_RETENTION_MIN_EVENTS", retention_min_events);
+    ENV_I64("METALBEAR_DNS_TTL", dns_record_ttl);
+    ENV_I64("METALBEAR_UPDATE_CHECK_INTERVAL", update_check_interval);
+    ENV_STR("METALBEAR_UPDATE_METALBEAR_REPO", update_metalbear_repo);
+    ENV_STR("METALBEAR_UPDATE_WOLFRAM_REPO", update_wolfram_repo);
+#undef ENV_STR
+#undef ENV_I64
 
     /* Only an explicitly set METALBEAR_PORT overrides the file; the parsed
      * default would otherwise silently win over a configured port. */
@@ -284,7 +297,8 @@ int main(int argc, char **argv) {
     {
         const char *v = getenv("METALBEAR_THREADS");
         if (v && v[0]) {
-            char *e = NULL; long n = strtol(v, &e, 10);
+            char *e = NULL;
+            long n = strtol(v, &e, 10);
             if (e && !*e && n > 0) config.thread_count = (unsigned int)n;
         }
     }
@@ -303,11 +317,12 @@ int main(int argc, char **argv) {
 
     const char *invite_required_text = getenv("METALBEAR_INVITE_REQUIRED");
     if (invite_required_text && (strcmp(invite_required_text, "0") == 0 ||
-                          strcmp(invite_required_text, "false") == 0))
+                                 strcmp(invite_required_text, "false") == 0))
         config.invite_required = false;
     const char *accepting_imports_text = getenv("METALBEAR_ACCEPTING_IMPORTS");
-    if (accepting_imports_text && (strcmp(accepting_imports_text, "0") == 0 ||
-                          strcmp(accepting_imports_text, "false") == 0))
+    if (accepting_imports_text &&
+        (strcmp(accepting_imports_text, "0") == 0 ||
+         strcmp(accepting_imports_text, "false") == 0))
         config.accepting_imports = false;
     const char *rate_text = getenv("METALBEAR_RATE_LIMIT");
     if (rate_text && rate_text[0]) {
@@ -325,18 +340,15 @@ int main(int argc, char **argv) {
     if (blob_limit_text && blob_limit_text[0]) {
         char *end = NULL;
         unsigned long long lim = strtoull(blob_limit_text, &end, 10);
-        if (end && !*end)
-            config.blob_upload_limit = (int64_t)lim;
+        if (end && !*end) config.blob_upload_limit = (int64_t)lim;
     }
     const char *smtp_port_text = getenv("METALBEAR_SMTP_PORT");
     if (smtp_port_text && smtp_port_text[0]) {
         char *end = NULL;
         unsigned long p = strtoul(smtp_port_text, &end, 10);
-        if (end && !*end && p <= 65535)
-            config.smtp_port = (uint16_t)p;
+        if (end && !*end && p <= 65535) config.smtp_port = (uint16_t)p;
     }
-    if (!config.service_did || !config.user_domain)
-        return 2;
+    if (!config.service_did || !config.user_domain) return 2;
 
     metalbear_server *server = metalbear_server_start(&config);
     if (!server) {

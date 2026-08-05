@@ -25,38 +25,37 @@ static const struct {
     const char *name;
     const char *help;
 } descriptions[METALBEAR_METRIC_COUNT] = {
-    [METALBEAR_METRIC_REQUESTS] =
-        { "requests_total", "Requests served." },
-    [METALBEAR_METRIC_REQUESTS_FAILED] =
-        { "requests_failed_total", "Requests that answered 4xx or 5xx." },
+    [METALBEAR_METRIC_REQUESTS] = {"requests_total", "Requests served."},
+    [METALBEAR_METRIC_REQUESTS_FAILED] = {"requests_failed_total",
+                                          "Requests that answered 4xx or 5xx."},
     [METALBEAR_METRIC_AUTH_REFUSED] =
-        { "auth_refused_total",
-          "Requests refused by the authentication callback." },
-    [METALBEAR_METRIC_ACCOUNTS_CREATED] =
-        { "accounts_created_total", "Accounts created on this host." },
-    [METALBEAR_METRIC_ACCOUNTS_DELETED] =
-        { "accounts_deleted_total", "Accounts deleted from this host." },
-    [METALBEAR_METRIC_SESSIONS_CREATED] =
-        { "sessions_created_total", "Sessions issued." },
-    [METALBEAR_METRIC_LOGIN_FAILURES] =
-        { "login_failures_total", "Logins refused." },
+        {"auth_refused_total",
+         "Requests refused by the authentication callback."},
+    [METALBEAR_METRIC_ACCOUNTS_CREATED] = {"accounts_created_total",
+                                           "Accounts created on this host."},
+    [METALBEAR_METRIC_ACCOUNTS_DELETED] = {"accounts_deleted_total",
+                                           "Accounts deleted from this host."},
+    [METALBEAR_METRIC_SESSIONS_CREATED] = {"sessions_created_total",
+                                           "Sessions issued."},
+    [METALBEAR_METRIC_LOGIN_FAILURES] = {"login_failures_total",
+                                         "Logins refused."},
     [METALBEAR_METRIC_COMMITS_SEQUENCED] =
-        { "commits_sequenced_total",
-          "Signed repository commits published to the firehose." },
-    [METALBEAR_METRIC_BLOBS_UPLOADED] =
-        { "blobs_uploaded_total", "Blobs stored." },
-    [METALBEAR_METRIC_TAKEDOWNS_APPLIED] =
-        { "takedowns_applied_total", "Takedowns applied to a subject." },
+        {"commits_sequenced_total",
+         "Signed repository commits published to the firehose."},
+    [METALBEAR_METRIC_BLOBS_UPLOADED] = {"blobs_uploaded_total",
+                                         "Blobs stored."},
+    [METALBEAR_METRIC_TAKEDOWNS_APPLIED] = {"takedowns_applied_total",
+                                            "Takedowns applied to a subject."},
     [METALBEAR_METRIC_FIREHOSE_SUBSCRIBES] =
-        { "firehose_subscribes_total",
-          "Firehose subscribers that have connected." },
+        {"firehose_subscribes_total",
+         "Firehose subscribers that have connected."},
     [METALBEAR_METRIC_FIREHOSE_DISCONNECTS] =
-        { "firehose_disconnects_total",
-          "Firehose subscribers that have disconnected." },
+        {"firehose_disconnects_total",
+         "Firehose subscribers that have disconnected."},
     [METALBEAR_METRIC_DNS_FAILURES] =
-        { "dns_failures_total", "Handle DNS records that could not be written." },
+        {"dns_failures_total", "Handle DNS records that could not be written."},
     [METALBEAR_METRIC_CRAWL_FAILURES] =
-        { "crawl_failures_total", "requestCrawl announcements that failed." },
+        {"crawl_failures_total", "requestCrawl announcements that failed."},
 };
 
 void metalbear_metrics_inc(metalbear_metric metric) {
@@ -78,7 +77,6 @@ const char *metalbear_metric_help(metalbear_metric metric) {
     if (metric < 0 || metric >= METALBEAR_METRIC_COUNT) return NULL;
     return descriptions[metric].help;
 }
-
 
 /* ------------------------------------------------------------------ */
 /* Per-route accounting                                                */

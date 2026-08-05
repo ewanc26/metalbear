@@ -5,9 +5,10 @@
  * Routes:
  *   com.atproto.repo.uploadBlob (procedure): the request body IS the raw blob
  *     bytes with a Content-Type; the handler computes the raw multicodec CID,
- *     stores it, and returns { blob: { $type, mimeType, ref: {"$link": cid}, size } }.
- *   com.atproto.sync.getBlob (query): reads `did` (ignored) and `cid` params,
- *     looks the blob up, and returns the raw bytes with the stored Content-Type.
+ *     stores it, and returns { blob: { $type, mimeType, ref: {"$link": cid},
+ * size } }. com.atproto.sync.getBlob (query): reads `did` (ignored) and `cid`
+ * params, looks the blob up, and returns the raw bytes with the stored
+ * Content-Type.
  */
 
 #include "metalbear/blob_store.h"
@@ -40,8 +41,8 @@ typedef struct metalbear_pds_repo_bundle {
  * When no resolver is set the single fallback store is returned.
  */
 static metalbear_blob_store *resolve_blobs(metalbear_pds_repo_bundle *b,
-                                    const wf_xrpc_request *req,
-                                    wf_xrpc_response *resp) {
+                                           const wf_xrpc_request *req,
+                                           wf_xrpc_response *resp) {
     metalbear_blob_store *blobs = b->fallback_blobs;
     if (b->resolver) {
         metalbear_repo_store *out_repo = NULL;
@@ -49,7 +50,7 @@ static metalbear_blob_store *resolve_blobs(metalbear_pds_repo_bundle *b,
         if (b->resolver(b->resolver_ctx, req, &out_repo, &out_blobs) != WF_OK ||
             !out_blobs) {
             wf_xrpc_response_set_error(resp, 400, "AccountNotFound",
-                                        "Account is not hosted here");
+                                       "Account is not hosted here");
             return NULL;
         }
         blobs = out_blobs;
@@ -61,8 +62,10 @@ static metalbear_blob_store *resolve_blobs(metalbear_pds_repo_bundle *b,
 static char *bs_json_escape(const char *s) {
     size_t need = 0;
     for (const char *p = s; p && *p; p++) {
-        if (*p == '"' || *p == '\\') need += 2;
-        else need += 1;
+        if (*p == '"' || *p == '\\')
+            need += 2;
+        else
+            need += 1;
     }
     char *out = (char *)malloc(need + 1);
     if (!out) return NULL;
@@ -76,13 +79,14 @@ static char *bs_json_escape(const char *s) {
 }
 
 static wf_status blob_upload_handler(void *ctx, const wf_xrpc_request *req,
-                                       wf_xrpc_response *resp) {
-    metalbear_blob_store *store = resolve_blobs((metalbear_pds_repo_bundle *)ctx, req, resp);
+                                     wf_xrpc_response *resp) {
+    metalbear_blob_store *store =
+        resolve_blobs((metalbear_pds_repo_bundle *)ctx, req, resp);
     if (!store) return WF_OK;
 
     if (!req->body || req->body_len == 0) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "blob body is empty");
+                                   "blob body is empty");
         return WF_OK;
     }
 
@@ -95,21 +99,21 @@ static wf_status blob_upload_handler(void *ctx, const wf_xrpc_request *req,
     wf_cid cid;
     if (wf_cid_of_bytes(req->body, req->body_len, &cid) != WF_OK) {
         wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                    "failed to compute blob CID");
+                                   "failed to compute blob CID");
         return WF_OK;
     }
     char *cid_str = wf_cid_to_string(&cid);
     if (!cid_str) {
         wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                    "failed to encode blob CID");
+                                   "failed to encode blob CID");
         return WF_OK;
     }
 
     if (metalbear_blob_store_put(store, cid_str, mime, req->body,
-                           req->body_len) != WF_OK) {
+                                 req->body_len) != WF_OK) {
         free(cid_str);
         wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                    "failed to store blob");
+                                   "failed to store blob");
         return WF_OK;
     }
 
@@ -117,21 +121,22 @@ static wf_status blob_upload_handler(void *ctx, const wf_xrpc_request *req,
     if (!esc_mime) {
         free(cid_str);
         wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                    "failed to build response");
+                                   "failed to build response");
         return WF_OK;
     }
 
     /* TypedBlobRef shape per the com.atproto.repo.uploadBlob output schema. */
     char *json = (char *)malloc(strlen(cid_str) + strlen(esc_mime) + 128);
     if (!json) {
-        free(cid_str); free(esc_mime);
+        free(cid_str);
+        free(esc_mime);
         wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                    "failed to build response");
+                                   "failed to build response");
         return WF_OK;
     }
     snprintf(json, strlen(cid_str) + strlen(esc_mime) + 128,
-              "{\"blob\":{\"$type\":\"blob\",\"mimeType\":\"%s\","
-              "\"ref\":{\"$link\":\"%s\"},\"size\":%zu}}",
+             "{\"blob\":{\"$type\":\"blob\",\"mimeType\":\"%s\","
+             "\"ref\":{\"$link\":\"%s\"},\"size\":%zu}}",
              esc_mime, cid_str, req->body_len);
 
     wf_xrpc_response_set_body(resp, json, strlen(json));
@@ -142,8 +147,9 @@ static wf_status blob_upload_handler(void *ctx, const wf_xrpc_request *req,
 }
 
 static wf_status blob_get_handler(void *ctx, const wf_xrpc_request *req,
-                                    wf_xrpc_response *resp) {
-    metalbear_blob_store *store = resolve_blobs((metalbear_pds_repo_bundle *)ctx, req, resp);
+                                  wf_xrpc_response *resp) {
+    metalbear_blob_store *store =
+        resolve_blobs((metalbear_pds_repo_bundle *)ctx, req, resp);
     if (!store) return WF_OK;
 
     cJSON *cid = req->params
@@ -151,21 +157,22 @@ static wf_status blob_get_handler(void *ctx, const wf_xrpc_request *req,
                      : NULL;
     if (!cJSON_IsString(cid) || !cid->valuestring || !*cid->valuestring) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "missing or invalid 'cid' parameter");
+                                   "missing or invalid 'cid' parameter");
         return WF_OK;
     }
 
     unsigned char *data = NULL;
     size_t len = 0;
     char *mime = NULL;
-    wf_status s = metalbear_blob_store_get(store, cid->valuestring, &data, &len, &mime);
+    wf_status s =
+        metalbear_blob_store_get(store, cid->valuestring, &data, &len, &mime);
     if (s == WF_ERR_NOT_FOUND) {
         wf_xrpc_response_set_error(resp, 404, "BlobNotFound",
-                                    "no blob stored for the given CID");
+                                   "no blob stored for the given CID");
         return WF_OK;
     } else if (s != WF_OK) {
         wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                    "failed to read blob store");
+                                   "failed to read blob store");
         return WF_OK;
     }
 
@@ -177,15 +184,17 @@ static wf_status blob_get_handler(void *ctx, const wf_xrpc_request *req,
     return WF_OK;
 }
 
-wf_status metalbear_xrpc_server_register_blob_store(wf_xrpc_server *server,
-                                              metalbear_blob_store *store) {
+wf_status
+metalbear_xrpc_server_register_blob_store(wf_xrpc_server *server,
+                                          metalbear_blob_store *store) {
     if (!server || !store) {
         return WF_ERR_INVALID_ARG;
     }
     /* Single-store path: build a resolver-less bundle that always serves
      * `store`. The server owns the bundle and frees it on
      * wf_xrpc_server_free, preserving the caller-owned `store` contract. */
-    metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
+    metalbear_pds_repo_bundle *b =
+        (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
     if (!b) return WF_ERR_ALLOC;
     *b = (metalbear_pds_repo_bundle){0};
     b->fallback_blobs = store;
@@ -193,14 +202,15 @@ wf_status metalbear_xrpc_server_register_blob_store(wf_xrpc_server *server,
     wf_status s = wf_xrpc_server_register_procedure(
         server, "com.atproto.repo.uploadBlob", blob_upload_handler, b);
     if (s != WF_OK) return s;
-    return wf_xrpc_server_register_query(
-        server, "com.atproto.sync.getBlob", blob_get_handler, b);
+    return wf_xrpc_server_register_query(server, "com.atproto.sync.getBlob",
+                                         blob_get_handler, b);
 }
 
 wf_status metalbear_xrpc_server_register_blob_store_resolver(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx) {
     if (!server) return WF_ERR_INVALID_ARG;
-    metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
+    metalbear_pds_repo_bundle *b =
+        (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
     if (!b) return WF_ERR_ALLOC;
     *b = (metalbear_pds_repo_bundle){0};
     b->resolver = resolver;
@@ -209,6 +219,6 @@ wf_status metalbear_xrpc_server_register_blob_store_resolver(
     wf_status s = wf_xrpc_server_register_procedure(
         server, "com.atproto.repo.uploadBlob", blob_upload_handler, b);
     if (s != WF_OK) return s;
-    return wf_xrpc_server_register_query(
-        server, "com.atproto.sync.getBlob", blob_get_handler, b);
+    return wf_xrpc_server_register_query(server, "com.atproto.sync.getBlob",
+                                         blob_get_handler, b);
 }

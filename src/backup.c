@@ -42,8 +42,7 @@ static wf_status write_file_entry(FILE *backup_file, const char *path,
     if (stat(path, &st) != 0) return WF_ERR_NOT_FOUND;
     const char *rel = path;
     size_t base_len = strlen(base_dir);
-    if (strncmp(path, base_dir, base_len) == 0)
-        rel = path + base_len;
+    if (strncmp(path, base_dir, base_len) == 0) rel = path + base_len;
     backup_file_entry entry = {0};
     strncpy(entry.path, rel, MAX_PATH_LENGTH - 1);
     entry.path[MAX_PATH_LENGTH - 1] = '\0';
@@ -78,8 +77,7 @@ static wf_status collect_files(const char *directory, const char *base_dir,
     if (!dir) return WF_ERR_NOT_FOUND;
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 ||
-            strcmp(entry->d_name, "..") == 0)
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
         char full_path[MAX_PATH_LENGTH];
         snprintf(full_path, sizeof(full_path), "%s/%s", directory,
@@ -126,8 +124,7 @@ wf_status metalbear_backup_create(const char *data_directory,
     if (status != WF_OK) return status;
     FILE *backup_file = fopen(output_path, "wb");
     if (!backup_file) {
-        for (size_t i = 0; i < file_count; i++)
-            free(files[i]);
+        for (size_t i = 0; i < file_count; i++) free(files[i]);
         free(files);
         return WF_ERR_INTERNAL;
     }
@@ -136,8 +133,7 @@ wf_status metalbear_backup_create(const char *data_directory,
     header.file_count = (uint32_t)file_count;
     if (fwrite(&header, sizeof(header), 1, backup_file) != 1) {
         fclose(backup_file);
-        for (size_t i = 0; i < file_count; i++)
-            free(files[i]);
+        for (size_t i = 0; i < file_count; i++) free(files[i]);
         free(files);
         return WF_ERR_INTERNAL;
     }
@@ -145,15 +141,13 @@ wf_status metalbear_backup_create(const char *data_directory,
         status = write_file_entry(backup_file, files[i], data_directory);
         if (status != WF_OK) {
             fclose(backup_file);
-            for (size_t j = 0; j < file_count; j++)
-                free(files[j]);
+            for (size_t j = 0; j < file_count; j++) free(files[j]);
             free(files);
             return status;
         }
     }
     fclose(backup_file);
-    for (size_t i = 0; i < file_count; i++)
-        free(files[i]);
+    for (size_t i = 0; i < file_count; i++) free(files[i]);
     free(files);
     return WF_OK;
 }

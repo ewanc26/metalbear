@@ -127,8 +127,8 @@ static void set_error(metalbear_handle_dns *dns, const char *fmt, ...) {
  * what a failure looks like.
  */
 static cJSON *http_call(metalbear_handle_dns *dns, const char *method,
-                        const char *url, const char *body,
-                        long *out_status, bool *out_ok) {
+                        const char *url, const char *body, long *out_status,
+                        bool *out_ok) {
     *out_status = 0;
     *out_ok = false;
     CURL *curl = curl_easy_init();
@@ -442,8 +442,8 @@ static wf_status desec_subname(metalbear_handle_dns *dns, const char *name,
     return WF_OK;
 }
 
-static bool desec_ok(metalbear_handle_dns *dns, const char *method,
-                     long status, cJSON *doc) {
+static bool desec_ok(metalbear_handle_dns *dns, const char *method, long status,
+                     cJSON *doc) {
     if (status >= 200 && status < 300) return true;
     const char *detail = NULL;
     cJSON *msg = doc ? cJSON_GetObjectItemCaseSensitive(doc, "detail") : NULL;
@@ -580,9 +580,8 @@ static wf_status rfc2136_lookup(metalbear_handle_dns *dns, const char *name,
     char value[512];
     bool found = false;
     char error[256] = "";
-    wf_status st = metalbear_rfc2136_query_txt(&config, name, value,
-                                               sizeof(value), &found,
-                                               error, sizeof(error));
+    wf_status st = metalbear_rfc2136_query_txt(
+        &config, name, value, sizeof(value), &found, error, sizeof(error));
     if (st != WF_OK) {
         set_error(dns, "%s", error[0] ? error : "query failed");
         return st;
@@ -590,7 +589,8 @@ static wf_status rfc2136_lookup(metalbear_handle_dns *dns, const char *name,
     if (found) {
         out->found = true;
         /* The wire form carries no quotes, so nothing to strip — but it goes
-         * through the same helper so every provider's content compares alike. */
+         * through the same helper so every provider's content compares alike.
+         */
         out->content = unquote(value);
         if (!out->content) return WF_ERR_ALLOC;
     }
@@ -600,13 +600,12 @@ static wf_status rfc2136_lookup(metalbear_handle_dns *dns, const char *name,
 static wf_status rfc2136_publish(metalbear_handle_dns *dns, const char *name,
                                  const char *content,
                                  const dns_record *existing) {
-    (void)existing;   /* one message deletes the RRset and adds the new value */
+    (void)existing; /* one message deletes the RRset and adds the new value */
     metalbear_rfc2136_config config;
     rfc2136_config(dns, &config);
     char error[256] = "";
     wf_status st = metalbear_rfc2136_update_txt(&config, name, content,
-                                                dns->ttl, error,
-                                                sizeof(error));
+                                                dns->ttl, error, sizeof(error));
     if (st != WF_OK) set_error(dns, "%s", error[0] ? error : "update failed");
     return st;
 }
@@ -642,10 +641,10 @@ static bool parse_tsig_credential(metalbear_handle_dns *dns,
 
     const char *b64 = colon + 1;
     size_t b64_len = strlen(b64);
-    dns->key_secret = malloc(b64_len);      /* decoded is always shorter */
+    dns->key_secret = malloc(b64_len); /* decoded is always shorter */
     if (!dns->key_secret) return false;
-    int decoded = EVP_DecodeBlock(dns->key_secret,
-                                  (const unsigned char *)b64, (int)b64_len);
+    int decoded = EVP_DecodeBlock(dns->key_secret, (const unsigned char *)b64,
+                                  (int)b64_len);
     if (decoded <= 0) return false;
     /* EVP_DecodeBlock pads to a multiple of three and counts the padding, so
      * the trailing '=' have to be subtracted back off. A secret one byte too
@@ -676,31 +675,29 @@ static bool parse_server(metalbear_handle_dns *dns, const char *server) {
 /* ------------------------------------------------------------------ */
 
 static const dns_provider providers[] = {
-    { "cloudflare", "https://api.cloudflare.com/client/v4", "Bearer", 60,
-      cf_lookup, cf_publish, cf_retract },
-    { "digitalocean", "https://api.digitalocean.com/v2", "Bearer", 30,
-      do_lookup, do_publish, do_retract },
+    {"cloudflare", "https://api.cloudflare.com/client/v4", "Bearer", 60,
+     cf_lookup, cf_publish, cf_retract},
+    {"digitalocean", "https://api.digitalocean.com/v2", "Bearer", 30, do_lookup,
+     do_publish, do_retract},
     /* deSEC refuses anything under an hour, and rejecting the write is worse
      * than serving a handle change slowly. */
-    { "desec", "https://desec.io/api/v1", "Token", 3600,
-      desec_lookup, desec_publish, desec_retract },
+    {"desec", "https://desec.io/api/v1", "Token", 3600, desec_lookup,
+     desec_publish, desec_retract},
     /* No API base and no auth scheme: this one is not HTTP. */
-    { "rfc2136", "", "", 1,
-      rfc2136_lookup, rfc2136_publish, rfc2136_retract },
+    {"rfc2136", "", "", 1, rfc2136_lookup, rfc2136_publish, rfc2136_retract},
 };
 
 wf_status metalbear_handle_dns_open(const char *provider, const char *api_token,
                                     const char *zone_id, int ttl,
                                     metalbear_handle_dns **out) {
-    return metalbear_handle_dns_open_ex(provider, api_token, zone_id, NULL,
-                                        ttl, out);
+    return metalbear_handle_dns_open_ex(provider, api_token, zone_id, NULL, ttl,
+                                        out);
 }
 
 wf_status metalbear_handle_dns_open_ex(const char *provider,
                                        const char *api_token,
-                                       const char *zone_id,
-                                       const char *server, int ttl,
-                                       metalbear_handle_dns **out) {
+                                       const char *zone_id, const char *server,
+                                       int ttl, metalbear_handle_dns **out) {
     if (!out) return WF_ERR_INVALID_ARG;
     *out = NULL;
 
@@ -740,8 +737,7 @@ wf_status metalbear_handle_dns_open_ex(const char *provider,
      * when every handle shows as handle.invalid.
      */
     if (strcmp(chosen->name, "rfc2136") == 0) {
-        if (!server || !server[0] ||
-            !parse_server(dns, server) ||
+        if (!server || !server[0] || !parse_server(dns, server) ||
             !parse_tsig_credential(dns, api_token)) {
             metalbear_handle_dns_free(dns);
             return WF_ERR_INVALID_ARG;

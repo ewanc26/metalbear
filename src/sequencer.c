@@ -52,8 +52,8 @@ static void timestamp_now(char out[64]) {
     clock_gettime(CLOCK_REALTIME, &ts);
     gmtime_r(&ts.tv_sec, &utc);
     snprintf(out, 64, "%04d-%02d-%02dT%02d:%02d:%02d.%03ldZ",
-             utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
-             utc.tm_hour, utc.tm_min, utc.tm_sec, ts.tv_nsec / 1000000L);
+             utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour,
+             utc.tm_min, utc.tm_sec, ts.tv_nsec / 1000000L);
 }
 
 static int64_t current_locked(metalbear_sequencer *s) {
@@ -91,8 +91,8 @@ static int64_t pruned_through(metalbear_sequencer *s) {
     if (!s) return 0;
     pthread_mutex_lock(&s->mutex);
     if (sqlite3_prepare_v2(s->db,
-            "SELECT value FROM meta WHERE key='pruned_through';",
-            -1, &stmt, NULL) == SQLITE_OK &&
+                           "SELECT value FROM meta WHERE key='pruned_through';",
+                           -1, &stmt, NULL) == SQLITE_OK &&
         sqlite3_step(stmt) == SQLITE_ROW) {
         pruned = sqlite3_column_int64(stmt, 0);
     }
@@ -109,11 +109,16 @@ static int64_t pruned_through(metalbear_sequencer *s) {
  */
 static const char *event_did(const wf_subscribe_event *event) {
     switch (event->type) {
-    case WF_SUBSCRIBE_EVENT_COMMIT:   return event->data.commit.did;
-    case WF_SUBSCRIBE_EVENT_SYNC:     return event->data.sync.did;
-    case WF_SUBSCRIBE_EVENT_IDENTITY: return event->data.identity.did;
-    case WF_SUBSCRIBE_EVENT_ACCOUNT:  return event->data.account.did;
-    default:                          return NULL;
+        case WF_SUBSCRIBE_EVENT_COMMIT:
+            return event->data.commit.did;
+        case WF_SUBSCRIBE_EVENT_SYNC:
+            return event->data.sync.did;
+        case WF_SUBSCRIBE_EVENT_IDENTITY:
+            return event->data.identity.did;
+        case WF_SUBSCRIBE_EVENT_ACCOUNT:
+            return event->data.account.did;
+        default:
+            return NULL;
     }
 }
 
@@ -124,13 +129,13 @@ static wf_status append_event(metalbear_sequencer *s,
     size_t frame_len = 0;
     wf_status status = WF_ERR_INTERNAL;
     pthread_mutex_lock(&s->mutex);
-    if (s->closing || sqlite3_exec(s->db, "BEGIN IMMEDIATE;", NULL, NULL,
-                                   NULL) != SQLITE_OK)
+    if (s->closing ||
+        sqlite3_exec(s->db, "BEGIN IMMEDIATE;", NULL, NULL, NULL) != SQLITE_OK)
         goto done;
     if (sqlite3_prepare_v2(s->db,
-            "INSERT INTO events(frame,created_at,did) "
-            "VALUES(zeroblob(0),?,?);",
-            -1, &stmt, NULL) != SQLITE_OK)
+                           "INSERT INTO events(frame,created_at,did) "
+                           "VALUES(zeroblob(0),?,?);",
+                           -1, &stmt, NULL) != SQLITE_OK)
         goto rollback;
     char now[64];
     timestamp_now(now);
@@ -146,33 +151,33 @@ static wf_status append_event(metalbear_sequencer *s,
 
     event->seq = sqlite3_last_insert_rowid(s->db);
     switch (event->type) {
-    case WF_SUBSCRIBE_EVENT_COMMIT:
-        event->data.commit.seq = event->seq;
-        snprintf(event->data.commit.time, sizeof(event->data.commit.time),
-                 "%s", now);
-        break;
-    case WF_SUBSCRIBE_EVENT_SYNC:
-        event->data.sync.seq = event->seq;
-        snprintf(event->data.sync.time, sizeof(event->data.sync.time),
-                 "%s", now);
-        break;
-    case WF_SUBSCRIBE_EVENT_IDENTITY:
-        event->data.identity.seq = event->seq;
-        snprintf(event->data.identity.time, sizeof(event->data.identity.time),
-                 "%s", now);
-        break;
-    case WF_SUBSCRIBE_EVENT_ACCOUNT:
-        event->data.account.seq = event->seq;
-        snprintf(event->data.account.time, sizeof(event->data.account.time),
-                 "%s", now);
-        break;
-    default:
-        goto rollback;
+        case WF_SUBSCRIBE_EVENT_COMMIT:
+            event->data.commit.seq = event->seq;
+            snprintf(event->data.commit.time, sizeof(event->data.commit.time),
+                     "%s", now);
+            break;
+        case WF_SUBSCRIBE_EVENT_SYNC:
+            event->data.sync.seq = event->seq;
+            snprintf(event->data.sync.time, sizeof(event->data.sync.time), "%s",
+                     now);
+            break;
+        case WF_SUBSCRIBE_EVENT_IDENTITY:
+            event->data.identity.seq = event->seq;
+            snprintf(event->data.identity.time,
+                     sizeof(event->data.identity.time), "%s", now);
+            break;
+        case WF_SUBSCRIBE_EVENT_ACCOUNT:
+            event->data.account.seq = event->seq;
+            snprintf(event->data.account.time, sizeof(event->data.account.time),
+                     "%s", now);
+            break;
+        default:
+            goto rollback;
     }
     status = wf_sync_publish_event(event, &frame, &frame_len);
     if (status != WF_OK) goto rollback;
-    if (sqlite3_prepare_v2(s->db, "UPDATE events SET frame=? WHERE seq=?;",
-                           -1, &stmt, NULL) != SQLITE_OK)
+    if (sqlite3_prepare_v2(s->db, "UPDATE events SET frame=? WHERE seq=?;", -1,
+                           &stmt, NULL) != SQLITE_OK)
         goto rollback;
     sqlite3_bind_blob(stmt, 1, frame, (int)frame_len, SQLITE_TRANSIENT);
     sqlite3_bind_int64(stmt, 2, event->seq);
@@ -211,12 +216,11 @@ wf_status metalbear_sequencer_account_status(metalbear_sequencer *s,
                                              const char *status_text) {
     if (!s || !did) return WF_ERR_INVALID_ARG;
     wf_subscribe_event event = {.type = WF_SUBSCRIBE_EVENT_ACCOUNT};
-    snprintf(event.data.account.did, sizeof(event.data.account.did), "%s",
-             did);
+    snprintf(event.data.account.did, sizeof(event.data.account.did), "%s", did);
     event.data.account.active = active ? 1 : 0;
     if (status_text && status_text[0]) {
-        snprintf(event.data.account.status,
-                 sizeof(event.data.account.status), "%s", status_text);
+        snprintf(event.data.account.status, sizeof(event.data.account.status),
+                 "%s", status_text);
         event.data.account.has_status = 1;
     }
     return append_event(s, &event);
@@ -234,9 +238,10 @@ wf_status metalbear_sequencer_identity(metalbear_sequencer *s, const char *did,
     return append_event(s, &identity);
 }
 
-wf_status metalbear_sequencer_account_activation(
-        metalbear_sequencer *s, const char *did, const char *handle,
-        metalbear_repo_store *repo) {
+wf_status metalbear_sequencer_account_activation(metalbear_sequencer *s,
+                                                 const char *did,
+                                                 const char *handle,
+                                                 metalbear_repo_store *repo) {
     if (!s || !did || !handle || !repo) return WF_ERR_INVALID_ARG;
     wf_status status = metalbear_sequencer_identity(s, did, handle);
     if (status != WF_OK) return status;
@@ -308,18 +313,21 @@ static wf_status seed_sequence_floor(metalbear_sequencer *s) {
      */
     stmt = NULL;
     if (sqlite3_prepare_v2(s->db,
-            "INSERT INTO events(seq,frame,created_at) VALUES(?,zeroblob(0),'');",
-            -1, &stmt, NULL) != SQLITE_OK) {
+                           "INSERT INTO events(seq,frame,created_at) "
+                           "VALUES(?,zeroblob(0),'');",
+                           -1, &stmt, NULL) != SQLITE_OK) {
         sqlite3_finalize(stmt);
-        return WF_OK;   /* not fatal: a sequence from 1 still works */
+        return WF_OK; /* not fatal: a sequence from 1 still works */
     }
     sqlite3_bind_int64(stmt, 1, floor_seq);
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     if (rc != SQLITE_DONE) return WF_OK;
 
-    sqlite3_exec(s->db, "DELETE FROM events WHERE frame = zeroblob(0)"
-                        " AND created_at = '';", NULL, NULL, NULL);
+    sqlite3_exec(s->db,
+                 "DELETE FROM events WHERE frame = zeroblob(0)"
+                 " AND created_at = '';",
+                 NULL, NULL, NULL);
     return WF_OK;
 }
 
@@ -346,9 +354,10 @@ static wf_status add_did_column(metalbear_sequencer *s) {
     }
     sqlite3_finalize(stmt);
     if (present) return WF_OK;
-    return sqlite3_exec(s->db, "ALTER TABLE events ADD COLUMN did TEXT;",
-                        NULL, NULL, NULL) == SQLITE_OK
-        ? WF_OK : WF_ERR_INTERNAL;
+    return sqlite3_exec(s->db, "ALTER TABLE events ADD COLUMN did TEXT;", NULL,
+                        NULL, NULL) == SQLITE_OK
+               ? WF_OK
+               : WF_ERR_INTERNAL;
 }
 
 wf_status metalbear_sequencer_open(const char *path,
@@ -367,7 +376,8 @@ wf_status metalbear_sequencer_open(const char *path,
         return WF_ERR_INTERNAL;
     }
     if (sqlite3_open(path, &s->db) != SQLITE_OK ||
-        sqlite3_exec(s->db,
+        sqlite3_exec(
+            s->db,
             "PRAGMA journal_mode=WAL;"
             "CREATE TABLE IF NOT EXISTS events("
             "seq INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -378,8 +388,8 @@ wf_status metalbear_sequencer_open(const char *path,
             NULL, NULL, NULL) != SQLITE_OK ||
         add_did_column(s) != WF_OK ||
         sqlite3_exec(s->db,
-            "CREATE INDEX IF NOT EXISTS events_did ON events(did);",
-            NULL, NULL, NULL) != SQLITE_OK ||
+                     "CREATE INDEX IF NOT EXISTS events_did ON events(did);",
+                     NULL, NULL, NULL) != SQLITE_OK ||
         seed_sequence_floor(s) != WF_OK) {
         metalbear_sequencer_free(s);
         return WF_ERR_INTERNAL;
@@ -388,8 +398,8 @@ wf_status metalbear_sequencer_open(const char *path,
     return WF_OK;
 }
 
-void metalbear_sequencer_repo_event(const metalbear_repo_store_event *repo_event,
-                                    void *context) {
+void metalbear_sequencer_repo_event(
+    const metalbear_repo_store_event *repo_event, void *context) {
     metalbear_sequencer *s = context;
     if (!s || !repo_event) return;
     wf_subscribe_event event = {0};
@@ -428,8 +438,9 @@ void metalbear_sequencer_repo_event(const metalbear_repo_store_event *repo_event
             if (!ops || !paths) {
                 free(ops);
                 free(paths);
-                fprintf(stderr,
-                        "MetalBear: out of memory sequencing repository event\n");
+                fprintf(
+                    stderr,
+                    "MetalBear: out of memory sequencing repository event\n");
                 return;
             }
             for (size_t i = 0; i < count; i++) {
@@ -460,7 +471,8 @@ wf_status metalbear_sequencer_reconcile_repo(metalbear_sequencer *s,
     if (!s || !repo) return WF_ERR_INVALID_ARG;
     char *head_rev = NULL;
     char *head_cid = NULL;
-    wf_status status = metalbear_repo_store_get_head(repo, &head_rev, &head_cid);
+    wf_status status =
+        metalbear_repo_store_get_head(repo, &head_rev, &head_cid);
     if (status == WF_ERR_NOT_FOUND) return WF_OK;
     if (status != WF_OK) return status;
 
@@ -564,8 +576,8 @@ wf_status metalbear_sequencer_reconcile_account(metalbear_sequencer *s,
     sqlite3_finalize(stmt);
     pthread_mutex_unlock(&s->mutex);
     if (matched) return WF_OK;
-    return metalbear_sequencer_account_status(
-        s, did, active, active ? NULL : "deactivated");
+    return metalbear_sequencer_account_status(s, did, active,
+                                              active ? NULL : "deactivated");
 }
 
 /*
@@ -586,7 +598,8 @@ static int read_next_locked(metalbear_sequencer *s, int64_t cursor,
     int found = 0;
     *frame = NULL;
     *frame_len = 0;
-    if (sqlite3_prepare_v2(s->db,
+    if (sqlite3_prepare_v2(
+            s->db,
             "SELECT seq,frame FROM events WHERE seq>? ORDER BY seq LIMIT 1;",
             -1, &stmt, NULL) != SQLITE_OK) {
         sqlite3_finalize(stmt);
@@ -652,8 +665,9 @@ static void *subscriber_main(void *raw) {
             snprintf(info.data.info.name, sizeof(info.data.info.name), "%s",
                      "OutdatedCursor");
             snprintf(info.data.info.message, sizeof(info.data.info.message),
-                     "%s", "Requested cursor exceeded limit. Possibly missing "
-                           "events");
+                     "%s",
+                     "Requested cursor exceeded limit. Possibly missing "
+                     "events");
             info.data.info.has_message = 1;
             unsigned char *frame = NULL;
             size_t length = 0;
@@ -674,9 +688,11 @@ static void *subscriber_main(void *raw) {
              * unbounded wait here would park this thread until the next write
              * and never ping — which is exactly what an idle firehose does. */
             int read_rc = 0;
-            for (int wait = 0; wait < 4 && !s->closing &&
-                    (read_rc = read_next_locked(s, worker->cursor, &seq, &frame,
-                                                &length)) == 0; wait++) {
+            for (int wait = 0;
+                 wait < 4 && !s->closing &&
+                 (read_rc = read_next_locked(s, worker->cursor, &seq, &frame,
+                                             &length)) == 0;
+                 wait++) {
                 struct timespec deadline;
                 clock_gettime(CLOCK_REALTIME, &deadline);
                 deadline.tv_nsec += 250000000L;
@@ -692,9 +708,10 @@ static void *subscriber_main(void *raw) {
             if (read_rc < 0) {
                 /* The log is unreadable. Say so and close, rather than hold a
                  * connection open that will never carry another event. */
-                fprintf(stderr,
-                        "MetalBear: firehose log unreadable at cursor %lld: %s\n",
-                        (long long)worker->cursor, sqlite3_errmsg(s->db));
+                fprintf(
+                    stderr,
+                    "MetalBear: firehose log unreadable at cursor %lld: %s\n",
+                    (long long)worker->cursor, sqlite3_errmsg(s->db));
                 free(frame);
                 unsigned char *err = NULL;
                 size_t err_len = 0;
@@ -731,10 +748,10 @@ static void *subscriber_main(void *raw) {
                     if (send_rc == WF_ERR_TIMEOUT) {
                         unsigned char *err = NULL;
                         size_t err_len = 0;
-                        if (wf_sync_publish_error(
-                                worker->cursor, "ConsumerTooSlow",
-                                "Stream consumer too slow", &err,
-                                &err_len) == WF_OK) {
+                        if (wf_sync_publish_error(worker->cursor,
+                                                  "ConsumerTooSlow",
+                                                  "Stream consumer too slow",
+                                                  &err, &err_len) == WF_OK) {
                             wf_xrpc_server_ws_send(worker->stream, err,
                                                    err_len);
                             free(err);
@@ -761,14 +778,15 @@ static void *subscriber_main(void *raw) {
     return NULL;
 }
 
-static wf_status subscribe_repos(void *context,
-                                 const wf_xrpc_request *request,
+static wf_status subscribe_repos(void *context, const wf_xrpc_request *request,
                                  wf_xrpc_ws_stream *stream) {
     metalbear_sequencer *s = context;
     int has_cursor = 0;
     int64_t cursor = 0;
-    const cJSON *item = request->params
-        ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor") : NULL;
+    const cJSON *item =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor")
+            : NULL;
     if (cJSON_IsString(item)) {
         char *end = NULL;
         errno = 0;
@@ -820,8 +838,8 @@ static wf_status subscribe_repos(void *context,
 wf_status metalbear_sequencer_register(metalbear_sequencer *sequencer,
                                        wf_xrpc_server *server) {
     if (!sequencer || !server) return WF_ERR_INVALID_ARG;
-    return wf_xrpc_server_register_ws(server,
-        "com.atproto.sync.subscribeRepos", subscribe_repos, sequencer);
+    return wf_xrpc_server_register_ws(server, "com.atproto.sync.subscribeRepos",
+                                      subscribe_repos, sequencer);
 }
 
 wf_status metalbear_sequencer_retain(metalbear_sequencer *s,
@@ -845,14 +863,14 @@ wf_status metalbear_sequencer_retain(metalbear_sequencer *s,
         struct tm utc;
         gmtime_r(&t, &utc);
         snprintf(cutoff_ts, sizeof(cutoff_ts),
-                 "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
-                 utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
-                 utc.tm_hour, utc.tm_min, utc.tm_sec);
+                 "%04d-%02d-%02dT%02d:%02d:%02d.000Z", utc.tm_year + 1900,
+                 utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min,
+                 utc.tm_sec);
     }
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(s->db,
-            "DELETE FROM events WHERE seq <= ? AND created_at < ?;",
-            -1, &stmt, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(
+            s->db, "DELETE FROM events WHERE seq <= ? AND created_at < ?;", -1,
+            &stmt, NULL) != SQLITE_OK) {
         pthread_mutex_unlock(&s->mutex);
         return WF_ERR_INTERNAL;
     }
@@ -871,7 +889,8 @@ wf_status metalbear_sequencer_retain(metalbear_sequencer *s,
      */
     if (sqlite3_changes(s->db) > 0) {
         sqlite3_stmt *mark = NULL;
-        if (sqlite3_prepare_v2(s->db,
+        if (sqlite3_prepare_v2(
+                s->db,
                 "INSERT INTO meta(key,value) VALUES('pruned_through',?1) "
                 "ON CONFLICT(key) DO UPDATE SET value=MAX(value,?1);",
                 -1, &mark, NULL) == SQLITE_OK) {
@@ -904,7 +923,8 @@ wf_status metalbear_sequencer_purge_account(metalbear_sequencer *s,
      */
     sqlite3_stmt *stmt = NULL;
     wf_status status = WF_OK;
-    if (sqlite3_prepare_v2(s->db,
+    if (sqlite3_prepare_v2(
+            s->db,
             "DELETE FROM events WHERE "
             "(did = ?1 OR (did IS NULL AND instr(frame, ?2) > 0)) "
             "AND seq < (SELECT MAX(seq) FROM events WHERE "

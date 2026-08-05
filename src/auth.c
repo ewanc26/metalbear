@@ -56,8 +56,7 @@ static char *base64url_encode(const unsigned char *input, size_t length) {
         output[o++] = b64url_alphabet[(n >> 18) & 63];
         output[o++] = b64url_alphabet[(n >> 12) & 63];
     } else if (length - i == 2) {
-        uint32_t n = ((uint32_t)input[i] << 16) |
-                     ((uint32_t)input[i + 1] << 8);
+        uint32_t n = ((uint32_t)input[i] << 16) | ((uint32_t)input[i + 1] << 8);
         output[o++] = b64url_alphabet[(n >> 18) & 63];
         output[o++] = b64url_alphabet[(n >> 12) & 63];
         output[o++] = b64url_alphabet[(n >> 6) & 63];
@@ -102,8 +101,8 @@ static unsigned char *base64url_decode(const char *input, size_t length,
         int a = base64url_value(input[i]), b = base64url_value(input[i + 1]);
         int c = base64url_value(input[i + 2]);
         if (a < 0 || b < 0 || c < 0 || (c & 0x03) != 0) goto malformed;
-        uint32_t n = ((uint32_t)a << 18) | ((uint32_t)b << 12) |
-                     ((uint32_t)c << 6);
+        uint32_t n =
+            ((uint32_t)a << 18) | ((uint32_t)b << 12) | ((uint32_t)c << 6);
         output[o++] = (unsigned char)(n >> 16);
         output[o++] = (unsigned char)(n >> 8);
     }
@@ -132,19 +131,20 @@ static wf_status sign_hs256(const metalbear_auth_store *store,
     unsigned int output_length = 0;
     if (!HMAC(EVP_sha256(), store->key, sizeof(store->key),
               (const unsigned char *)input, strlen(input), output,
-              &output_length) || output_length != 32)
+              &output_length) ||
+        output_length != 32)
         return WF_ERR_CRYPTO;
     return WF_OK;
 }
 
 static const char *access_scope_name(metalbear_access_scope scope) {
     switch (scope) {
-    case METALBEAR_ACCESS_APP_PASSWORD:
-        return "com.atproto.appPass";
-    case METALBEAR_ACCESS_APP_PASSWORD_PRIVILEGED:
-        return "com.atproto.appPassPrivileged";
-    default:
-        return "com.atproto.access";
+        case METALBEAR_ACCESS_APP_PASSWORD:
+            return "com.atproto.appPass";
+        case METALBEAR_ACCESS_APP_PASSWORD_PRIVILEGED:
+            return "com.atproto.appPassPrivileged";
+        default:
+            return "com.atproto.access";
     }
 }
 
@@ -154,8 +154,7 @@ static bool valid_access_scope(metalbear_access_scope scope) {
            scope == METALBEAR_ACCESS_APP_PASSWORD_PRIVILEGED;
 }
 
-static bool parse_access_scope(const char *value,
-                               metalbear_access_scope *out) {
+static bool parse_access_scope(const char *value, metalbear_access_scope *out) {
     if (!value) return false;
     if (strcmp(value, "com.atproto.access") == 0) {
         if (out) *out = METALBEAR_ACCESS_FULL;
@@ -177,8 +176,8 @@ static char *create_jwt(metalbear_auth_store *store, token_kind kind,
                         int64_t expires_at) {
     int64_t now = (int64_t)time(NULL);
     const char *type = kind == TOKEN_ACCESS ? "at+jwt" : "refresh+jwt";
-    const char *scope = kind == TOKEN_ACCESS ? access_scope_name(access_scope) :
-                                               "com.atproto.refresh";
+    const char *scope = kind == TOKEN_ACCESS ? access_scope_name(access_scope)
+                                             : "com.atproto.refresh";
     cJSON *header = cJSON_CreateObject();
     cJSON *payload = cJSON_CreateObject();
     char *header_json = NULL, *payload_json = NULL;
@@ -211,7 +210,8 @@ static char *create_jwt(metalbear_auth_store *store, token_kind kind,
     if (!signature_b64) goto done;
     size_t token_size = strlen(signing_input) + strlen(signature_b64) + 2;
     token = malloc(token_size);
-    if (token) snprintf(token, token_size, "%s.%s", signing_input, signature_b64);
+    if (token)
+        snprintf(token, token_size, "%s.%s", signing_input, signature_b64);
 
 done:
     cJSON_Delete(header);
@@ -226,8 +226,8 @@ done:
 }
 
 static wf_status verify_jwt(metalbear_auth_store *store, const char *token,
-                            token_kind kind, bool allow_expired,
-                            char **out_jti, int64_t *out_exp,
+                            token_kind kind, bool allow_expired, char **out_jti,
+                            int64_t *out_exp,
                             metalbear_access_scope *out_scope) {
     if (out_jti) *out_jti = NULL;
     if (out_exp) *out_exp = 0;
@@ -241,9 +241,8 @@ static wf_status verify_jwt(metalbear_auth_store *store, const char *token,
     size_t signing_length = (size_t)(second_dot - token);
     char *signing_input = strndup(token, signing_length);
     size_t signature_length = 0;
-    unsigned char *signature = base64url_decode(second_dot + 1,
-                                                strlen(second_dot + 1),
-                                                &signature_length);
+    unsigned char *signature = base64url_decode(
+        second_dot + 1, strlen(second_dot + 1), &signature_length);
     unsigned char expected[32];
     if (!signing_input || !signature || signature_length != sizeof(expected) ||
         sign_hs256(store, signing_input, expected) != WF_OK ||
@@ -255,14 +254,16 @@ static wf_status verify_jwt(metalbear_auth_store *store, const char *token,
     free(signature);
 
     size_t header_length = 0, payload_length = 0;
-    unsigned char *header_raw = base64url_decode(
-        token, (size_t)(first_dot - token), &header_length);
+    unsigned char *header_raw =
+        base64url_decode(token, (size_t)(first_dot - token), &header_length);
     unsigned char *payload_raw = base64url_decode(
         first_dot + 1, (size_t)(second_dot - first_dot - 1), &payload_length);
-    cJSON *header = header_raw ? cJSON_ParseWithLength((char *)header_raw,
-                                                       header_length) : NULL;
-    cJSON *payload = payload_raw ? cJSON_ParseWithLength((char *)payload_raw,
-                                                         payload_length) : NULL;
+    cJSON *header =
+        header_raw ? cJSON_ParseWithLength((char *)header_raw, header_length)
+                   : NULL;
+    cJSON *payload =
+        payload_raw ? cJSON_ParseWithLength((char *)payload_raw, payload_length)
+                    : NULL;
     free(signing_input);
     free(header_raw);
     free(payload_raw);
@@ -283,19 +284,24 @@ static wf_status verify_jwt(metalbear_auth_store *store, const char *token,
     cJSON *jti = cJSON_GetObjectItemCaseSensitive(payload, "jti");
     int64_t now = (int64_t)time(NULL);
     metalbear_access_scope parsed_scope = METALBEAR_ACCESS_FULL;
-    bool scope_valid = cJSON_IsString(scope) &&
-        (kind == TOKEN_ACCESS ? parse_access_scope(scope->valuestring,
-                                                   &parsed_scope) :
-         strcmp(scope->valuestring, "com.atproto.refresh") == 0);
-    bool valid = cJSON_IsString(alg) && strcmp(alg->valuestring, "HS256") == 0 &&
+    bool scope_valid =
+        cJSON_IsString(scope) &&
+        (kind == TOKEN_ACCESS
+             ? parse_access_scope(scope->valuestring, &parsed_scope)
+             : strcmp(scope->valuestring, "com.atproto.refresh") == 0);
+    bool valid =
+        cJSON_IsString(alg) && strcmp(alg->valuestring, "HS256") == 0 &&
         cJSON_IsString(typ) && strcmp(typ->valuestring, required_type) == 0 &&
-        scope_valid &&
-        cJSON_IsString(aud) && strcmp(aud->valuestring, store->service_did) == 0 &&
-        cJSON_IsString(sub) && strcmp(sub->valuestring, store->account_did) == 0 &&
+        scope_valid && cJSON_IsString(aud) &&
+        strcmp(aud->valuestring, store->service_did) == 0 &&
+        cJSON_IsString(sub) &&
+        strcmp(sub->valuestring, store->account_did) == 0 &&
         cJSON_IsNumber(iat) && iat->valuedouble <= (double)(now + 60) &&
-        cJSON_IsNumber(exp) && (allow_expired || exp->valuedouble > (double)now) &&
+        cJSON_IsNumber(exp) &&
+        (allow_expired || exp->valuedouble > (double)now) &&
         (kind == TOKEN_ACCESS || cJSON_IsString(jti));
-    char *jti_copy = valid && kind == TOKEN_REFRESH ? strdup(jti->valuestring) : NULL;
+    char *jti_copy =
+        valid && kind == TOKEN_REFRESH ? strdup(jti->valuestring) : NULL;
     if (valid && kind == TOKEN_REFRESH && !jti_copy) valid = false;
     if (valid && out_exp) *out_exp = (int64_t)exp->valuedouble;
     if (valid && out_scope) *out_scope = parsed_scope;
@@ -305,20 +311,24 @@ static wf_status verify_jwt(metalbear_auth_store *store, const char *token,
         free(jti_copy);
         return WF_ERR_PERMISSION;
     }
-    if (out_jti) *out_jti = jti_copy; else free(jti_copy);
+    if (out_jti)
+        *out_jti = jti_copy;
+    else
+        free(jti_copy);
     return WF_OK;
 }
 
 static wf_status execute(sqlite3 *db, const char *sql) {
-    return sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK ? WF_OK :
-                                                                  WF_ERR_INTERNAL;
+    return sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK
+               ? WF_OK
+               : WF_ERR_INTERNAL;
 }
 
 static wf_status load_or_create_key(metalbear_auth_store *store) {
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(store->db,
-            "SELECT value FROM auth_meta WHERE key='jwt_key';", -1,
-            &statement, NULL) != SQLITE_OK)
+                           "SELECT value FROM auth_meta WHERE key='jwt_key';",
+                           -1, &statement, NULL) != SQLITE_OK)
         return WF_ERR_INTERNAL;
     int result = sqlite3_step(statement);
     if (result == SQLITE_ROW) {
@@ -329,11 +339,12 @@ static wf_status load_or_create_key(metalbear_auth_store *store) {
         return length == JWT_KEY_BYTES ? WF_OK : WF_ERR_CONFIG;
     }
     sqlite3_finalize(statement);
-    if (result != SQLITE_DONE || RAND_bytes(store->key, sizeof(store->key)) != 1)
+    if (result != SQLITE_DONE ||
+        RAND_bytes(store->key, sizeof(store->key)) != 1)
         return WF_ERR_CRYPTO;
-    if (sqlite3_prepare_v2(store->db,
-            "INSERT INTO auth_meta(key,value) VALUES('jwt_key',?);", -1,
-            &statement, NULL) != SQLITE_OK)
+    if (sqlite3_prepare_v2(
+            store->db, "INSERT INTO auth_meta(key,value) VALUES('jwt_key',?);",
+            -1, &statement, NULL) != SQLITE_OK)
         return WF_ERR_INTERNAL;
     sqlite3_bind_blob(statement, 1, store->key, sizeof(store->key),
                       SQLITE_TRANSIENT);
@@ -345,35 +356,43 @@ static wf_status load_or_create_key(metalbear_auth_store *store) {
 wf_status metalbear_auth_store_open(const char *path, const char *service_did,
                                     const char *account_did,
                                     metalbear_auth_store **out) {
-    if (!path || !service_did || !account_did || !out) return WF_ERR_INVALID_ARG;
+    if (!path || !service_did || !account_did || !out)
+        return WF_ERR_INVALID_ARG;
     *out = NULL;
     metalbear_auth_store *store = calloc(1, sizeof(*store));
     if (!store) return WF_ERR_ALLOC;
     store->service_did = strdup(service_did);
     store->account_did = strdup(account_did);
     if (!store->service_did || !store->account_did ||
-        sqlite3_open_v2(path, &store->db, SQLITE_OPEN_READWRITE |
-                        SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, NULL) != SQLITE_OK)
+        sqlite3_open_v2(path, &store->db,
+                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
+                            SQLITE_OPEN_FULLMUTEX,
+                        NULL) != SQLITE_OK)
         goto fail;
     chmod(path, 0600);
     if (execute(store->db, "PRAGMA journal_mode=WAL;") != WF_OK ||
         execute(store->db, "PRAGMA foreign_keys=ON;") != WF_OK ||
-        execute(store->db,
+        execute(
+            store->db,
             "CREATE TABLE IF NOT EXISTS auth_meta("
             "key TEXT PRIMARY KEY,value BLOB NOT NULL);"
             "CREATE TABLE IF NOT EXISTS refresh_token("
-            "jti TEXT PRIMARY KEY,did TEXT NOT NULL,expires_at INTEGER NOT NULL,"
-            "next_jti TEXT,grace_expires_at INTEGER,revoked INTEGER NOT NULL DEFAULT 0,"
+            "jti TEXT PRIMARY KEY,did TEXT NOT NULL,expires_at INTEGER NOT "
+            "NULL,"
+            "next_jti TEXT,grace_expires_at INTEGER,revoked INTEGER NOT NULL "
+            "DEFAULT 0,"
             "access_scope INTEGER NOT NULL DEFAULT 0,app_password_name TEXT);"
-            "CREATE INDEX IF NOT EXISTS refresh_expiry_idx ON refresh_token(expires_at);") != WF_OK ||
+            "CREATE INDEX IF NOT EXISTS refresh_expiry_idx ON "
+            "refresh_token(expires_at);") != WF_OK ||
         load_or_create_key(store) != WF_OK)
         goto fail;
     sqlite3_exec(store->db,
-        "ALTER TABLE refresh_token ADD COLUMN access_scope INTEGER NOT NULL DEFAULT 0;",
-        NULL, NULL, NULL);
+                 "ALTER TABLE refresh_token ADD COLUMN access_scope INTEGER "
+                 "NOT NULL DEFAULT 0;",
+                 NULL, NULL, NULL);
     sqlite3_exec(store->db,
-        "ALTER TABLE refresh_token ADD COLUMN app_password_name TEXT;",
-        NULL, NULL, NULL);
+                 "ALTER TABLE refresh_token ADD COLUMN app_password_name TEXT;",
+                 NULL, NULL, NULL);
     *out = store;
     return WF_OK;
 
@@ -403,7 +422,8 @@ static wf_status persist_refresh(metalbear_auth_store *store, const char *jti,
                                  metalbear_access_scope scope,
                                  const char *app_password_name) {
     sqlite3_stmt *statement = NULL;
-    if (sqlite3_prepare_v2(store->db,
+    if (sqlite3_prepare_v2(
+            store->db,
             "INSERT INTO refresh_token(jti,did,expires_at,access_scope,"
             "app_password_name) VALUES(?,?,?,?,?);",
             -1, &statement, NULL) != SQLITE_OK)
@@ -425,9 +445,9 @@ static wf_status persist_refresh(metalbear_auth_store *store, const char *jti,
 static void prune_expired_refreshes(metalbear_auth_store *store, int64_t now) {
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(store->db,
-            "DELETE FROM refresh_token WHERE expires_at<=? OR "
-            "(next_jti IS NOT NULL AND grace_expires_at<=?);", -1,
-            &statement, NULL) != SQLITE_OK)
+                           "DELETE FROM refresh_token WHERE expires_at<=? OR "
+                           "(next_jti IS NOT NULL AND grace_expires_at<=?);",
+                           -1, &statement, NULL) != SQLITE_OK)
         return;
     sqlite3_bind_int64(statement, 1, now);
     sqlite3_bind_int64(statement, 2, now);
@@ -443,8 +463,8 @@ static wf_status issue_pair(metalbear_auth_store *store, const char *jti,
     int64_t now = (int64_t)time(NULL);
     out->access_jwt = create_jwt(store, TOKEN_ACCESS, scope, NULL,
                                  now + ACCESS_LIFETIME_SECONDS);
-    out->refresh_jwt = create_jwt(store, TOKEN_REFRESH, scope, jti,
-                                  refresh_expiry);
+    out->refresh_jwt =
+        create_jwt(store, TOKEN_REFRESH, scope, jti, refresh_expiry);
     if (!out->access_jwt || !out->refresh_jwt) {
         metalbear_session_tokens_free(out);
         return WF_ERR_CRYPTO;
@@ -458,9 +478,10 @@ wf_status metalbear_auth_create_session(metalbear_auth_store *store,
                                                 NULL, out);
 }
 
-wf_status metalbear_auth_create_scoped_session(
-    metalbear_auth_store *store, metalbear_access_scope scope,
-    const char *app_password_name, metalbear_session_tokens *out) {
+wf_status metalbear_auth_create_scoped_session(metalbear_auth_store *store,
+                                               metalbear_access_scope scope,
+                                               const char *app_password_name,
+                                               metalbear_session_tokens *out) {
     if (!store || !out) return WF_ERR_INVALID_ARG;
     if (!valid_access_scope(scope) ||
         (scope != METALBEAR_ACCESS_FULL &&
@@ -482,12 +503,12 @@ wf_status metalbear_auth_verify_access(metalbear_auth_store *store,
     return verify_jwt(store, token, TOKEN_ACCESS, false, NULL, NULL, NULL);
 }
 
-wf_status metalbear_auth_verify_access_scope(metalbear_auth_store *store,
-                                             const char *token,
-                                             metalbear_access_scope *out_scope) {
+wf_status
+metalbear_auth_verify_access_scope(metalbear_auth_store *store,
+                                   const char *token,
+                                   metalbear_access_scope *out_scope) {
     if (!out_scope) return WF_ERR_INVALID_ARG;
-    return verify_jwt(store, token, TOKEN_ACCESS, false, NULL, NULL,
-                      out_scope);
+    return verify_jwt(store, token, TOKEN_ACCESS, false, NULL, NULL, out_scope);
 }
 
 wf_status metalbear_auth_rotate_refresh(metalbear_auth_store *store,
@@ -508,21 +529,25 @@ wf_status metalbear_auth_rotate_refresh(metalbear_auth_store *store,
     int64_t stored_expiry = 0, grace_expiry = 0;
     int revoked = 0;
     metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
-    if (sqlite3_prepare_v2(store->db,
+    if (sqlite3_prepare_v2(
+            store->db,
             "SELECT expires_at,next_jti,grace_expires_at,revoked,access_scope,"
             "app_password_name FROM refresh_token "
-            "WHERE jti=? AND did=?;", -1, &statement, NULL) != SQLITE_OK)
+            "WHERE jti=? AND did=?;",
+            -1, &statement, NULL) != SQLITE_OK)
         status = WF_ERR_INTERNAL;
     if (status == WF_OK) {
         sqlite3_bind_text(statement, 1, jti, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(statement, 2, store->account_did, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(statement, 2, store->account_did, -1,
+                          SQLITE_TRANSIENT);
         if (sqlite3_step(statement) != SQLITE_ROW) status = WF_ERR_PERMISSION;
     }
     if (status == WF_OK) {
         stored_expiry = sqlite3_column_int64(statement, 0);
         next = (const char *)sqlite3_column_text(statement, 1);
-        grace_expiry = sqlite3_column_type(statement, 2) == SQLITE_NULL ? 0 :
-                       sqlite3_column_int64(statement, 2);
+        grace_expiry = sqlite3_column_type(statement, 2) == SQLITE_NULL
+                           ? 0
+                           : sqlite3_column_int64(statement, 2);
         revoked = sqlite3_column_int(statement, 3);
         scope = (metalbear_access_scope)sqlite3_column_int(statement, 4);
         if (!valid_access_scope(scope)) status = WF_ERR_PERMISSION;
@@ -558,12 +583,15 @@ wf_status metalbear_auth_rotate_refresh(metalbear_auth_store *store,
         if (grace > stored_expiry) grace = stored_expiry;
         int64_t next_expiry = now + REFRESH_LIFETIME_SECONDS;
         if (execute(store->db, "BEGIN IMMEDIATE;") != WF_OK ||
-            sqlite3_prepare_v2(store->db,
+            sqlite3_prepare_v2(
+                store->db,
                 "UPDATE refresh_token SET next_jti=?,grace_expires_at=? "
-                "WHERE jti=? AND next_jti IS NULL AND revoked=0;", -1,
-                &statement, NULL) != SQLITE_OK) {
+                "WHERE jti=? AND next_jti IS NULL AND revoked=0;",
+                -1, &statement, NULL) != SQLITE_OK) {
             execute(store->db, "ROLLBACK;");
-            free(jti); free(next_copy); free(app_password_name);
+            free(jti);
+            free(next_copy);
+            free(app_password_name);
             return WF_ERR_INTERNAL;
         }
         sqlite3_bind_text(statement, 1, next_copy, -1, SQLITE_TRANSIENT);
@@ -586,20 +614,26 @@ wf_status metalbear_auth_rotate_refresh(metalbear_auth_store *store,
                             app_password_name) != WF_OK ||
             execute(store->db, "COMMIT;") != WF_OK) {
             execute(store->db, "ROLLBACK;");
-            free(jti); free(next_copy); free(app_password_name);
+            free(jti);
+            free(next_copy);
+            free(app_password_name);
             return WF_ERR_INTERNAL;
         }
         token_expiry = next_expiry;
     } else {
-        if (sqlite3_prepare_v2(store->db,
+        if (sqlite3_prepare_v2(
+                store->db,
                 "SELECT expires_at,access_scope FROM refresh_token WHERE "
                 "jti=? AND revoked=0;",
                 -1, &statement, NULL) != SQLITE_OK) {
-            free(jti); free(next_copy); free(app_password_name);
+            free(jti);
+            free(next_copy);
+            free(app_password_name);
             return WF_ERR_INTERNAL;
         }
         sqlite3_bind_text(statement, 1, next_copy, -1, SQLITE_TRANSIENT);
-        status = sqlite3_step(statement) == SQLITE_ROW ? WF_OK : WF_ERR_PERMISSION;
+        status =
+            sqlite3_step(statement) == SQLITE_ROW ? WF_OK : WF_ERR_PERMISSION;
         if (status == WF_OK) {
             token_expiry = sqlite3_column_int64(statement, 0);
             scope = (metalbear_access_scope)sqlite3_column_int(statement, 1);
@@ -619,11 +653,12 @@ wf_status metalbear_auth_revoke_refresh(metalbear_auth_store *store,
                                         const char *refresh_token) {
     if (!store || !refresh_token) return WF_ERR_INVALID_ARG;
     char *jti = NULL;
-    wf_status status = verify_jwt(store, refresh_token, TOKEN_REFRESH, true,
-                                  &jti, NULL, NULL);
+    wf_status status =
+        verify_jwt(store, refresh_token, TOKEN_REFRESH, true, &jti, NULL, NULL);
     if (status != WF_OK) return status;
     sqlite3_stmt *statement = NULL;
-    if (sqlite3_prepare_v2(store->db,
+    if (sqlite3_prepare_v2(
+            store->db,
             "UPDATE refresh_token SET revoked=1 WHERE jti=? AND did=?;", -1,
             &statement, NULL) != SQLITE_OK) {
         free(jti);
@@ -638,14 +673,16 @@ wf_status metalbear_auth_revoke_refresh(metalbear_auth_store *store,
     return result == SQLITE_DONE && changes == 1 ? WF_OK : WF_ERR_PERMISSION;
 }
 
-wf_status metalbear_auth_revoke_app_password_sessions(
-    metalbear_auth_store *store, const char *app_password_name) {
+wf_status
+metalbear_auth_revoke_app_password_sessions(metalbear_auth_store *store,
+                                            const char *app_password_name) {
     if (!store || !app_password_name || !app_password_name[0])
         return WF_ERR_INVALID_ARG;
     sqlite3_stmt *statement = NULL;
     if (sqlite3_prepare_v2(store->db,
-            "UPDATE refresh_token SET revoked=1 WHERE did=? AND "
-            "app_password_name=?;", -1, &statement, NULL) != SQLITE_OK)
+                           "UPDATE refresh_token SET revoked=1 WHERE did=? AND "
+                           "app_password_name=?;",
+                           -1, &statement, NULL) != SQLITE_OK)
         return WF_ERR_INTERNAL;
     sqlite3_bind_text(statement, 1, store->account_did, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(statement, 2, app_password_name, -1, SQLITE_TRANSIENT);
@@ -656,7 +693,6 @@ wf_status metalbear_auth_revoke_app_password_sessions(
 
 wf_status metalbear_auth_delete_all(metalbear_auth_store *store) {
     if (!store) return WF_ERR_INVALID_ARG;
-    return execute(store->db,
-                   "DELETE FROM refresh_token;"
-                   "DELETE FROM auth_meta;");
+    return execute(store->db, "DELETE FROM refresh_token;"
+                              "DELETE FROM auth_meta;");
 }

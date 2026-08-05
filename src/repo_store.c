@@ -49,11 +49,11 @@ struct metalbear_repo_store {
     char *did;
     char *handle;
     wf_signing_key key;
-    char *signing_key_didkey;   /* did:key multibase, for wf_repo_verify */
+    char *signing_key_didkey; /* did:key multibase, for wf_repo_verify */
     sqlite3 *db;
-    wf_car car;                 /* accumulated blocks; roots -> &head */
-    wf_cid head;                /* current head commit CID (len 0 = empty) */
-    size_t persisted_blocks;    /* count of blocks already flushed to db */
+    wf_car car;              /* accumulated blocks; roots -> &head */
+    wf_cid head;             /* current head commit CID (len 0 = empty) */
+    size_t persisted_blocks; /* count of blocks already flushed to db */
     metalbear_repo_store_event_cb event_cb;
     void *event_ctx;
 };
@@ -81,8 +81,7 @@ static wf_cbor_item *cbor_from_json(const cJSON *j) {
     }
     if (cJSON_IsNumber(j)) {
         double d = j->valuedouble;
-        if (!isfinite(d) || d != floor(d) ||
-            fabs(d) > 9007199254740991.0)
+        if (!isfinite(d) || d != floor(d) || fabs(d) > 9007199254740991.0)
             return NULL; /* DAG-CBOR forbids floats / oversized ints */
         wf_cbor_item *v = calloc(1, sizeof(*v));
         if (!v) return NULL;
@@ -101,7 +100,10 @@ static wf_cbor_item *cbor_from_json(const cJSON *j) {
         v->type = WF_CBOR_STRING;
         size_t n = strlen(j->valuestring);
         v->string.str = malloc(n + 1);
-        if (!v->string.str) { free(v); return NULL; }
+        if (!v->string.str) {
+            free(v);
+            return NULL;
+        }
         memcpy(v->string.str, j->valuestring, n + 1);
         v->string.len = n;
         return v;
@@ -112,14 +114,20 @@ static wf_cbor_item *cbor_from_json(const cJSON *j) {
         if (!v) return NULL;
         v->type = WF_CBOR_ARRAY;
         v->children.count = (size_t)n;
-        v->children.items = n ? calloc((size_t)n, sizeof(wf_cbor_item *))
-                              : NULL;
-        if (n && !v->children.items) { free(v); return NULL; }
+        v->children.items =
+            n ? calloc((size_t)n, sizeof(wf_cbor_item *)) : NULL;
+        if (n && !v->children.items) {
+            free(v);
+            return NULL;
+        }
         int i = 0;
         const cJSON *child;
         cJSON_ArrayForEach(child, (cJSON *)j) {
             v->children.items[i] = cbor_from_json(child);
-            if (!v->children.items[i]) { wf_cbor_free(v); return NULL; }
+            if (!v->children.items[i]) {
+                wf_cbor_free(v);
+                return NULL;
+            }
             i++;
         }
         return v;
@@ -139,7 +147,10 @@ static wf_cbor_item *cbor_from_json(const cJSON *j) {
                     v->bytes.len = cid.len;
                     if (cid.len) {
                         v->bytes.data = malloc(cid.len);
-                        if (!v->bytes.data) { free(v); return NULL; }
+                        if (!v->bytes.data) {
+                            free(v);
+                            return NULL;
+                        }
                         memcpy(v->bytes.data, cid.bytes, cid.len);
                     }
                     return v;
@@ -148,8 +159,8 @@ static wf_cbor_item *cbor_from_json(const cJSON *j) {
                        cJSON_IsString(only)) {
                 unsigned char *raw = NULL;
                 size_t raw_len = 0;
-                if (wf_crypto_base64url_decode(only->valuestring,
-                                               &raw, &raw_len) == WF_OK) {
+                if (wf_crypto_base64url_decode(only->valuestring, &raw,
+                                               &raw_len) == WF_OK) {
                     wf_cbor_item *v = calloc(1, sizeof(*v));
                     if (v) {
                         v->type = WF_CBOR_BYTES;
@@ -166,9 +177,12 @@ static wf_cbor_item *cbor_from_json(const cJSON *j) {
         if (!v) return NULL;
         v->type = WF_CBOR_MAP;
         v->map.count = (size_t)count;
-        v->map.pairs = count ? calloc((size_t)count, sizeof(wf_cbor_pair))
-                              : NULL;
-        if (count && !v->map.pairs) { free(v); return NULL; }
+        v->map.pairs =
+            count ? calloc((size_t)count, sizeof(wf_cbor_pair)) : NULL;
+        if (count && !v->map.pairs) {
+            free(v);
+            return NULL;
+        }
         size_t i = 0;
         const cJSON *child;
         cJSON_ArrayForEach(child, (cJSON *)j) {
@@ -183,7 +197,10 @@ static wf_cbor_item *cbor_from_json(const cJSON *j) {
                     if (k->string.str) {
                         memcpy(k->string.str, child->string, n + 1);
                         k->string.len = n;
-                    } else { free(k); k = NULL; }
+                    } else {
+                        free(k);
+                        k = NULL;
+                    }
                 }
             }
             val = cbor_from_json(child);
@@ -205,76 +222,77 @@ static wf_cbor_item *cbor_from_json(const cJSON *j) {
 static cJSON *cbor_to_json(const wf_cbor_item *item) {
     if (!item) return cJSON_CreateNull();
     switch (item->type) {
-    case WF_CBOR_UNSIGNED:
-        return cJSON_CreateNumber((double)item->uinteger);
-    case WF_CBOR_NEGATIVE:
-        return cJSON_CreateNumber(-1.0 - (double)item->neginteger);
-    case WF_CBOR_STRING:
-        return cJSON_CreateString(item->string.str ? item->string.str : "");
-    case WF_CBOR_BYTES: {
-        char *b64 = NULL;
-        cJSON *o = cJSON_CreateObject();
-        if (o && item->bytes.len)
-            wf_crypto_base64url_encode(item->bytes.data, item->bytes.len,
-                                       &b64);
-        if (o) cJSON_AddStringToObject(o, "$bytes", b64 ? b64 : "");
-        free(b64);
-        return o;
-    }
-    case WF_CBOR_LINK: {
-        wf_cid cid;
-        memset(&cid, 0, sizeof(cid));
-        cid.len = item->bytes.len;
-        if (item->bytes.len)
-            memcpy(cid.bytes, item->bytes.data, item->bytes.len);
-        char *cidstr = wf_cid_to_string(&cid);
-        cJSON *o = cJSON_CreateObject();
-        if (o) cJSON_AddStringToObject(o, "$link", cidstr ? cidstr : "");
-        free(cidstr);
-        return o;
-    }
-    case WF_CBOR_ARRAY: {
-        cJSON *a = cJSON_CreateArray();
-        if (!a) return NULL;
-        for (size_t i = 0; i < item->children.count; i++) {
-            cJSON *e = cbor_to_json(item->children.items[i]);
-            if (!e) { cJSON_Delete(a); return NULL; }
-            cJSON_AddItemToArray(a, e);
+        case WF_CBOR_UNSIGNED:
+            return cJSON_CreateNumber((double)item->uinteger);
+        case WF_CBOR_NEGATIVE:
+            return cJSON_CreateNumber(-1.0 - (double)item->neginteger);
+        case WF_CBOR_STRING:
+            return cJSON_CreateString(item->string.str ? item->string.str : "");
+        case WF_CBOR_BYTES: {
+            char *b64 = NULL;
+            cJSON *o = cJSON_CreateObject();
+            if (o && item->bytes.len)
+                wf_crypto_base64url_encode(item->bytes.data, item->bytes.len,
+                                           &b64);
+            if (o) cJSON_AddStringToObject(o, "$bytes", b64 ? b64 : "");
+            free(b64);
+            return o;
         }
-        return a;
-    }
-    case WF_CBOR_MAP: {
-        cJSON *o = cJSON_CreateObject();
-        if (!o) return NULL;
-        for (size_t i = 0; i < item->map.count; i++) {
-            const wf_cbor_item *k = item->map.pairs[i].key;
-            cJSON *val = cbor_to_json(item->map.pairs[i].value);
-            if (!val || k->type != WF_CBOR_STRING) {
-                cJSON_Delete(val);
-                cJSON_Delete(o);
-                return NULL;
+        case WF_CBOR_LINK: {
+            wf_cid cid;
+            memset(&cid, 0, sizeof(cid));
+            cid.len = item->bytes.len;
+            if (item->bytes.len)
+                memcpy(cid.bytes, item->bytes.data, item->bytes.len);
+            char *cidstr = wf_cid_to_string(&cid);
+            cJSON *o = cJSON_CreateObject();
+            if (o) cJSON_AddStringToObject(o, "$link", cidstr ? cidstr : "");
+            free(cidstr);
+            return o;
+        }
+        case WF_CBOR_ARRAY: {
+            cJSON *a = cJSON_CreateArray();
+            if (!a) return NULL;
+            for (size_t i = 0; i < item->children.count; i++) {
+                cJSON *e = cbor_to_json(item->children.items[i]);
+                if (!e) {
+                    cJSON_Delete(a);
+                    return NULL;
+                }
+                cJSON_AddItemToArray(a, e);
             }
-            cJSON_AddItemToObject(o, k->string.str ? k->string.str : "",
-                                  val);
+            return a;
         }
-        return o;
-    }
-    case WF_CBOR_SIMPLE:
-        if (item->simple_value == 21) return cJSON_CreateTrue();
-        if (item->simple_value == 20) return cJSON_CreateFalse();
-        return cJSON_CreateNull();
+        case WF_CBOR_MAP: {
+            cJSON *o = cJSON_CreateObject();
+            if (!o) return NULL;
+            for (size_t i = 0; i < item->map.count; i++) {
+                const wf_cbor_item *k = item->map.pairs[i].key;
+                cJSON *val = cbor_to_json(item->map.pairs[i].value);
+                if (!val || k->type != WF_CBOR_STRING) {
+                    cJSON_Delete(val);
+                    cJSON_Delete(o);
+                    return NULL;
+                }
+                cJSON_AddItemToObject(o, k->string.str ? k->string.str : "",
+                                      val);
+            }
+            return o;
+        }
+        case WF_CBOR_SIMPLE:
+            if (item->simple_value == 21) return cJSON_CreateTrue();
+            if (item->simple_value == 20) return cJSON_CreateFalse();
+            return cJSON_CreateNull();
     }
     return cJSON_CreateNull();
 }
 
 /* Encode a record JSON object (must contain $type) to canonical DAG-CBOR. */
 static wf_status encode_record_json(const char *record_json,
-                                    unsigned char **out_cbor,
-                                    size_t *out_len) {
+                                    unsigned char **out_cbor, size_t *out_len) {
     if (out_cbor) *out_cbor = NULL;
     if (out_len) *out_len = 0;
-    if (!record_json || !out_cbor || !out_len)
-        return WF_ERR_INVALID_ARG;
+    if (!record_json || !out_cbor || !out_len) return WF_ERR_INVALID_ARG;
 
     cJSON *root = cJSON_Parse(record_json);
     if (!root || !cJSON_IsObject(root)) {
@@ -301,8 +319,8 @@ static wf_status encode_record_json(const char *record_json,
 
 static char *make_uri(const char *did, const char *collection,
                       const char *rkey) {
-    size_t n = strlen("at://") + strlen(did) + 1 + strlen(collection) +
-               1 + strlen(rkey) + 1;
+    size_t n = strlen("at://") + strlen(did) + 1 + strlen(collection) + 1 +
+               strlen(rkey) + 1;
     char *u = malloc(n);
     if (!u) return NULL;
     snprintf(u, n, "at://%s/%s/%s", did, collection, rkey);
@@ -334,9 +352,10 @@ static void add_commit_meta(metalbear_repo_store *s, cJSON *parent) {
 }
 
 /* Fetch a record's raw CBOR + CID from the current head. */
-static wf_status get_record_cbor(metalbear_repo_store *s, const char *collection,
-                                 const char *rkey, unsigned char **out_data,
-                                 size_t *out_len, wf_cid *out_record_cid) {
+static wf_status get_record_cbor(metalbear_repo_store *s,
+                                 const char *collection, const char *rkey,
+                                 unsigned char **out_data, size_t *out_len,
+                                 wf_cid *out_record_cid) {
     if (s->head.len == 0) return WF_ERR_NOT_FOUND;
     return wf_repo_get_record(&s->car, &s->head, collection, rkey, out_data,
                               out_len, out_record_cid);
@@ -345,11 +364,11 @@ static wf_status get_record_cbor(metalbear_repo_store *s, const char *collection
 /* Forward declaration (defined in the Persistence section below). */
 /* Defined below, alongside the commit-event helpers. */
 static int parse_commit_at(metalbear_repo_store *s, const wf_cid *cid,
-                          wf_commit *out);
+                           wf_commit *out);
 
-static wf_status index_upsert_record(metalbear_repo_store *s, const char *collection,
-                                      const char *rkey, const char *cid,
-                                      const char *value);
+static wf_status index_upsert_record(metalbear_repo_store *s,
+                                     const char *collection, const char *rkey,
+                                     const char *cid, const char *value);
 
 /* Current head commit CID as a base32 string ("" when repo is empty). */
 static char *head_cid_string(metalbear_repo_store *s) {
@@ -363,8 +382,7 @@ static char *head_cid_string(metalbear_repo_store *s) {
  * clients branch on to retry an optimistic write. */
 static wf_status check_swap(const char *requested, const char *current) {
     if (!requested || !*requested) return WF_OK;
-    if (!current || strcmp(requested, current) != 0)
-        return WF_ERR_CONFLICT;
+    if (!current || strcmp(requested, current) != 0) return WF_ERR_CONFLICT;
     return WF_OK;
 }
 
@@ -376,7 +394,9 @@ static int record_type_matches(const char *record_json,
     cJSON *root = cJSON_Parse(record_json);
     if (!root) return 1;
     cJSON *t = cJSON_GetObjectItemCaseSensitive(root, "$type");
-    int ok = (t && cJSON_IsString(t)) ? (strcmp(t->valuestring, collection) == 0) : 1;
+    int ok = (t && cJSON_IsString(t))
+                 ? (strcmp(t->valuestring, collection) == 0)
+                 : 1;
     cJSON_Delete(root);
     return ok;
 }
@@ -397,9 +417,8 @@ wf_status metalbear_validate_record(const wf_lexicon_registry *lexicons,
     if (!lexicons || !wf_lexicon_registry_contains(lexicons, collection))
         return require_schema ? WF_ERR_NOT_FOUND : WF_OK;
 
-    wf_validate_result result =
-        wf_validate_record(lexicons, collection, record_json,
-                           strlen(record_json));
+    wf_validate_result result = wf_validate_record(
+        lexicons, collection, record_json, strlen(record_json));
     if (result.success) {
         wf_validate_result_free(&result);
         if (out_status) *out_status = METALBEAR_VALIDATION_VALID;
@@ -407,14 +426,15 @@ wf_status metalbear_validate_record(const wf_lexicon_registry *lexicons,
     }
     if (out_message && result.errors) {
         const char *path = result.errors->path ? result.errors->path : "record";
-        const char *msg = result.errors->message ? result.errors->message
-                                                 : "is invalid";
+        const char *msg =
+            result.errors->message ? result.errors->message : "is invalid";
         /* "Invalid " + collection + " record: " + path + " " + msg + NUL */
         size_t n = strlen("Invalid  record:  ") + strlen(collection) +
                    strlen(path) + strlen(msg) + 1;
         char *text = malloc(n);
         if (text) {
-            snprintf(text, n, "Invalid %s record: %s %s", collection, path, msg);
+            snprintf(text, n, "Invalid %s record: %s %s", collection, path,
+                     msg);
             *out_message = text;
         }
     }
@@ -423,7 +443,8 @@ wf_status metalbear_validate_record(const wf_lexicon_registry *lexicons,
 }
 
 /* Decode a record block (by CID) into canonical record JSON, or NULL. */
-static char *decode_record_json(metalbear_repo_store *s, const wf_cid *record_cid) {
+static char *decode_record_json(metalbear_repo_store *s,
+                                const wf_cid *record_cid) {
     wf_car_block *blk = wf_car_find_block(&s->car, record_cid);
     if (!blk) return NULL;
     wf_cbor_item *item = wf_cbor_parse(blk->data, blk->data_len);
@@ -438,7 +459,8 @@ static char *decode_record_json(metalbear_repo_store *s, const wf_cid *record_ci
 
 /* Rebuild the `records` index from the current head commit's MST, so
  * listRecords stays consistent after an importRepo. */
-static wf_status reindex_collect(metalbear_repo_store *s, const wf_cid *node_cid) {
+static wf_status reindex_collect(metalbear_repo_store *s,
+                                 const wf_cid *node_cid) {
     if (node_cid->len == 0) return WF_OK;
     wf_car_block *b = wf_car_find_block(&s->car, node_cid);
     if (!b) return WF_OK;
@@ -448,7 +470,10 @@ static wf_status reindex_collect(metalbear_repo_store *s, const wf_cid *node_cid
     if (st != WF_OK) return st;
     if (node.left.len) {
         st = reindex_collect(s, &node.left);
-        if (st != WF_OK) { wf_mst_node_free(&node); return st; }
+        if (st != WF_OK) {
+            wf_mst_node_free(&node);
+            return st;
+        }
     }
     for (size_t i = 0; i < node.count; i++) {
         if (node.entries[i].subtree.len == 0) {
@@ -461,11 +486,14 @@ static wf_status reindex_collect(metalbear_repo_store *s, const wf_cid *node_cid
                 char *coll = malloc(clen + 1);
                 char *rk = malloc(rlen + 1);
                 if (coll && rk) {
-                    memcpy(coll, k, clen); coll[clen] = '\0';
-                    memcpy(rk, slash + 1, rlen); rk[rlen] = '\0';
+                    memcpy(coll, k, clen);
+                    coll[clen] = '\0';
+                    memcpy(rk, slash + 1, rlen);
+                    rk[rlen] = '\0';
                     char *cidstr = wf_cid_to_string(&node.entries[i].value);
                     if (cidstr) {
-                        char *js = decode_record_json(s, &node.entries[i].value);
+                        char *js =
+                            decode_record_json(s, &node.entries[i].value);
                         if (js) {
                             index_upsert_record(s, coll, rk, cidstr, js);
                             free(js);
@@ -478,7 +506,10 @@ static wf_status reindex_collect(metalbear_repo_store *s, const wf_cid *node_cid
             }
         } else {
             st = reindex_collect(s, &node.entries[i].subtree);
-            if (st != WF_OK) { wf_mst_node_free(&node); return st; }
+            if (st != WF_OK) {
+                wf_mst_node_free(&node);
+                return st;
+            }
         }
     }
     wf_mst_node_free(&node);
@@ -506,8 +537,8 @@ static wf_status persist_new_blocks(metalbear_repo_store *s) {
     wf_car_block *head_block = wf_car_find_block(&s->car, &s->head);
     if (head_block) {
         wf_commit commit;
-        if (wf_commit_parse(head_block->data, head_block->data_len,
-                            &commit) == WF_OK)
+        if (wf_commit_parse(head_block->data, head_block->data_len, &commit) ==
+            WF_OK)
             snprintf(revision, sizeof(revision), "%s", commit.rev);
     }
     for (size_t i = s->persisted_blocks; i < s->car.block_count; i++) {
@@ -515,7 +546,8 @@ static wf_status persist_new_blocks(metalbear_repo_store *s) {
         char *cidstr = wf_cid_to_string(&blk->cid);
         if (!cidstr) return WF_ERR_ALLOC;
         sqlite3_stmt *stmt = NULL;
-        if (sqlite3_prepare_v2(s->db,
+        if (sqlite3_prepare_v2(
+                s->db,
                 "INSERT OR IGNORE INTO blocks (cid, data, repo_rev) "
                 "VALUES (?, ?, ?);",
                 -1, &stmt, NULL) != SQLITE_OK) {
@@ -537,9 +569,9 @@ static wf_status persist_new_blocks(metalbear_repo_store *s) {
 
 /* Maintain the `records` index used by listRecords. The index mirrors the
  * live MST head: each (collection, rkey) maps to its current value + CID. */
-static wf_status index_upsert_record(metalbear_repo_store *s, const char *collection,
-                                     const char *rkey, const char *cid,
-                                     const char *value) {
+static wf_status index_upsert_record(metalbear_repo_store *s,
+                                     const char *collection, const char *rkey,
+                                     const char *cid, const char *value) {
     /* Stamp the rev this record landed at, and when, so read-after-write can
      * find records an AppView has not caught up to. The head is already
      * updated by the time the index is written. */
@@ -549,7 +581,8 @@ static wf_status index_upsert_record(metalbear_repo_store *s, const char *collec
         snprintf(rev_buf, sizeof(rev_buf), "%s", head.rev);
 
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(s->db,
+    if (sqlite3_prepare_v2(
+            s->db,
             "INSERT OR REPLACE INTO records"
             " (collection, rkey, cid, value, repo_rev, indexed_at)"
             " VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
@@ -559,19 +592,21 @@ static wf_status index_upsert_record(metalbear_repo_store *s, const char *collec
     sqlite3_bind_text(stmt, 2, rkey, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 3, cid, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 4, value, -1, SQLITE_TRANSIENT);
-    if (rev_buf[0]) sqlite3_bind_text(stmt, 5, rev_buf, -1, SQLITE_TRANSIENT);
-    else sqlite3_bind_null(stmt, 5);
+    if (rev_buf[0])
+        sqlite3_bind_text(stmt, 5, rev_buf, -1, SQLITE_TRANSIENT);
+    else
+        sqlite3_bind_null(stmt, 5);
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     return rc == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
 }
 
-static wf_status index_delete_record(metalbear_repo_store *s, const char *collection,
-                                     const char *rkey) {
+static wf_status index_delete_record(metalbear_repo_store *s,
+                                     const char *collection, const char *rkey) {
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(s->db,
-            "DELETE FROM records WHERE collection = ? AND rkey = ?;",
-            -1, &stmt, NULL) != SQLITE_OK)
+    if (sqlite3_prepare_v2(
+            s->db, "DELETE FROM records WHERE collection = ? AND rkey = ?;", -1,
+            &stmt, NULL) != SQLITE_OK)
         return WF_ERR_INTERNAL;
     sqlite3_bind_text(stmt, 1, collection, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 2, rkey, -1, SQLITE_TRANSIENT);
@@ -583,14 +618,16 @@ static wf_status index_delete_record(metalbear_repo_store *s, const char *collec
 static wf_status persist_head(metalbear_repo_store *s) {
     char *cidstr = s->head.len ? wf_cid_to_string(&s->head) : NULL;
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(s->db,
-            "INSERT OR REPLACE INTO head (id, cid) VALUES (0, ?);",
-            -1, &stmt, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(
+            s->db, "INSERT OR REPLACE INTO head (id, cid) VALUES (0, ?);", -1,
+            &stmt, NULL) != SQLITE_OK) {
         free(cidstr);
         return WF_ERR_INTERNAL;
     }
-    if (cidstr) sqlite3_bind_text(stmt, 1, cidstr, -1, SQLITE_TRANSIENT);
-    else sqlite3_bind_null(stmt, 1);
+    if (cidstr)
+        sqlite3_bind_text(stmt, 1, cidstr, -1, SQLITE_TRANSIENT);
+    else
+        sqlite3_bind_null(stmt, 1);
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     free(cidstr);
@@ -598,7 +635,8 @@ static wf_status persist_head(metalbear_repo_store *s) {
 }
 
 /* Persist the new head commit (and any new blocks) atomically. */
-static wf_status commit_persist(metalbear_repo_store *s, const wf_cid *new_head) {
+static wf_status commit_persist(metalbear_repo_store *s,
+                                const wf_cid *new_head) {
     s->head = *new_head;
     set_root(s);
 
@@ -615,30 +653,42 @@ static wf_status commit_persist(metalbear_repo_store *s, const wf_cid *new_head)
 
 static wf_status load_all_blocks(metalbear_repo_store *s) {
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(s->db, "SELECT cid, data FROM blocks;", -1,
-                           &stmt, NULL) != SQLITE_OK)
+    if (sqlite3_prepare_v2(s->db, "SELECT cid, data FROM blocks;", -1, &stmt,
+                           NULL) != SQLITE_OK)
         return WF_ERR_INTERNAL;
     wf_status st = WF_OK;
     for (;;) {
         int rc = sqlite3_step(stmt);
         if (rc == SQLITE_DONE) break;
-        if (rc != SQLITE_ROW) { st = WF_ERR_INTERNAL; break; }
+        if (rc != SQLITE_ROW) {
+            st = WF_ERR_INTERNAL;
+            break;
+        }
         wf_cid cid;
         const char *cidstr = (const char *)sqlite3_column_text(stmt, 0);
-        if (wf_cid_from_string(cidstr, &cid) != WF_OK) { st = WF_ERR_PARSE; break; }
+        if (wf_cid_from_string(cidstr, &cid) != WF_OK) {
+            st = WF_ERR_PARSE;
+            break;
+        }
         const unsigned char *data =
             (const unsigned char *)sqlite3_column_blob(stmt, 1);
         int dlen = sqlite3_column_bytes(stmt, 1);
 
-        wf_car_block *nb = realloc(s->car.blocks,
-            (s->car.block_count + 1) * sizeof(wf_car_block));
-        if (!nb) { st = WF_ERR_ALLOC; break; }
+        wf_car_block *nb = realloc(s->car.blocks, (s->car.block_count + 1) *
+                                                      sizeof(wf_car_block));
+        if (!nb) {
+            st = WF_ERR_ALLOC;
+            break;
+        }
         s->car.blocks = nb;
         wf_car_block *blk = &s->car.blocks[s->car.block_count];
         blk->cid = cid;
         blk->data_len = (size_t)dlen;
         blk->data = dlen ? malloc((size_t)dlen) : NULL;
-        if (dlen && !blk->data) { st = WF_ERR_ALLOC; break; }
+        if (dlen && !blk->data) {
+            st = WF_ERR_ALLOC;
+            break;
+        }
         if (dlen) memcpy(blk->data, data, (size_t)dlen);
         s->car.block_count++;
     }
@@ -649,8 +699,7 @@ static wf_status load_all_blocks(metalbear_repo_store *s) {
 static void free_store(metalbear_repo_store *s) {
     if (!s) return;
     if (s->db) sqlite3_close(s->db);
-    for (size_t i = 0; i < s->car.block_count; i++)
-        free(s->car.blocks[i].data);
+    for (size_t i = 0; i < s->car.block_count; i++) free(s->car.blocks[i].data);
     free(s->car.blocks);
     free(s->did);
     free(s->handle);
@@ -664,21 +713,25 @@ static void free_store(metalbear_repo_store *s) {
 /* ------------------------------------------------------------------ */
 
 wf_status metalbear_repo_store_open(const char *path, const char *did,
-                             const char *handle, metalbear_repo_store **out) {
+                                    const char *handle,
+                                    metalbear_repo_store **out) {
     return metalbear_repo_store_open_with_key(path, did, handle, NULL, out);
 }
 
 wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
-                             const char *handle,
-                             const wf_signing_key *signing_key,
-                             metalbear_repo_store **out) {
+                                             const char *handle,
+                                             const wf_signing_key *signing_key,
+                                             metalbear_repo_store **out) {
     if (!path || !*path || !out) return WF_ERR_INVALID_ARG;
     *out = NULL;
 
     metalbear_repo_store *s = calloc(1, sizeof(*s));
     if (!s) return WF_ERR_ALLOC;
     s->path = strdup(path);
-    if (!s->path) { free(s); return WF_ERR_ALLOC; }
+    if (!s->path) {
+        free(s);
+        return WF_ERR_ALLOC;
+    }
 
     if (sqlite3_open(path, &s->db) != SQLITE_OK) {
         free_store(s);
@@ -720,9 +773,9 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
         if (name && strcmp(name, "repo_rev") == 0) has_repo_rev = 1;
     }
     sqlite3_finalize(column_stmt);
-    if (!has_repo_rev && sqlite3_exec(s->db,
-            "ALTER TABLE blocks ADD COLUMN repo_rev TEXT;", NULL, NULL,
-            NULL) != SQLITE_OK) {
+    if (!has_repo_rev &&
+        sqlite3_exec(s->db, "ALTER TABLE blocks ADD COLUMN repo_rev TEXT;",
+                     NULL, NULL, NULL) != SQLITE_OK) {
         free_store(s);
         return WF_ERR_INTERNAL;
     }
@@ -745,20 +798,21 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
         if (strcmp(name, "indexed_at") == 0) has_indexed_at = 1;
     }
     sqlite3_finalize(column_stmt);
-    if ((!has_record_rev && sqlite3_exec(s->db,
-            "ALTER TABLE records ADD COLUMN repo_rev TEXT;", NULL, NULL,
-            NULL) != SQLITE_OK) ||
-        (!has_indexed_at && sqlite3_exec(s->db,
-            "ALTER TABLE records ADD COLUMN indexed_at TEXT;", NULL, NULL,
-            NULL) != SQLITE_OK)) {
+    if ((!has_record_rev &&
+         sqlite3_exec(s->db, "ALTER TABLE records ADD COLUMN repo_rev TEXT;",
+                      NULL, NULL, NULL) != SQLITE_OK) ||
+        (!has_indexed_at &&
+         sqlite3_exec(s->db, "ALTER TABLE records ADD COLUMN indexed_at TEXT;",
+                      NULL, NULL, NULL) != SQLITE_OK)) {
         free_store(s);
         return WF_ERR_INTERNAL;
     }
 
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(s->db,
-            "SELECT did, handle, key_type, key_bytes FROM meta WHERE id=0;",
-            -1, &stmt, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(
+            s->db,
+            "SELECT did, handle, key_type, key_bytes FROM meta WHERE id=0;", -1,
+            &stmt, NULL) != SQLITE_OK) {
         free_store(s);
         return WF_ERR_INTERNAL;
     }
@@ -811,17 +865,20 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
             memcpy(s->key.bytes, kb, sizeof(s->key.bytes));
         sqlite3_finalize(stmt);
 
-        if (wf_signing_key_public_didkey(&s->key, &s->signing_key_didkey)
-                != WF_OK) {
+        if (wf_signing_key_public_didkey(&s->key, &s->signing_key_didkey) !=
+            WF_OK) {
             free_store(s);
             return WF_ERR_INTERNAL;
         }
         st = load_all_blocks(s);
-        if (st != WF_OK) { free_store(s); return st; }
+        if (st != WF_OK) {
+            free_store(s);
+            return st;
+        }
 
         /* Load head commit CID, if any. */
-        if (sqlite3_prepare_v2(s->db, "SELECT cid FROM head WHERE id=0;",
-                -1, &stmt, NULL) != SQLITE_OK) {
+        if (sqlite3_prepare_v2(s->db, "SELECT cid FROM head WHERE id=0;", -1,
+                               &stmt, NULL) != SQLITE_OK) {
             free_store(s);
             return WF_ERR_INTERNAL;
         }
@@ -839,25 +896,30 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
         set_root(s);
     } else {
         sqlite3_finalize(stmt);
-        if (!did || !*did) { free_store(s); return WF_ERR_INVALID_ARG; }
+        if (!did || !*did) {
+            free_store(s);
+            return WF_ERR_INVALID_ARG;
+        }
 
         wf_signing_key key;
         if (signing_key) {
             key = *signing_key;
-        } else if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &key) != WF_OK) {
+        } else if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &key) !=
+                   WF_OK) {
             free_store(s);
             return WF_ERR_INTERNAL;
         }
         s->did = strdup(did);
         s->handle = strdup(handle ? handle : "");
         s->key = key;
-        if (wf_signing_key_public_didkey(&s->key, &s->signing_key_didkey)
-                != WF_OK) {
+        if (wf_signing_key_public_didkey(&s->key, &s->signing_key_didkey) !=
+            WF_OK) {
             free_store(s);
             return WF_ERR_INTERNAL;
         }
 
-        if (sqlite3_prepare_v2(s->db,
+        if (sqlite3_prepare_v2(
+                s->db,
                 "INSERT INTO meta (id, did, handle, key_type, key_bytes) "
                 "VALUES (0, ?, ?, ?, ?);",
                 -1, &stmt, NULL) != SQLITE_OK) {
@@ -871,7 +933,10 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
                           SQLITE_TRANSIENT);
         int rc = sqlite3_step(stmt);
         sqlite3_finalize(stmt);
-        if (rc != SQLITE_DONE) { free_store(s); return WF_ERR_INTERNAL; }
+        if (rc != SQLITE_DONE) {
+            free_store(s);
+            return WF_ERR_INTERNAL;
+        }
         set_root(s);
     }
 
@@ -890,20 +955,21 @@ const char *metalbear_repo_store_handle(const metalbear_repo_store *store) {
     return store ? store->handle : NULL;
 }
 
-const char *metalbear_repo_store_signing_key_did(const metalbear_repo_store *store) {
+const char *
+metalbear_repo_store_signing_key_did(const metalbear_repo_store *store) {
     if (!store) return NULL;
     return store->signing_key_didkey;
 }
 
-wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store, const char *handle) {
+wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store,
+                                          const char *handle) {
     if (!store || !handle || !wf_syntax_handle_is_valid(handle))
         return WF_ERR_INVALID_ARG;
     char *copy = strdup(handle);
     if (!copy) return WF_ERR_ALLOC;
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(store->db,
-            "UPDATE meta SET handle=? WHERE id=0;", -1, &stmt, NULL) !=
-            SQLITE_OK) {
+    if (sqlite3_prepare_v2(store->db, "UPDATE meta SET handle=? WHERE id=0;",
+                           -1, &stmt, NULL) != SQLITE_OK) {
         free(copy);
         return WF_ERR_INTERNAL;
     }
@@ -919,15 +985,17 @@ wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store, const cha
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_get_stats(metalbear_repo_store *store,
-                                  metalbear_repo_store_stats *out_stats) {
+wf_status
+metalbear_repo_store_get_stats(metalbear_repo_store *store,
+                               metalbear_repo_store_stats *out_stats) {
     if (!out_stats) return WF_ERR_INVALID_ARG;
     memset(out_stats, 0, sizeof(*out_stats));
     if (!store) return WF_ERR_INVALID_ARG;
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(store->db,
-            "SELECT (SELECT COUNT(*) FROM blocks), "
-            "(SELECT COUNT(*) FROM records);", -1, &stmt, NULL) != SQLITE_OK)
+                           "SELECT (SELECT COUNT(*) FROM blocks), "
+                           "(SELECT COUNT(*) FROM records);",
+                           -1, &stmt, NULL) != SQLITE_OK)
         return WF_ERR_INTERNAL;
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_ROW) {
@@ -937,8 +1005,7 @@ wf_status metalbear_repo_store_get_stats(metalbear_repo_store *store,
     sqlite3_int64 blocks = sqlite3_column_int64(stmt, 0);
     sqlite3_int64 records = sqlite3_column_int64(stmt, 1);
     sqlite3_finalize(stmt);
-    if (blocks < 0 || records < 0 ||
-        (uint64_t)blocks > (uint64_t)SIZE_MAX ||
+    if (blocks < 0 || records < 0 || (uint64_t)blocks > (uint64_t)SIZE_MAX ||
         (uint64_t)records > (uint64_t)SIZE_MAX)
         return WF_ERR_INTERNAL;
     out_stats->repo_blocks = (size_t)blocks;
@@ -946,9 +1013,9 @@ wf_status metalbear_repo_store_get_stats(metalbear_repo_store *store,
     return WF_OK;
 }
 
-void metalbear_repo_store_set_event_callback(metalbear_repo_store *store,
-                                      metalbear_repo_store_event_cb callback,
-                                      void *context) {
+void metalbear_repo_store_set_event_callback(
+    metalbear_repo_store *store, metalbear_repo_store_event_cb callback,
+    void *context) {
     if (!store) return;
     store->event_cb = callback;
     store->event_ctx = context;
@@ -974,7 +1041,7 @@ static void emit_commit_event_ops(metalbear_repo_store *s,
     unsigned char *blocks = NULL;
     size_t blocks_len = 0;
     if (metalbear_repo_store_export(s, has_previous ? previous.rev : NULL,
-                             &blocks, &blocks_len) != WF_OK)
+                                    &blocks, &blocks_len) != WF_OK)
         return;
     metalbear_repo_store_event event = {
         .kind = METALBEAR_REPO_STORE_EVENT_COMMIT,
@@ -1033,11 +1100,12 @@ static void emit_sync_event(metalbear_repo_store *s) {
 /* Write / read operations                                             */
 /* ------------------------------------------------------------------ */
 
-wf_status metalbear_repo_store_create_record(metalbear_repo_store *s, const char *collection,
-                                      const char *rkey_or_null,
-                                      const char *record_json,
-                                      const char *swap_commit_or_null,
-                                      char **out_uri, char **out_cid) {
+wf_status metalbear_repo_store_create_record(metalbear_repo_store *s,
+                                             const char *collection,
+                                             const char *rkey_or_null,
+                                             const char *record_json,
+                                             const char *swap_commit_or_null,
+                                             char **out_uri, char **out_cid) {
     if (!s || !collection || !*collection || !record_json || !out_uri ||
         !out_cid)
         return WF_ERR_INVALID_ARG;
@@ -1051,12 +1119,14 @@ wf_status metalbear_repo_store_create_record(metalbear_repo_store *s, const char
         if (wf_tid_now(rkey_buf) != WF_OK) return WF_ERR_INVALID_ARG;
         rkey = rkey_buf;
     } else if (!wf_syntax_record_key_is_valid(rkey)) {
-        return WF_ERR_INVALID_ARG; /* mapped to 400 InvalidRequest ("Invalid record key") */
+        return WF_ERR_INVALID_ARG; /* mapped to 400 InvalidRequest ("Invalid
+                                      record key") */
     }
 
     /* (b) $type, when present, must equal the target collection. */
     if (!record_type_matches(record_json, collection))
-        return WF_ERR_INVALID_ARG; /* mapped to 400 InvalidRequest ("Invalid $type") */
+        return WF_ERR_INVALID_ARG; /* mapped to 400 InvalidRequest ("Invalid
+                                      $type") */
 
     /* (a) CAS: swapCommit must match the current repo head (if supplied). */
     char *head = head_cid_string(s);
@@ -1073,7 +1143,7 @@ wf_status metalbear_repo_store_create_record(metalbear_repo_store *s, const char
     wf_cid old_head = s->head;
     const wf_cid *prev = s->head.len ? &s->head : NULL;
     st = wf_repo_create_record(&s->car, prev, s->did, collection, rkey, cbor,
-                                cbor_len, &s->key, &out_commit, &out_record);
+                               cbor_len, &s->key, &out_commit, &out_record);
     free(cbor);
     if (st != WF_OK) return st;
 
@@ -1089,25 +1159,23 @@ wf_status metalbear_repo_store_create_record(metalbear_repo_store *s, const char
     }
     *out_cid = cidstr;
     index_upsert_record(s, collection, rkey, cidstr, record_json);
-    emit_commit_event(s, &old_head, "create", collection, rkey,
-                      &out_record, NULL);
+    emit_commit_event(s, &old_head, "create", collection, rkey, &out_record,
+                      NULL);
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_put_record(metalbear_repo_store *s, const char *collection,
-                                    const char *rkey, const char *record_json,
-                                    const char *swap_commit_or_null,
-                                    const char *swap_record_or_null,
-                                    char **out_uri, char **out_cid) {
-    if (!s || !collection || !*collection || !rkey || !*rkey ||
-        !record_json || !out_uri || !out_cid)
+wf_status metalbear_repo_store_put_record(
+    metalbear_repo_store *s, const char *collection, const char *rkey,
+    const char *record_json, const char *swap_commit_or_null,
+    const char *swap_record_or_null, char **out_uri, char **out_cid) {
+    if (!s || !collection || !*collection || !rkey || !*rkey || !record_json ||
+        !out_uri || !out_cid)
         return WF_ERR_INVALID_ARG;
     *out_uri = NULL;
     *out_cid = NULL;
 
     /* (c) record-key validation (atproto charset/length rules). */
-    if (!wf_syntax_record_key_is_valid(rkey))
-        return WF_ERR_INVALID_ARG;
+    if (!wf_syntax_record_key_is_valid(rkey)) return WF_ERR_INVALID_ARG;
 
     /* (b) $type, when present, must equal the target collection. */
     if (!record_type_matches(record_json, collection))
@@ -1117,8 +1185,8 @@ wf_status metalbear_repo_store_put_record(metalbear_repo_store *s, const char *c
     unsigned char *existing = NULL;
     size_t ex_len = 0;
     wf_cid ex_cid;
-    wf_status st = get_record_cbor(s, collection, rkey, &existing, &ex_len,
-                                    &ex_cid);
+    wf_status st =
+        get_record_cbor(s, collection, rkey, &existing, &ex_len, &ex_cid);
     int exists = (st == WF_OK);
     free(existing);
     if (st != WF_OK && st != WF_ERR_NOT_FOUND) return st;
@@ -1145,14 +1213,14 @@ wf_status metalbear_repo_store_put_record(metalbear_repo_store *s, const char *c
     if (st != WF_OK) return st;
 
     if (exists) {
-        st = wf_repo_update_record(&s->car, &s->head, s->did, collection,
-                                    rkey, cbor, cbor_len, &s->key, &out_commit,
-                                    &out_record);
+        st = wf_repo_update_record(&s->car, &s->head, s->did, collection, rkey,
+                                   cbor, cbor_len, &s->key, &out_commit,
+                                   &out_record);
     } else {
         const wf_cid *prev = s->head.len ? &s->head : NULL;
-        st = wf_repo_create_record(&s->car, prev, s->did, collection, rkey,
-                                    cbor, cbor_len, &s->key, &out_commit,
-                                    &out_record);
+        st =
+            wf_repo_create_record(&s->car, prev, s->did, collection, rkey, cbor,
+                                  cbor_len, &s->key, &out_commit, &out_record);
     }
     free(cbor);
     if (st != WF_OK) return st;
@@ -1169,29 +1237,28 @@ wf_status metalbear_repo_store_put_record(metalbear_repo_store *s, const char *c
     }
     *out_cid = cidstr;
     index_upsert_record(s, collection, rkey, cidstr, record_json);
-    emit_commit_event(s, &old_head, exists ? "update" : "create",
-                      collection, rkey, &out_record,
-                      exists ? &ex_cid : NULL);
+    emit_commit_event(s, &old_head, exists ? "update" : "create", collection,
+                      rkey, &out_record, exists ? &ex_cid : NULL);
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_delete_record(metalbear_repo_store *s, const char *collection,
-                                       const char *rkey,
-                                       const char *swap_commit_or_null,
-                                       const char *swap_record_or_null) {
+wf_status metalbear_repo_store_delete_record(metalbear_repo_store *s,
+                                             const char *collection,
+                                             const char *rkey,
+                                             const char *swap_commit_or_null,
+                                             const char *swap_record_or_null) {
     if (!s || !collection || !*collection || !rkey || !*rkey)
         return WF_ERR_INVALID_ARG;
 
     /* (c) record-key validation (atproto charset/length rules). */
-    if (!wf_syntax_record_key_is_valid(rkey))
-        return WF_ERR_INVALID_ARG;
+    if (!wf_syntax_record_key_is_valid(rkey)) return WF_ERR_INVALID_ARG;
     if (s->head.len == 0) return WF_ERR_NOT_FOUND;
 
     unsigned char *existing = NULL;
     size_t ex_len = 0;
     wf_cid ex_cid;
-    wf_status st = get_record_cbor(s, collection, rkey, &existing, &ex_len,
-                                    &ex_cid);
+    wf_status st =
+        get_record_cbor(s, collection, rkey, &existing, &ex_len, &ex_cid);
     free(existing);
     if (st != WF_OK) return st;
 
@@ -1210,19 +1277,20 @@ wf_status metalbear_repo_store_delete_record(metalbear_repo_store *s, const char
     wf_cid out_commit = {{0}, 0};
     wf_cid old_head = s->head;
     st = wf_repo_delete_record(&s->car, &s->head, s->did, collection, rkey,
-                                 &s->key, &out_commit);
+                               &s->key, &out_commit);
     if (st != WF_OK) return st;
     st = commit_persist(s, &out_commit);
     if (st != WF_OK) return st;
     index_delete_record(s, collection, rkey);
-    emit_commit_event(s, &old_head, "delete", collection, rkey, NULL,
-                      &ex_cid);
+    emit_commit_event(s, &old_head, "delete", collection, rkey, NULL, &ex_cid);
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_get_record(metalbear_repo_store *s, const char *collection,
-                                   const char *rkey, char **out_record_json,
-                                   char **out_cid) {
+wf_status metalbear_repo_store_get_record(metalbear_repo_store *s,
+                                          const char *collection,
+                                          const char *rkey,
+                                          char **out_record_json,
+                                          char **out_cid) {
     if (!s || !collection || !*collection || !rkey || !*rkey ||
         !out_record_json || !out_cid)
         return WF_ERR_INVALID_ARG;
@@ -1248,18 +1316,22 @@ wf_status metalbear_repo_store_get_record(metalbear_repo_store *s, const char *c
     if (!js) return WF_ERR_ALLOC;
 
     char *cidstr = wf_cid_to_string(&rcid);
-    if (!cidstr) { free(js); return WF_ERR_ALLOC; }
+    if (!cidstr) {
+        free(js);
+        return WF_ERR_ALLOC;
+    }
 
     *out_record_json = js;
     *out_cid = cidstr;
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char *writes_json,
-                                      const char *swap_commit_or_null,
-                                      char **out_commit_cid,
-                                      char **out_commit_rev,
-                                      char **out_results_json) {
+wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s,
+                                            const char *writes_json,
+                                            const char *swap_commit_or_null,
+                                            char **out_commit_cid,
+                                            char **out_commit_rev,
+                                            char **out_results_json) {
     if (!s || !writes_json || !out_commit_cid || !out_commit_rev ||
         !out_results_json)
         return WF_ERR_INVALID_ARG;
@@ -1277,7 +1349,10 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
     char *head = head_cid_string(s);
     wf_status st = check_swap(swap_commit_or_null, head);
     free(head);
-    if (st != WF_OK) { cJSON_Delete(root); return st; }
+    if (st != WF_OK) {
+        cJSON_Delete(root);
+        return st;
+    }
 
     /* (g) cap batch size at 200 writes (mirrors atproto's limit). */
     if (cJSON_GetArraySize(root) > 200) {
@@ -1286,7 +1361,10 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
     }
 
     cJSON *results = cJSON_CreateArray();
-    if (!results) { cJSON_Delete(root); return WF_ERR_ALLOC; }
+    if (!results) {
+        cJSON_Delete(root);
+        return WF_ERR_ALLOC;
+    }
 
     /* Stage every write, then land the whole batch as ONE signed commit.
      * applyWrites is specified as atomic: the reference PDS runs the batch in
@@ -1295,14 +1373,18 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
      * firehose event) per write, and would leave earlier writes committed when
      * a later one fails. */
     size_t write_count = (size_t)cJSON_GetArraySize(root);
-    wf_repo_write *batch = write_count ? calloc(write_count, sizeof(*batch)) : NULL;
+    wf_repo_write *batch =
+        write_count ? calloc(write_count, sizeof(*batch)) : NULL;
     /* Parallel bookkeeping: the CBOR bodies and any rkeys we generate must
      * outlive the loop, since `batch` only borrows them. */
-    unsigned char **bodies = write_count ? calloc(write_count, sizeof(*bodies)) : NULL;
+    unsigned char **bodies =
+        write_count ? calloc(write_count, sizeof(*bodies)) : NULL;
     char **rkeys = write_count ? calloc(write_count, sizeof(*rkeys)) : NULL;
-    char **collections = write_count ? calloc(write_count, sizeof(*collections)) : NULL;
+    char **collections =
+        write_count ? calloc(write_count, sizeof(*collections)) : NULL;
     char **values = write_count ? calloc(write_count, sizeof(*values)) : NULL;
-    if (write_count && (!batch || !bodies || !rkeys || !collections || !values)) {
+    if (write_count &&
+        (!batch || !bodies || !rkeys || !collections || !values)) {
         st = WF_ERR_ALLOC;
         goto done;
     }
@@ -1311,9 +1393,15 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
     size_t staged = 0;
     const cJSON *op;
     cJSON_ArrayForEach(op, root) {
-        if (!cJSON_IsObject(op)) { st = WF_ERR_INVALID_ARG; goto done; }
+        if (!cJSON_IsObject(op)) {
+            st = WF_ERR_INVALID_ARG;
+            goto done;
+        }
         cJSON *type = cJSON_GetObjectItemCaseSensitive(op, "$type");
-        if (!type || !cJSON_IsString(type)) { st = WF_ERR_INVALID_ARG; goto done; }
+        if (!type || !cJSON_IsString(type)) {
+            st = WF_ERR_INVALID_ARG;
+            goto done;
+        }
         const char *t = type->valuestring;
 
         cJSON *coll = cJSON_GetObjectItemCaseSensitive(op, "collection");
@@ -1334,11 +1422,18 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
 
         /* create may omit rkey (the PDS mints a TID); update/delete may not. */
         const char *rkey = (rk && cJSON_IsString(rk) && rk->valuestring[0])
-                               ? rk->valuestring : NULL;
+                               ? rk->valuestring
+                               : NULL;
         if (!rkey) {
-            if (!is_create) { st = WF_ERR_INVALID_ARG; goto done; }
+            if (!is_create) {
+                st = WF_ERR_INVALID_ARG;
+                goto done;
+            }
             char tid[16];
-            if (wf_tid_now(tid) != WF_OK) { st = WF_ERR_INTERNAL; goto done; }
+            if (wf_tid_now(tid) != WF_OK) {
+                st = WF_ERR_INTERNAL;
+                goto done;
+            }
             rkeys[staged] = strdup(tid);
         } else {
             if (!wf_syntax_record_key_is_valid(rkey)) {
@@ -1348,16 +1443,25 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
             rkeys[staged] = strdup(rkey);
         }
         collections[staged] = strdup(coll->valuestring);
-        if (!rkeys[staged] || !collections[staged]) { st = WF_ERR_ALLOC; goto done; }
+        if (!rkeys[staged] || !collections[staged]) {
+            st = WF_ERR_ALLOC;
+            goto done;
+        }
 
         batch[staged].collection = collections[staged];
         batch[staged].rkey = rkeys[staged];
         if (is_delete) {
             batch[staged].action = WF_REPO_WRITE_DELETE;
         } else {
-            if (!val) { st = WF_ERR_INVALID_ARG; goto done; }
+            if (!val) {
+                st = WF_ERR_INVALID_ARG;
+                goto done;
+            }
             char *rec_json = cJSON_PrintUnformatted(val);
-            if (!rec_json) { st = WF_ERR_ALLOC; goto done; }
+            if (!rec_json) {
+                st = WF_ERR_ALLOC;
+                goto done;
+            }
             if (!record_type_matches(rec_json, collections[staged])) {
                 free(rec_json);
                 st = WF_ERR_INVALID_ARG;
@@ -1367,8 +1471,8 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
             size_t body_len = 0;
             st = encode_record_json(rec_json, &bodies[staged], &body_len);
             if (st != WF_OK) goto done;
-            batch[staged].action = is_create ? WF_REPO_WRITE_CREATE
-                                             : WF_REPO_WRITE_UPDATE;
+            batch[staged].action =
+                is_create ? WF_REPO_WRITE_CREATE : WF_REPO_WRITE_UPDATE;
             batch[staged].record_cbor = bodies[staged];
             batch[staged].record_cbor_len = body_len;
         }
@@ -1386,9 +1490,12 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
 
     /* The commit is durable; now bring the record index in line with it and
      * describe the batch to the firehose as a single event. */
-    metalbear_repo_store_op *events = staged
-        ? calloc(staged, sizeof(*events)) : NULL;
-    if (staged && !events) { st = WF_ERR_ALLOC; goto done; }
+    metalbear_repo_store_op *events =
+        staged ? calloc(staged, sizeof(*events)) : NULL;
+    if (staged && !events) {
+        st = WF_ERR_ALLOC;
+        goto done;
+    }
     for (size_t i = 0; i < staged; i++) {
         char *record_cid = NULL;
         if (batch[i].action == WF_REPO_WRITE_DELETE) {
@@ -1398,9 +1505,9 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
             index_upsert_record(s, batch[i].collection, batch[i].rkey,
                                 record_cid ? record_cid : "", values[i]);
         }
-        events[i].action = batch[i].action == WF_REPO_WRITE_CREATE ? "create"
-                         : batch[i].action == WF_REPO_WRITE_UPDATE ? "update"
-                                                                   : "delete";
+        events[i].action = batch[i].action == WF_REPO_WRITE_CREATE   ? "create"
+                           : batch[i].action == WF_REPO_WRITE_UPDATE ? "update"
+                                                                     : "delete";
         events[i].collection = batch[i].collection;
         events[i].rkey = batch[i].rkey;
         events[i].cid = batch[i].out_record;
@@ -1411,10 +1518,11 @@ wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s, const char 
          * the $type that discriminates it; without one a strict client rejects
          * the whole response. */
         if (batch[i].action == WF_REPO_WRITE_DELETE) {
-            cJSON_AddStringToObject(r, "$type",
-                                    "com.atproto.repo.applyWrites#deleteResult");
+            cJSON_AddStringToObject(
+                r, "$type", "com.atproto.repo.applyWrites#deleteResult");
         } else {
-            cJSON_AddStringToObject(r, "$type",
+            cJSON_AddStringToObject(
+                r, "$type",
                 batch[i].action == WF_REPO_WRITE_CREATE
                     ? "com.atproto.repo.applyWrites#createResult"
                     : "com.atproto.repo.applyWrites#updateResult");
@@ -1445,7 +1553,10 @@ done:
     free(values);
     free(batch);
     cJSON_Delete(root);
-    if (st != WF_OK) { cJSON_Delete(results); return st; }
+    if (st != WF_OK) {
+        cJSON_Delete(results);
+        return st;
+    }
 
     char *cidstr = s->head.len ? wf_cid_to_string(&s->head) : strdup("");
     char *rev = NULL;
@@ -1475,8 +1586,8 @@ done:
 /* describeRepo + verification                                         */
 /* ------------------------------------------------------------------ */
 
-static wf_status walk_mst_collections(metalbear_repo_store *s, const wf_cid *root,
-                                      cJSON *cols) {
+static wf_status walk_mst_collections(metalbear_repo_store *s,
+                                      const wf_cid *root, cJSON *cols) {
     if (root->len == 0) return WF_OK;
     wf_car_block *b = wf_car_find_block(&s->car, root);
     if (!b) return WF_OK;
@@ -1522,7 +1633,8 @@ static wf_status walk_mst_collections(metalbear_repo_store *s, const wf_cid *roo
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_describe(metalbear_repo_store *s, char **out_json) {
+wf_status metalbear_repo_store_describe(metalbear_repo_store *s,
+                                        char **out_json) {
     if (!s || !out_json) return WF_ERR_INVALID_ARG;
     *out_json = NULL;
 
@@ -1559,14 +1671,15 @@ wf_status metalbear_repo_store_describe(metalbear_repo_store *s, char **out_json
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_verify_head(metalbear_repo_store *s, int *out_verified,
-                                    wf_commit *out_commit) {
+wf_status metalbear_repo_store_verify_head(metalbear_repo_store *s,
+                                           int *out_verified,
+                                           wf_commit *out_commit) {
     if (!s || !out_verified) return WF_ERR_INVALID_ARG;
     *out_verified = 0;
     if (out_commit) memset(out_commit, 0, sizeof(*out_commit));
     if (s->head.len == 0) return WF_OK;
 
-    wf_repo_verify_options opts = { s->did, s->signing_key_didkey, NULL };
+    wf_repo_verify_options opts = {s->did, s->signing_key_didkey, NULL};
     wf_commit c;
     wf_status st = wf_repo_verify(&s->car, &opts, &c);
     if (st == WF_OK) *out_verified = 1;
@@ -1625,18 +1738,20 @@ static bool repo_access_allowed(metalbear_pds_repo_bundle *b,
  * has none to offer). Write handlers need both stores to track which blobs
  * a record references.
  */
-static metalbear_repo_store *resolve_repo_and_blobs(
-    metalbear_pds_repo_bundle *b, const wf_xrpc_request *req,
-    wf_xrpc_response *resp, metalbear_blob_store **out_blobs) {
+static metalbear_repo_store *
+resolve_repo_and_blobs(metalbear_pds_repo_bundle *b, const wf_xrpc_request *req,
+                       wf_xrpc_response *resp,
+                       metalbear_blob_store **out_blobs) {
     metalbear_repo_store *store = b->fallback_repo;
     metalbear_blob_store *blobs = b->fallback_blobs;
     if (b->resolver) {
         metalbear_repo_store *out_repo = NULL;
         metalbear_blob_store *resolved_blobs = NULL;
-        if (b->resolver(b->resolver_ctx, req, &out_repo, &resolved_blobs) != WF_OK ||
+        if (b->resolver(b->resolver_ctx, req, &out_repo, &resolved_blobs) !=
+                WF_OK ||
             !out_repo) {
             wf_xrpc_response_set_error(resp, 400, "RepoNotFound",
-                                        "Repository is not hosted here");
+                                       "Repository is not hosted here");
             if (out_blobs) *out_blobs = NULL;
             return NULL;
         }
@@ -1652,8 +1767,8 @@ static metalbear_repo_store *resolve_repo_and_blobs(
 }
 
 static metalbear_repo_store *resolve_repo(metalbear_pds_repo_bundle *b,
-                                   const wf_xrpc_request *req,
-                                   wf_xrpc_response *resp) {
+                                          const wf_xrpc_request *req,
+                                          wf_xrpc_response *resp) {
     return resolve_repo_and_blobs(b, req, resp, NULL);
 }
 
@@ -1710,9 +1825,11 @@ static void blob_cid_set_add(const char *cid, void *opaque) {
     blob_cid_set *set = opaque;
     for (size_t i = 0; i < set->count; i++)
         if (set->cids[i] && strcmp(set->cids[i], cid) == 0) return;
-    char **grown = (char **)realloc(set->cids, (set->count + 1) * sizeof(*grown));
-    if (!grown) return; /* best-effort: a missed entry only costs an extra,
-                          * harmless dissociate call below, never a leak */
+    char **grown =
+        (char **)realloc(set->cids, (set->count + 1) * sizeof(*grown));
+    if (!grown)
+        return; /* best-effort: a missed entry only costs an extra,
+                 * harmless dissociate call below, never a leak */
     set->cids = grown;
     set->cids[set->count] = strdup(cid);
     set->count++;
@@ -1788,10 +1905,10 @@ static void free_owned_strings(char **arr, size_t count) {
  * falls back to the default. `?limit=1&reverse=true` was being served as
  * limit=50, reverse=false.
  */
-static int query_param_int(const cJSON *params, const char *name,
-                           int fallback, int min, int max) {
-    const cJSON *p = params
-        ? cJSON_GetObjectItemCaseSensitive(params, name) : NULL;
+static int query_param_int(const cJSON *params, const char *name, int fallback,
+                           int min, int max) {
+    const cJSON *p =
+        params ? cJSON_GetObjectItemCaseSensitive(params, name) : NULL;
     long v = fallback;
     if (cJSON_IsNumber(p)) {
         v = (long)p->valuedouble;
@@ -1808,14 +1925,16 @@ static int query_param_int(const cJSON *params, const char *name,
 
 static bool query_param_bool(const cJSON *params, const char *name,
                              bool fallback) {
-    const cJSON *p = params
-        ? cJSON_GetObjectItemCaseSensitive(params, name) : NULL;
+    const cJSON *p =
+        params ? cJSON_GetObjectItemCaseSensitive(params, name) : NULL;
     if (cJSON_IsBool(p)) return cJSON_IsTrue(p);
     if (cJSON_IsString(p) && p->valuestring[0]) {
         if (strcmp(p->valuestring, "true") == 0 ||
-            strcmp(p->valuestring, "1") == 0) return true;
+            strcmp(p->valuestring, "1") == 0)
+            return true;
         if (strcmp(p->valuestring, "false") == 0 ||
-            strcmp(p->valuestring, "0") == 0) return false;
+            strcmp(p->valuestring, "0") == 0)
+            return false;
     }
     return fallback;
 }
@@ -1836,12 +1955,14 @@ static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
                         wf_xrpc_response *resp,
                         metalbear_validation_status *out_status,
                         bool *out_report) {
-    const cJSON *validate = body
-        ? cJSON_GetObjectItemCaseSensitive(body, "validate") : NULL;
+    const cJSON *validate =
+        body ? cJSON_GetObjectItemCaseSensitive(body, "validate") : NULL;
     bool explicit_off = cJSON_IsFalse(validate) ||
-        (cJSON_IsString(validate) && strcmp(validate->valuestring, "false") == 0);
-    bool explicit_on = cJSON_IsTrue(validate) ||
-        (cJSON_IsString(validate) && strcmp(validate->valuestring, "true") == 0);
+                        (cJSON_IsString(validate) &&
+                         strcmp(validate->valuestring, "false") == 0);
+    bool explicit_on =
+        cJSON_IsTrue(validate) || (cJSON_IsString(validate) &&
+                                   strcmp(validate->valuestring, "true") == 0);
 
     *out_status = METALBEAR_VALIDATION_UNKNOWN;
     *out_report = !explicit_off;
@@ -1849,13 +1970,12 @@ static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
 
     /* The $type, when present, must name the collection being written to. */
     cJSON *parsed = cJSON_Parse(record_json);
-    cJSON *type = parsed
-        ? cJSON_GetObjectItemCaseSensitive(parsed, "$type") : NULL;
+    cJSON *type =
+        parsed ? cJSON_GetObjectItemCaseSensitive(parsed, "$type") : NULL;
     if (cJSON_IsString(type) && strcmp(type->valuestring, collection) != 0) {
         char detail[512];
-        snprintf(detail, sizeof(detail),
-                 "Invalid $type: expected %s, got %s", collection,
-                 type->valuestring);
+        snprintf(detail, sizeof(detail), "Invalid $type: expected %s, got %s",
+                 collection, type->valuestring);
         cJSON_Delete(parsed);
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest", detail);
         return 0;
@@ -1867,18 +1987,20 @@ static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
      * class converted to InvalidRequestError(err.message). `InvalidRecord` is
      * not a name the lexicons define, so emitting it would diverge. */
     char *message = NULL;
-    wf_status st = metalbear_validate_record(b->lexicons, collection,
-                                             record_json, explicit_on,
-                                             out_status, &message);
+    wf_status st =
+        metalbear_validate_record(b->lexicons, collection, record_json,
+                                  explicit_on, out_status, &message);
     if (st == WF_ERR_NOT_FOUND) {
         char detail[512];
-        snprintf(detail, sizeof(detail), "Unknown lexicon type: %s", collection);
+        snprintf(detail, sizeof(detail), "Unknown lexicon type: %s",
+                 collection);
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest", detail);
         return 0;
     }
     if (st == WF_ERR_VALIDATION) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                   message ? message : "record failed validation");
+                                   message ? message
+                                           : "record failed validation");
         free(message);
         return 0;
     }
@@ -1913,22 +2035,22 @@ static const char *validation_status_text(metalbear_validation_status s) {
 static void set_write_error(wf_xrpc_response *resp, wf_status st,
                             const char *context) {
     switch (st) {
-    case WF_ERR_CONFLICT:
-        wf_xrpc_response_set_error(resp, 400, "InvalidSwap",
-                                   "swap CID did not match current value");
-        return;
-    case WF_ERR_NOT_FOUND:
-        wf_xrpc_response_set_error(resp, 400, "RecordNotFound",
-                                   "record not found");
-        return;
-    default:
-        wf_xrpc_response_set_error(resp, 400, "InvalidRequest", context);
-        return;
+        case WF_ERR_CONFLICT:
+            wf_xrpc_response_set_error(resp, 400, "InvalidSwap",
+                                       "swap CID did not match current value");
+            return;
+        case WF_ERR_NOT_FOUND:
+            wf_xrpc_response_set_error(resp, 400, "RecordNotFound",
+                                       "record not found");
+            return;
+        default:
+            wf_xrpc_response_set_error(resp, 400, "InvalidRequest", context);
+            return;
     }
 }
 
 static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
-                                  wf_xrpc_response *resp) {
+                                 wf_xrpc_response *resp) {
     metalbear_blob_store *blobs = NULL;
     metalbear_repo_store *s = resolve_repo_and_blobs(
         (metalbear_pds_repo_bundle *)ctx, req, resp, &blobs);
@@ -1945,7 +2067,7 @@ static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
     cJSON *swap = cJSON_GetObjectItemCaseSensitive(body, "swapCommit");
     if (!collection || !cJSON_IsString(collection) || !record) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "collection and record required");
+                                   "collection and record required");
         return WF_OK;
     }
     char *rec_json = cJSON_PrintUnformatted(record);
@@ -1962,11 +2084,11 @@ static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
     }
 
     const char *rk = (rkey && cJSON_IsString(rkey)) ? rkey->valuestring : NULL;
-    const char *swap_str = (swap && cJSON_IsString(swap)) ? swap->valuestring
-                                                         : NULL;
+    const char *swap_str =
+        (swap && cJSON_IsString(swap)) ? swap->valuestring : NULL;
     char *uri = NULL, *cid = NULL;
-    wf_status st = metalbear_repo_store_create_record(s, collection->valuestring, rk,
-                                              rec_json, swap_str, &uri, &cid);
+    wf_status st = metalbear_repo_store_create_record(
+        s, collection->valuestring, rk, rec_json, swap_str, &uri, &cid);
     if (st != WF_OK) {
         free(rec_json);
         set_write_error(resp, st, "record creation failed");
@@ -1993,7 +2115,7 @@ static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
 }
 
 static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
-                               wf_xrpc_response *resp) {
+                              wf_xrpc_response *resp) {
     metalbear_blob_store *blobs = NULL;
     metalbear_repo_store *s = resolve_repo_and_blobs(
         (metalbear_pds_repo_bundle *)ctx, req, resp, &blobs);
@@ -2012,16 +2134,16 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
     if (!collection || !cJSON_IsString(collection) || !rkey ||
         !cJSON_IsString(rkey) || !record) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "collection, rkey and record required");
+                                   "collection, rkey and record required");
         return WF_OK;
     }
     char *rec_json = cJSON_PrintUnformatted(record);
     if (!rec_json) return WF_ERR_ALLOC;
 
-    const char *swap_str = (swap && cJSON_IsString(swap)) ? swap->valuestring
-                                                         : NULL;
-    const char *swaprec_str = (swapRec && cJSON_IsString(swapRec))
-                                  ? swapRec->valuestring : NULL;
+    const char *swap_str =
+        (swap && cJSON_IsString(swap)) ? swap->valuestring : NULL;
+    const char *swaprec_str =
+        (swapRec && cJSON_IsString(swapRec)) ? swapRec->valuestring : NULL;
 
     metalbear_validation_status vstatus;
     bool report_status = false;
@@ -2044,9 +2166,9 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
     free(old_cid_unused);
 
     char *uri = NULL, *cid = NULL;
-    wf_status st = metalbear_repo_store_put_record(s, collection->valuestring,
-                                           rkey->valuestring, rec_json,
-                                           swap_str, swaprec_str, &uri, &cid);
+    wf_status st = metalbear_repo_store_put_record(
+        s, collection->valuestring, rkey->valuestring, rec_json, swap_str,
+        swaprec_str, &uri, &cid);
     if (st != WF_OK) {
         free(rec_json);
         free(old_json);
@@ -2076,7 +2198,7 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
 }
 
 static wf_status h_delete_record(void *ctx, const wf_xrpc_request *req,
-                                  wf_xrpc_response *resp) {
+                                 wf_xrpc_response *resp) {
     metalbear_blob_store *blobs = NULL;
     metalbear_repo_store *s = resolve_repo_and_blobs(
         (metalbear_pds_repo_bundle *)ctx, req, resp, &blobs);
@@ -2094,13 +2216,13 @@ static wf_status h_delete_record(void *ctx, const wf_xrpc_request *req,
     if (!collection || !cJSON_IsString(collection) || !rkey ||
         !cJSON_IsString(rkey)) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "collection and rkey required");
+                                   "collection and rkey required");
         return WF_OK;
     }
-    const char *swap_str = (swap && cJSON_IsString(swap)) ? swap->valuestring
-                                                         : NULL;
-    const char *swaprec_str = (swapRec && cJSON_IsString(swapRec))
-                                  ? swapRec->valuestring : NULL;
+    const char *swap_str =
+        (swap && cJSON_IsString(swap)) ? swap->valuestring : NULL;
+    const char *swaprec_str =
+        (swapRec && cJSON_IsString(swapRec)) ? swapRec->valuestring : NULL;
     /* Capture the value being deleted BEFORE it is gone, so its blobs can be
      * dissociated afterward. */
     char *old_json = NULL, *old_cid_unused = NULL;
@@ -2108,9 +2230,8 @@ static wf_status h_delete_record(void *ctx, const wf_xrpc_request *req,
                                           rkey->valuestring, &old_json,
                                           &old_cid_unused);
     free(old_cid_unused);
-    wf_status st = metalbear_repo_store_delete_record(s, collection->valuestring,
-                                              rkey->valuestring, swap_str,
-                                              swaprec_str);
+    wf_status st = metalbear_repo_store_delete_record(
+        s, collection->valuestring, rkey->valuestring, swap_str, swaprec_str);
     /* Deleting a record that is not there is a no-op success, matching the
      * reference PDS: the response simply carries no `commit`. Clients delete
      * idempotently (retried unlikes, unfollows), so a 404 here would surface
@@ -2122,7 +2243,8 @@ static wf_status h_delete_record(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
     if (st == WF_OK) {
-        char *uri = make_uri(s->did, collection->valuestring, rkey->valuestring);
+        char *uri =
+            make_uri(s->did, collection->valuestring, rkey->valuestring);
         untrack_superseded_blobs(blobs, uri, old_json, NULL);
         free(uri);
     }
@@ -2138,8 +2260,9 @@ static wf_status h_delete_record(void *ctx, const wf_xrpc_request *req,
 }
 
 static wf_status h_get_record(void *ctx, const wf_xrpc_request *req,
-                               wf_xrpc_response *resp) {
-    metalbear_repo_store *s = resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
+                              wf_xrpc_response *resp) {
+    metalbear_repo_store *s =
+        resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
     if (!s) return WF_OK;
     cJSON *p = req->params;
     if (!p || !cJSON_IsObject(p)) {
@@ -2157,15 +2280,15 @@ static wf_status h_get_record(void *ctx, const wf_xrpc_request *req,
     }
     /* A taken-down record reads as absent. It is still in the repository —
      * removing it would rewrite history — so the guard is what withholds it. */
-    char *guard_uri = make_uri(s->did, collection->valuestring,
-                               rkey->valuestring);
+    char *guard_uri =
+        make_uri(s->did, collection->valuestring, rkey->valuestring);
     bool allowed = repo_access_allowed((metalbear_pds_repo_bundle *)ctx, req,
                                        guard_uri, resp);
     free(guard_uri);
     if (!allowed) return WF_OK;
     char *rec = NULL, *cid = NULL;
-    wf_status st = metalbear_repo_store_get_record(s, collection->valuestring,
-                                            rkey->valuestring, &rec, &cid);
+    wf_status st = metalbear_repo_store_get_record(
+        s, collection->valuestring, rkey->valuestring, &rec, &cid);
     if (st != WF_OK) {
         wf_xrpc_response_set_error(resp, 404, "RecordNotFound",
                                    "record not found");
@@ -2202,7 +2325,7 @@ static wf_status h_get_record(void *ctx, const wf_xrpc_request *req,
 }
 
 static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
-                                 wf_xrpc_response *resp) {
+                                wf_xrpc_response *resp) {
     metalbear_blob_store *blobs = NULL;
     metalbear_repo_store *s = resolve_repo_and_blobs(
         (metalbear_pds_repo_bundle *)ctx, req, resp, &blobs);
@@ -2217,11 +2340,11 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
     cJSON *swap = cJSON_GetObjectItemCaseSensitive(body, "swapCommit");
     if (!writes || !cJSON_IsArray(writes)) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "writes array required");
+                                   "writes array required");
         return WF_OK;
     }
-    const char *swap_str = (swap && cJSON_IsString(swap)) ? swap->valuestring
-                                                         : NULL;
+    const char *swap_str =
+        (swap && cJSON_IsString(swap)) ? swap->valuestring : NULL;
 
     /* Validate every record BEFORE anything is committed. The batch is atomic,
      * so one invalid record rejects the whole request rather than landing the
@@ -2233,16 +2356,19 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
                                    "Too many writes. Max: 200");
         return WF_OK;
     }
-    metalbear_validation_status *statuses = write_count
-        ? calloc((size_t)write_count, sizeof(*statuses)) : NULL;
+    metalbear_validation_status *statuses =
+        write_count ? calloc((size_t)write_count, sizeof(*statuses)) : NULL;
     if (write_count && !statuses) return WF_ERR_ALLOC;
     /* The value replaced or removed by an update/delete op, captured now
      * (before anything is committed) since it is the only chance to learn
      * it — the store overwrites it inside metalbear_repo_store_apply_writes.
      * NULL for create ops and for update/delete ops with no prior record. */
-    char **old_values = write_count
-        ? calloc((size_t)write_count, sizeof(*old_values)) : NULL;
-    if (write_count && !old_values) { free(statuses); return WF_ERR_ALLOC; }
+    char **old_values =
+        write_count ? calloc((size_t)write_count, sizeof(*old_values)) : NULL;
+    if (write_count && !old_values) {
+        free(statuses);
+        return WF_ERR_ALLOC;
+    }
     bool report_status = true;
     int idx = 0;
     const cJSON *w = NULL;
@@ -2257,19 +2383,22 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
             return WF_OK;
         }
         bool is_write = cJSON_IsString(type) && val && cJSON_IsString(coll) &&
-            (strcmp(type->valuestring, "com.atproto.repo.applyWrites#create") == 0 ||
-             strcmp(type->valuestring, "com.atproto.repo.applyWrites#update") == 0);
+                        (strcmp(type->valuestring,
+                                "com.atproto.repo.applyWrites#create") == 0 ||
+                         strcmp(type->valuestring,
+                                "com.atproto.repo.applyWrites#update") == 0);
         bool is_update = cJSON_IsString(type) &&
-            strcmp(type->valuestring, "com.atproto.repo.applyWrites#update") == 0;
+                         strcmp(type->valuestring,
+                                "com.atproto.repo.applyWrites#update") == 0;
         bool is_delete = cJSON_IsString(type) &&
-            strcmp(type->valuestring, "com.atproto.repo.applyWrites#delete") == 0;
+                         strcmp(type->valuestring,
+                                "com.atproto.repo.applyWrites#delete") == 0;
         if ((is_update || is_delete) && cJSON_IsString(coll) &&
             cJSON_IsString(rk) && rk->valuestring[0]) {
             char *old_cid_unused = NULL;
-            (void)metalbear_repo_store_get_record(s, coll->valuestring,
-                                                  rk->valuestring,
-                                                  &old_values[idx],
-                                                  &old_cid_unused);
+            (void)metalbear_repo_store_get_record(
+                s, coll->valuestring, rk->valuestring, &old_values[idx],
+                &old_cid_unused);
             free(old_cid_unused);
         }
         if (is_write) {
@@ -2302,8 +2431,8 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
     }
 
     char *cid = NULL, *rev = NULL, *results = NULL;
-    wf_status st = metalbear_repo_store_apply_writes(s, writes_json, swap_str, &cid,
-                                              &rev, &results);
+    wf_status st = metalbear_repo_store_apply_writes(s, writes_json, swap_str,
+                                                     &cid, &rev, &results);
     free(writes_json);
     if (st != WF_OK) {
         free(statuses);
@@ -2343,9 +2472,12 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
             const cJSON *val = cJSON_GetObjectItemCaseSensitive(wi, "value");
             cJSON *entry = cJSON_GetArrayItem(res, i);
             cJSON *entry_uri = cJSON_GetObjectItemCaseSensitive(entry, "uri");
-            bool is_create_or_update = cJSON_IsString(type) &&
-                (strcmp(type->valuestring, "com.atproto.repo.applyWrites#create") == 0 ||
-                 strcmp(type->valuestring, "com.atproto.repo.applyWrites#update") == 0);
+            bool is_create_or_update =
+                cJSON_IsString(type) &&
+                (strcmp(type->valuestring,
+                        "com.atproto.repo.applyWrites#create") == 0 ||
+                 strcmp(type->valuestring,
+                        "com.atproto.repo.applyWrites#update") == 0);
             if (is_create_or_update && cJSON_IsString(entry_uri) && val) {
                 char *val_json = cJSON_PrintUnformatted(val);
                 track_written_blobs(blobs, entry_uri->valuestring, val_json);
@@ -2357,21 +2489,27 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
             const cJSON *wi = cJSON_GetArrayItem(writes, i);
             const cJSON *type = cJSON_GetObjectItemCaseSensitive(wi, "$type");
             if (!cJSON_IsString(type)) continue;
-            if (strcmp(type->valuestring, "com.atproto.repo.applyWrites#update") == 0) {
+            if (strcmp(type->valuestring,
+                       "com.atproto.repo.applyWrites#update") == 0) {
                 cJSON *entry = cJSON_GetArrayItem(res, i);
-                cJSON *entry_uri = cJSON_GetObjectItemCaseSensitive(entry, "uri");
-                const cJSON *val = cJSON_GetObjectItemCaseSensitive(wi, "value");
+                cJSON *entry_uri =
+                    cJSON_GetObjectItemCaseSensitive(entry, "uri");
+                const cJSON *val =
+                    cJSON_GetObjectItemCaseSensitive(wi, "value");
                 if (cJSON_IsString(entry_uri)) {
                     char *val_json = val ? cJSON_PrintUnformatted(val) : NULL;
                     untrack_superseded_blobs(blobs, entry_uri->valuestring,
                                              old_values[i], val_json);
                     free(val_json);
                 }
-            } else if (strcmp(type->valuestring, "com.atproto.repo.applyWrites#delete") == 0) {
-                const cJSON *coll = cJSON_GetObjectItemCaseSensitive(wi, "collection");
+            } else if (strcmp(type->valuestring,
+                              "com.atproto.repo.applyWrites#delete") == 0) {
+                const cJSON *coll =
+                    cJSON_GetObjectItemCaseSensitive(wi, "collection");
                 const cJSON *rk = cJSON_GetObjectItemCaseSensitive(wi, "rkey");
                 if (cJSON_IsString(coll) && cJSON_IsString(rk)) {
-                    char *uri = make_uri(s->did, coll->valuestring, rk->valuestring);
+                    char *uri =
+                        make_uri(s->did, coll->valuestring, rk->valuestring);
                     untrack_superseded_blobs(blobs, uri, old_values[i], NULL);
                     free(uri);
                 }
@@ -2409,10 +2547,10 @@ static wf_status h_query_labels(void *ctx, const wf_xrpc_request *req,
      * MetalBear ever hosts its own labeler, replace this with real storage
      * and per-collection/source/date filtering. */
     wf_xrpc_response_set_error(resp, 501, "MethodNotImplemented",
-                                "com.atproto.label.queryLabels is not served "
-                                "by this PDS; label data is published by "
-                                "labelers via com.atproto.label.subscribeLabels "
-                                "and queried from an AppView, not a PDS");
+                               "com.atproto.label.queryLabels is not served "
+                               "by this PDS; label data is published by "
+                               "labelers via com.atproto.label.subscribeLabels "
+                               "and queried from an AppView, not a PDS");
     return WF_OK;
 }
 
@@ -2431,12 +2569,14 @@ cJSON *metalbear_did_document_build(const char *did, const char *handle,
     if (!document) return NULL;
     cJSON *context = cJSON_AddArrayToObject(document, "@context");
     if (!context) goto fail;
-    if (!cJSON_AddItemToArray(context,
-            cJSON_CreateString("https://www.w3.org/ns/did/v1")) ||
-        !cJSON_AddItemToArray(context,
+    if (!cJSON_AddItemToArray(
+            context, cJSON_CreateString("https://www.w3.org/ns/did/v1")) ||
+        !cJSON_AddItemToArray(
+            context,
             cJSON_CreateString("https://w3id.org/security/multikey/v1")) ||
-        !cJSON_AddItemToArray(context,
-            cJSON_CreateString("https://w3id.org/security/suites/secp256k1-2019/v1")))
+        !cJSON_AddItemToArray(
+            context, cJSON_CreateString(
+                         "https://w3id.org/security/suites/secp256k1-2019/v1")))
         goto fail;
     if (!cJSON_AddStringToObject(document, "id", did ? did : "")) goto fail;
 
@@ -2450,13 +2590,18 @@ cJSON *metalbear_did_document_build(const char *did, const char *handle,
     }
 
     /* did:key:z... — the multibase portion is everything after the prefix. */
-    if (signing_key_didkey &&
-        strncmp(signing_key_didkey, "did:key:", 8) == 0 &&
+    if (signing_key_didkey && strncmp(signing_key_didkey, "did:key:", 8) == 0 &&
         signing_key_didkey[8]) {
         cJSON *methods = cJSON_AddArrayToObject(document, "verificationMethod");
         cJSON *method = cJSON_CreateObject();
-        if (!methods || !method) { cJSON_Delete(method); goto fail; }
-        if (!cJSON_AddItemToArray(methods, method)) { cJSON_Delete(method); goto fail; }
+        if (!methods || !method) {
+            cJSON_Delete(method);
+            goto fail;
+        }
+        if (!cJSON_AddItemToArray(methods, method)) {
+            cJSON_Delete(method);
+            goto fail;
+        }
         char method_id[512];
         snprintf(method_id, sizeof(method_id), "%s#atproto", did ? did : "");
         if (!cJSON_AddStringToObject(method, "id", method_id) ||
@@ -2470,8 +2615,14 @@ cJSON *metalbear_did_document_build(const char *did, const char *handle,
     if (pds_endpoint && pds_endpoint[0]) {
         cJSON *services = cJSON_AddArrayToObject(document, "service");
         cJSON *service = cJSON_CreateObject();
-        if (!services || !service) { cJSON_Delete(service); goto fail; }
-        if (!cJSON_AddItemToArray(services, service)) { cJSON_Delete(service); goto fail; }
+        if (!services || !service) {
+            cJSON_Delete(service);
+            goto fail;
+        }
+        if (!cJSON_AddItemToArray(services, service)) {
+            cJSON_Delete(service);
+            goto fail;
+        }
         if (!cJSON_AddStringToObject(service, "id", "#atproto_pds") ||
             !cJSON_AddStringToObject(service, "type",
                                      "AtprotoPersonalDataServer") ||
@@ -2487,7 +2638,8 @@ fail:
 
 /* First at:// handle claimed by a DID document's alsoKnownAs, or NULL. */
 const char *metalbear_did_document_handle(const cJSON *document) {
-    const cJSON *aka = cJSON_GetObjectItemCaseSensitive(document, "alsoKnownAs");
+    const cJSON *aka =
+        cJSON_GetObjectItemCaseSensitive(document, "alsoKnownAs");
     const cJSON *entry = NULL;
     cJSON_ArrayForEach(entry, aka) {
         if (cJSON_IsString(entry) && entry->valuestring &&
@@ -2514,8 +2666,9 @@ char *metalbear_did_document_signing_key(const cJSON *document) {
         const cJSON *id = cJSON_GetObjectItemCaseSensitive(method, "id");
         const cJSON *key =
             cJSON_GetObjectItemCaseSensitive(method, "publicKeyMultibase");
-        if (!cJSON_IsString(id) || !id->valuestring ||
-            !cJSON_IsString(key) || !key->valuestring) continue;
+        if (!cJSON_IsString(id) || !id->valuestring || !cJSON_IsString(key) ||
+            !key->valuestring)
+            continue;
         if (!id_has_fragment(id->valuestring, "#atproto")) continue;
         size_t n = strlen("did:key:") + strlen(key->valuestring) + 1;
         char *didkey = malloc(n);
@@ -2529,7 +2682,8 @@ char *metalbear_did_document_signing_key(const cJSON *document) {
 /* serviceEndpoint of the document's #atproto_pds service entry, or NULL.
  * Borrowed from `document`. */
 const char *metalbear_did_document_pds_endpoint(const cJSON *document) {
-    const cJSON *services = cJSON_GetObjectItemCaseSensitive(document, "service");
+    const cJSON *services =
+        cJSON_GetObjectItemCaseSensitive(document, "service");
     const cJSON *service = NULL;
     cJSON_ArrayForEach(service, services) {
         const cJSON *id = cJSON_GetObjectItemCaseSensitive(service, "id");
@@ -2548,8 +2702,9 @@ const char *metalbear_did_document_pds_endpoint(const cJSON *document) {
 }
 
 static wf_status h_describe_repo(void *ctx, const wf_xrpc_request *req,
-                                  wf_xrpc_response *resp) {
-    metalbear_repo_store *s = resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
+                                 wf_xrpc_response *resp) {
+    metalbear_repo_store *s =
+        resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
     if (!s) return WF_OK;
     char *json = NULL;
     wf_status st = metalbear_repo_store_describe(s, &json);
@@ -2598,8 +2753,8 @@ static wf_status h_describe_repo(void *ctx, const wf_xrpc_request *req,
     }
 
     const char *claimed = metalbear_did_document_handle(did_doc);
-    bool handle_is_correct = resolved_doc && claimed && handle &&
-                             strcmp(claimed, handle) == 0;
+    bool handle_is_correct =
+        resolved_doc && claimed && handle && strcmp(claimed, handle) == 0;
     cJSON_AddBoolToObject(root, "handleIsCorrect", handle_is_correct);
     cJSON_AddItemToObject(root, "didDoc", did_doc);
 
@@ -2617,13 +2772,14 @@ static wf_status h_describe_repo(void *ctx, const wf_xrpc_request *req,
 
 /* ── listRecords (com.atproto.repo.listRecords) ──────────────────────── */
 
-wf_status metalbear_repo_store_list_records(metalbear_repo_store *s, const char *collection,
-                                      const char *cursor, bool reverse,
-                                      int limit, char **out_json) {
+wf_status metalbear_repo_store_list_records(metalbear_repo_store *s,
+                                            const char *collection,
+                                            const char *cursor, bool reverse,
+                                            int limit, char **out_json) {
     if (!s || !collection || !*collection || !out_json)
         return WF_ERR_INVALID_ARG;
     *out_json = NULL;
-    if (limit <= 0 || limit > 100) limit = 50;  /* lexicon max is 100 */
+    if (limit <= 0 || limit > 100) limit = 50; /* lexicon max is 100 */
 
     const char *cursor_str = cursor && *cursor ? cursor : NULL;
 
@@ -2634,22 +2790,24 @@ wf_status metalbear_repo_store_list_records(metalbear_repo_store *s, const char 
     char sql[256];
     if (reverse) {
         if (cursor_str)
-            snprintf(sql, sizeof(sql),
+            snprintf(
+                sql, sizeof(sql),
                 "SELECT rkey, cid, value FROM records "
                 "WHERE collection = ? AND rkey > ? ORDER BY rkey ASC LIMIT ?;");
         else
             snprintf(sql, sizeof(sql),
-                "SELECT rkey, cid, value FROM records "
-                "WHERE collection = ? ORDER BY rkey ASC LIMIT ?;");
+                     "SELECT rkey, cid, value FROM records "
+                     "WHERE collection = ? ORDER BY rkey ASC LIMIT ?;");
     } else {
         if (cursor_str)
             snprintf(sql, sizeof(sql),
-                "SELECT rkey, cid, value FROM records "
-                "WHERE collection = ? AND rkey < ? ORDER BY rkey DESC LIMIT ?;");
+                     "SELECT rkey, cid, value FROM records "
+                     "WHERE collection = ? AND rkey < ? ORDER BY rkey DESC "
+                     "LIMIT ?;");
         else
             snprintf(sql, sizeof(sql),
-                "SELECT rkey, cid, value FROM records "
-                "WHERE collection = ? ORDER BY rkey DESC LIMIT ?;");
+                     "SELECT rkey, cid, value FROM records "
+                     "WHERE collection = ? ORDER BY rkey DESC LIMIT ?;");
     }
 
     sqlite3_stmt *stmt = NULL;
@@ -2658,10 +2816,14 @@ wf_status metalbear_repo_store_list_records(metalbear_repo_store *s, const char 
     sqlite3_bind_text(stmt, 1, collection, -1, SQLITE_TRANSIENT);
     if (cursor_str)
         sqlite3_bind_text(stmt, 2, cursor_str, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, cursor_str ? 3 : 2, limit + 1); /* +1 to detect a next page */
+    sqlite3_bind_int(stmt, cursor_str ? 3 : 2,
+                     limit + 1); /* +1 to detect a next page */
 
     cJSON *records = cJSON_CreateArray();
-    if (!records) { sqlite3_finalize(stmt); return WF_ERR_ALLOC; }
+    if (!records) {
+        sqlite3_finalize(stmt);
+        return WF_ERR_ALLOC;
+    }
     int count = 0;
     int has_more = 0;
     /* Owned copy: sqlite3_column_text pointers do not survive the next
@@ -2716,9 +2878,11 @@ wf_status metalbear_repo_store_records_since_rev(metalbear_repo_store *s,
      * account migration, say). Splicing local records into a response built
      * from someone else's timeline would be worse than showing a stale one. */
     sqlite3_stmt *check = NULL;
-    if (sqlite3_prepare_v2(s->db,
+    if (sqlite3_prepare_v2(
+            s->db,
             "SELECT 1 FROM records WHERE repo_rev IS NOT NULL AND repo_rev <= ?"
-            " LIMIT 1;", -1, &check, NULL) != SQLITE_OK)
+            " LIMIT 1;",
+            -1, &check, NULL) != SQLITE_OK)
         return WF_ERR_INTERNAL;
     sqlite3_bind_text(check, 1, rev, -1, SQLITE_TRANSIENT);
     bool has_older = sqlite3_step(check) == SQLITE_ROW;
@@ -2735,10 +2899,12 @@ wf_status metalbear_repo_store_records_since_rev(metalbear_repo_store *s,
 
     if (has_older) {
         sqlite3_stmt *stmt = NULL;
-        if (sqlite3_prepare_v2(s->db,
+        if (sqlite3_prepare_v2(
+                s->db,
                 "SELECT collection, rkey, cid, value, repo_rev, indexed_at"
                 " FROM records WHERE repo_rev IS NOT NULL AND repo_rev > ?"
-                " ORDER BY repo_rev ASC LIMIT ?;", -1, &stmt, NULL) != SQLITE_OK) {
+                " ORDER BY repo_rev ASC LIMIT ?;",
+                -1, &stmt, NULL) != SQLITE_OK) {
             cJSON_Delete(root);
             return WF_ERR_INTERNAL;
         }
@@ -2784,9 +2950,9 @@ wf_status metalbear_repo_store_foreach_record(
     if (!s || !visit) return WF_ERR_INVALID_ARG;
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(s->db,
-            "SELECT collection, rkey, value FROM records "
-            "ORDER BY collection ASC, rkey ASC;",
-            -1, &stmt, NULL) != SQLITE_OK)
+                           "SELECT collection, rkey, value FROM records "
+                           "ORDER BY collection ASC, rkey ASC;",
+                           -1, &stmt, NULL) != SQLITE_OK)
         return WF_ERR_INTERNAL;
     wf_status status = WF_OK;
     while (status == WF_OK && sqlite3_step(stmt) == SQLITE_ROW) {
@@ -2803,7 +2969,7 @@ wf_status metalbear_repo_store_foreach_record(
 /* ── getLatestCommit (com.atproto.sync.getLatestCommit) ───────────────── */
 
 wf_status metalbear_repo_store_get_head(metalbear_repo_store *s, char **out_rev,
-                                  char **out_cid) {
+                                        char **out_cid) {
     if (!s || !out_rev || !out_cid) return WF_ERR_INVALID_ARG;
     *out_rev = NULL;
     *out_cid = NULL;
@@ -2820,21 +2986,27 @@ wf_status metalbear_repo_store_get_head(metalbear_repo_store *s, char **out_rev,
     if (!cid) return WF_ERR_ALLOC;
     *out_cid = cid;
     *out_rev = strdup(rev);
-    if (!*out_rev) { free(cid); return WF_ERR_ALLOC; }
+    if (!*out_rev) {
+        free(cid);
+        return WF_ERR_ALLOC;
+    }
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_export(metalbear_repo_store *s, const char *since,
-                               unsigned char **out_data, size_t *out_len) {
+wf_status metalbear_repo_store_export(metalbear_repo_store *s,
+                                      const char *since,
+                                      unsigned char **out_data,
+                                      size_t *out_len) {
     if (!s || !out_data || !out_len) return WF_ERR_INVALID_ARG;
     *out_data = NULL;
     *out_len = 0;
     if (s->head.len == 0) return WF_ERR_NOT_FOUND;
 
-    const char *sql = since && since[0]
-        ? "SELECT cid FROM blocks WHERE repo_rev > ? "
-          "ORDER BY repo_rev DESC, cid DESC;"
-        : "SELECT cid FROM blocks ORDER BY repo_rev DESC, cid DESC;";
+    const char *sql =
+        since && since[0]
+            ? "SELECT cid FROM blocks WHERE repo_rev > ? "
+              "ORDER BY repo_rev DESC, cid DESC;"
+            : "SELECT cid FROM blocks ORDER BY repo_rev DESC, cid DESC;";
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK)
         return WF_ERR_INTERNAL;
@@ -2857,8 +3029,8 @@ wf_status metalbear_repo_store_export(metalbear_repo_store *s, const char *since
             status = WF_ERR_NOT_FOUND;
             break;
         }
-        wf_car_block *grown = realloc(export_car.blocks,
-            (export_car.block_count + 1) * sizeof(*grown));
+        wf_car_block *grown = realloc(
+            export_car.blocks, (export_car.block_count + 1) * sizeof(*grown));
         if (!grown) {
             status = WF_ERR_ALLOC;
             break;
@@ -2867,8 +3039,7 @@ wf_status metalbear_repo_store_export(metalbear_repo_store *s, const char *since
         export_car.blocks[export_car.block_count++] = *source;
     }
     sqlite3_finalize(stmt);
-    if (status == WF_OK)
-        status = wf_car_write(&export_car, out_data, out_len);
+    if (status == WF_OK) status = wf_car_write(&export_car, out_data, out_len);
     free(export_car.blocks); /* Shallow references into s->car. */
     return status;
 }
@@ -2897,16 +3068,16 @@ wf_status metalbear_repo_store_export_commit(metalbear_repo_store *s,
     wf_car export_car = {0};
     export_car.roots = &s->head;
     export_car.root_count = 1;
-    export_car.blocks = source;      /* Shallow reference into s->car. */
+    export_car.blocks = source; /* Shallow reference into s->car. */
     export_car.block_count = 1;
     return wf_car_write(&export_car, out_data, out_len);
 }
 
 wf_status metalbear_repo_store_get_blocks(metalbear_repo_store *s,
-                                    const char *const *cids,
-                                    size_t cid_count,
-                                    unsigned char **out_data,
-                                    size_t *out_len) {
+                                          const char *const *cids,
+                                          size_t cid_count,
+                                          unsigned char **out_data,
+                                          size_t *out_len) {
     if (!s || !cids || cid_count == 0 || !out_data || !out_len)
         return WF_ERR_INVALID_ARG;
     *out_data = NULL;
@@ -2934,8 +3105,8 @@ wf_status metalbear_repo_store_get_blocks(metalbear_repo_store *s,
             status = WF_ERR_NOT_FOUND;
             break;
         }
-        wf_car_block *grown = realloc(selected.blocks,
-            (selected.block_count + 1) * sizeof(*grown));
+        wf_car_block *grown = realloc(
+            selected.blocks, (selected.block_count + 1) * sizeof(*grown));
         if (!grown) {
             status = WF_ERR_ALLOC;
             break;
@@ -2949,10 +3120,10 @@ wf_status metalbear_repo_store_get_blocks(metalbear_repo_store *s,
 }
 
 wf_status metalbear_repo_store_get_record_car(metalbear_repo_store *s,
-                                       const char *collection,
-                                       const char *rkey,
-                                       unsigned char **out_data,
-                                       size_t *out_len) {
+                                              const char *collection,
+                                              const char *rkey,
+                                              unsigned char **out_data,
+                                              size_t *out_len) {
     if (!s || !collection || !rkey || !out_data || !out_len)
         return WF_ERR_INVALID_ARG;
     *out_data = NULL;
@@ -2962,8 +3133,8 @@ wf_status metalbear_repo_store_get_record_car(metalbear_repo_store *s,
     /* Get the record CID. */
     char *record_json = NULL;
     char *record_cid_str = NULL;
-    wf_status status = metalbear_repo_store_get_record(s, collection, rkey,
-                                                       &record_json, &record_cid_str);
+    wf_status status = metalbear_repo_store_get_record(
+        s, collection, rkey, &record_json, &record_cid_str);
     if (status != WF_OK) return status;
     free(record_json);
 
@@ -2999,10 +3170,10 @@ wf_status metalbear_repo_store_get_record_car(metalbear_repo_store *s,
 }
 
 wf_status metalbear_repo_store_create_service_auth(metalbear_repo_store *s,
-                                             const char *audience,
-                                             int64_t expiration,
-                                             const char *lxm,
-                                             char **out_token) {
+                                                   const char *audience,
+                                                   int64_t expiration,
+                                                   const char *lxm,
+                                                   char **out_token) {
     if (!s || !audience || !out_token) return WF_ERR_INVALID_ARG;
     wf_service_auth_request request = {
         .iss = s->did,
@@ -3016,33 +3187,34 @@ wf_status metalbear_repo_store_create_service_auth(metalbear_repo_store *s,
 /* ── Route handlers ──────────────────────────────────────────────────── */
 
 static wf_status h_list_records(void *ctx, const wf_xrpc_request *req,
-                                 wf_xrpc_response *resp) {
-    metalbear_repo_store *s = resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
+                                wf_xrpc_response *resp) {
+    metalbear_repo_store *s =
+        resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
     if (!s) return WF_OK;
     cJSON *p = req->params;
     if (!p || !cJSON_IsObject(p)) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "query parameters required");
+                                   "query parameters required");
         return WF_OK;
     }
     cJSON *collection = cJSON_GetObjectItemCaseSensitive(p, "collection");
-    if (!collection || !cJSON_IsString(collection) || !collection->valuestring ||
-        !*collection->valuestring) {
+    if (!collection || !cJSON_IsString(collection) ||
+        !collection->valuestring || !*collection->valuestring) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "collection required");
+                                   "collection required");
         return WF_OK;
     }
     cJSON *cursor = cJSON_GetObjectItemCaseSensitive(p, "cursor");
     int lim = query_param_int(p, "limit", 50, 1, 100);
     int rev = query_param_bool(p, "reverse", false) ? 1 : 0;
-    const char *cur = (cursor && cJSON_IsString(cursor)) ? cursor->valuestring
-                                                          : NULL;
+    const char *cur =
+        (cursor && cJSON_IsString(cursor)) ? cursor->valuestring : NULL;
     char *json = NULL;
-    wf_status st = metalbear_repo_store_list_records(s, collection->valuestring, cur,
-                                              rev, lim, &json);
+    wf_status st = metalbear_repo_store_list_records(s, collection->valuestring,
+                                                     cur, rev, lim, &json);
     if (st != WF_OK) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "failed to list records");
+                                   "failed to list records");
         return WF_OK;
     }
     wf_xrpc_response_set_body(resp, json, strlen(json));
@@ -3051,8 +3223,9 @@ static wf_status h_list_records(void *ctx, const wf_xrpc_request *req,
 }
 
 static wf_status h_get_latest_commit(void *ctx, const wf_xrpc_request *req,
-                                      wf_xrpc_response *resp) {
-    metalbear_repo_store *s = resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
+                                     wf_xrpc_response *resp) {
+    metalbear_repo_store *s =
+        resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
     if (!s) return WF_OK;
     char *rev = NULL, *cid = NULL;
     wf_status st = metalbear_repo_store_get_head(s, &rev, &cid);
@@ -3060,11 +3233,11 @@ static wf_status h_get_latest_commit(void *ctx, const wf_xrpc_request *req,
         /* The lexicon declares RepoNotFound; an invented name is as unusable
          * to a client as a generic one. */
         wf_xrpc_response_set_error(resp, 400, "RepoNotFound",
-                                    "repository is empty");
+                                   "repository is empty");
         return WF_OK;
     } else if (st != WF_OK) {
         wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                    "failed to read head");
+                                   "failed to read head");
         return WF_OK;
     }
     cJSON *out = cJSON_CreateObject();
@@ -3072,7 +3245,8 @@ static wf_status h_get_latest_commit(void *ctx, const wf_xrpc_request *req,
     cJSON_AddStringToObject(out, "rev", rev ? rev : "");
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
-    free(rev); free(cid);
+    free(rev);
+    free(cid);
     if (!js) return WF_ERR_ALLOC;
     wf_xrpc_response_set_body(resp, js, strlen(js));
     free(js);
@@ -3105,14 +3279,14 @@ static wf_status h_get_latest_commit(void *ctx, const wf_xrpc_request *req,
  * this is deliberately left as future work rather than guessed at here. */
 
 static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
-                                wf_xrpc_response *resp) {
+                               wf_xrpc_response *resp) {
     metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)ctx;
     /* Manage-scope auth (repo:manage-equivalent) is enforced in server.c's
      * full_access_route gate before this handler ever runs -- see
      * authenticate_request. */
     if (!b->accepting_imports) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "Service is not accepting repo imports");
+                                   "Service is not accepting repo imports");
         return WF_OK;
     }
 
@@ -3120,26 +3294,25 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
     if (!s) return WF_OK;
     if (!req->body || req->body_len == 0) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "CAR body required");
+                                   "CAR body required");
         return WF_OK;
     }
-    if (b->max_import_size > 0 &&
-        (int64_t)req->body_len > b->max_import_size) {
+    if (b->max_import_size > 0 && (int64_t)req->body_len > b->max_import_size) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "CAR body exceeds maximum import size");
+                                   "CAR body exceeds maximum import size");
         return WF_OK;
     }
 
-    wf_repo_verify_options opts = { s->did, s->signing_key_didkey, NULL };
+    wf_repo_verify_options opts = {s->did, s->signing_key_didkey, NULL};
     wf_car imported;
     wf_commit commit;
-    wf_status st = wf_repo_import(req->body, req->body_len, &opts,
-                                   &imported, &commit);
+    wf_status st =
+        wf_repo_import(req->body, req->body_len, &opts, &imported, &commit);
     if (st != WF_OK) {
         /* A bad/unverifiable CAR fails the import rather than corrupting
          * the existing repo (atproto returns InvalidCAR). */
         wf_xrpc_response_set_error(resp, 400, "InvalidCAR",
-                                    "imported CAR failed verification");
+                                   "imported CAR failed verification");
         return WF_OK;
     }
     if (imported.root_count != 1) {
@@ -3149,17 +3322,19 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
          * single repo snapshot to adopt. */
         wf_car_free(&imported);
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
-                                    "expected one root");
+                                   "expected one root");
         return WF_OK;
     }
 
     /* Merge blocks that aren't already present into the store's CAR. */
     for (size_t i = 0; i < imported.block_count; i++) {
-        if (wf_car_find_block(&s->car, &imported.blocks[i].cid))
-            continue;
-        wf_car_block *nb = realloc(s->car.blocks,
-            (s->car.block_count + 1) * sizeof(*nb));
-        if (!nb) { wf_car_free(&imported); return WF_ERR_ALLOC; }
+        if (wf_car_find_block(&s->car, &imported.blocks[i].cid)) continue;
+        wf_car_block *nb =
+            realloc(s->car.blocks, (s->car.block_count + 1) * sizeof(*nb));
+        if (!nb) {
+            wf_car_free(&imported);
+            return WF_ERR_ALLOC;
+        }
         s->car.blocks = nb;
         wf_car_block *blk = &s->car.blocks[s->car.block_count];
         blk->cid = imported.blocks[i].cid;
@@ -3179,7 +3354,7 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
     st = commit_persist(s, &new_head);
     if (st != WF_OK) {
         wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                    "failed to persist imported repo");
+                                   "failed to persist imported repo");
         return WF_OK;
     }
     /* Rebuild the records index so listRecords reflects the imported repo.
@@ -3209,11 +3384,12 @@ static wf_status register_pds_repo_handlers(wf_xrpc_server *server,
                                             metalbear_pds_repo_bundle *b);
 
 wf_status metalbear_xrpc_server_register_pds_repo(wf_xrpc_server *server,
-                                             metalbear_repo_store *store,
-                                             const char *service_did,
-                                             const char *public_url) {
+                                                  metalbear_repo_store *store,
+                                                  const char *service_did,
+                                                  const char *public_url) {
     if (!server || !store) return WF_ERR_INVALID_ARG;
-    metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
+    metalbear_pds_repo_bundle *b =
+        (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
     if (!b) return WF_ERR_ALLOC;
     *b = (metalbear_pds_repo_bundle){0};
     b->fallback_repo = store;
@@ -3228,37 +3404,37 @@ static wf_status register_pds_repo_handlers(wf_xrpc_server *server,
                                             metalbear_pds_repo_bundle *b) {
     if (!server || !b) return WF_ERR_INVALID_ARG;
     wf_status s;
-    s = wf_xrpc_server_register_procedure(server,
-            "com.atproto.repo.createRecord", h_create_record, b);
+    s = wf_xrpc_server_register_procedure(
+        server, "com.atproto.repo.createRecord", h_create_record, b);
     if (s != WF_OK) return s;
     s = wf_xrpc_server_register_procedure(server, "com.atproto.repo.putRecord",
-            h_put_record, b);
+                                          h_put_record, b);
     if (s != WF_OK) return s;
-    s = wf_xrpc_server_register_procedure(server,
-            "com.atproto.repo.deleteRecord", h_delete_record, b);
+    s = wf_xrpc_server_register_procedure(
+        server, "com.atproto.repo.deleteRecord", h_delete_record, b);
     if (s != WF_OK) return s;
-    s = wf_xrpc_server_register_procedure(server, "com.atproto.repo.applyWrites",
-            h_apply_writes, b);
+    s = wf_xrpc_server_register_procedure(
+        server, "com.atproto.repo.applyWrites", h_apply_writes, b);
     if (s != WF_OK) return s;
     s = wf_xrpc_server_register_query(server, "com.atproto.repo.getRecord",
-            h_get_record, b);
+                                      h_get_record, b);
     if (s != WF_OK) return s;
     s = wf_xrpc_server_register_query(server, "com.atproto.repo.describeRepo",
-            h_describe_repo, b);
+                                      h_describe_repo, b);
     if (s != WF_OK) return s;
     s = wf_xrpc_server_register_query(server, "com.atproto.repo.listRecords",
-            h_list_records, b);
+                                      h_list_records, b);
     if (s != WF_OK) return s;
     s = wf_xrpc_server_register_query(server, "com.atproto.label.queryLabels",
-            h_query_labels, b);
+                                      h_query_labels, b);
     if (s != WF_OK) return s;
-    s = wf_xrpc_server_register_query(server, "com.atproto.sync.getLatestCommit",
-            h_get_latest_commit, b);
+    s = wf_xrpc_server_register_query(
+        server, "com.atproto.sync.getLatestCommit", h_get_latest_commit, b);
     if (s != WF_OK) return s;
     /* importRepo (CAR POST body) — see h_import_repo. uploadBlob is
      * registered separately by wf_xrpc_server_register_blob_store. */
-    s = wf_xrpc_server_register_procedure(server,
-            "com.atproto.repo.importRepo", h_import_repo, b);
+    s = wf_xrpc_server_register_procedure(server, "com.atproto.repo.importRepo",
+                                          h_import_repo, b);
     if (s != WF_OK) return s;
     return WF_OK;
 }
@@ -3267,19 +3443,19 @@ wf_status metalbear_xrpc_server_register_pds_repo_resolver(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url) {
     return metalbear_xrpc_server_register_pds_repo_resolver_ex(
-        server, resolver, ctx, service_did, public_url, NULL, NULL, NULL,
-        NULL, NULL, true, 0);
+        server, resolver, ctx, service_did, public_url, NULL, NULL, NULL, NULL,
+        NULL, true, 0);
 }
 
 wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url,
     metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx,
-    const wf_lexicon_registry *lexicons,
-    metalbear_xrpc_repo_access_guard guard, void *guard_ctx,
-    bool accepting_imports, int64_t max_import_size) {
+    const wf_lexicon_registry *lexicons, metalbear_xrpc_repo_access_guard guard,
+    void *guard_ctx, bool accepting_imports, int64_t max_import_size) {
     if (!server) return WF_ERR_INVALID_ARG;
-    metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
+    metalbear_pds_repo_bundle *b =
+        (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
     if (!b) return WF_ERR_ALLOC;
     *b = (metalbear_pds_repo_bundle){0};
     b->resolver = resolver;

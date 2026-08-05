@@ -65,12 +65,12 @@ typedef enum metalbear_repo_store_event_kind {
 
 /** One mutation within a commit event, mirroring subscribeRepos #repoOp. */
 typedef struct metalbear_repo_store_op {
-    const char *action;            /* create / update / delete */
+    const char *action; /* create / update / delete */
     const char *collection;
     const char *rkey;
-    wf_cid cid;                    /* new record CID; unset for delete */
+    wf_cid cid; /* new record CID; unset for delete */
     int has_cid;
-    wf_cid prev;                   /* previous record CID, when known */
+    wf_cid prev; /* previous record CID, when known */
     int has_prev;
 } metalbear_repo_store_op;
 
@@ -87,17 +87,17 @@ typedef struct metalbear_repo_store_event {
     const char *did;
     wf_cid commit_cid;
     const char *rev;
-    const char *since;             /* NULL for a genesis commit */
+    const char *since; /* NULL for a genesis commit */
     wf_cid prev_data;
     int has_prev_data;
-    const metalbear_repo_store_op *ops;  /* commit only */
+    const metalbear_repo_store_op *ops; /* commit only */
     size_t ops_count;
-    const unsigned char *blocks;   /* incremental CAR, full CAR for sync */
+    const unsigned char *blocks; /* incremental CAR, full CAR for sync */
     size_t blocks_len;
 } metalbear_repo_store_event;
 
-typedef void (*metalbear_repo_store_event_cb)(const metalbear_repo_store_event *event,
-                                       void *context);
+typedef void (*metalbear_repo_store_event_cb)(
+    const metalbear_repo_store_event *event, void *context);
 
 /**
  * Open (or create) a durable repo store at `path`.
@@ -111,7 +111,8 @@ typedef void (*metalbear_repo_store_event_cb)(const metalbear_repo_store_event *
  * metalbear_repo_store_free.
  */
 wf_status metalbear_repo_store_open(const char *path, const char *did,
-                             const char *handle, metalbear_repo_store **out);
+                                    const char *handle,
+                                    metalbear_repo_store **out);
 
 /**
  * As metalbear_repo_store_open, but on first creation adopts `signing_key`
@@ -124,9 +125,9 @@ wf_status metalbear_repo_store_open(const char *path, const char *did,
  * creation.
  */
 wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
-                             const char *handle,
-                             const wf_signing_key *signing_key,
-                             metalbear_repo_store **out);
+                                             const char *handle,
+                                             const wf_signing_key *signing_key,
+                                             metalbear_repo_store **out);
 
 /** Close a store and release all resources. Safe to call with NULL. */
 void metalbear_repo_store_free(metalbear_repo_store *store);
@@ -137,18 +138,21 @@ const char *metalbear_repo_store_did(const metalbear_repo_store *store);
 /** Repo handle (e.g. "example.com"). Borrowed; valid until store free. */
 const char *metalbear_repo_store_handle(const metalbear_repo_store *store);
 
-/** Signing key did:key (e.g. "did:key:z..."). Borrowed; valid until store free. */
-const char *metalbear_repo_store_signing_key_did(const metalbear_repo_store *store);
+/** Signing key did:key (e.g. "did:key:z..."). Borrowed; valid until store free.
+ */
+const char *
+metalbear_repo_store_signing_key_did(const metalbear_repo_store *store);
 
-wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store, const char *handle);
+wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store,
+                                          const char *handle);
 
 wf_status metalbear_repo_store_get_stats(metalbear_repo_store *store,
-                                  metalbear_repo_store_stats *out_stats);
+                                         metalbear_repo_store_stats *out_stats);
 
 /** Install or clear the post-persistence repository event observer. */
-void metalbear_repo_store_set_event_callback(metalbear_repo_store *store,
-                                      metalbear_repo_store_event_cb callback,
-                                      void *context);
+void metalbear_repo_store_set_event_callback(
+    metalbear_repo_store *store, metalbear_repo_store_event_cb callback,
+    void *context);
 
 /**
  * Append a new record (createRecord).
@@ -168,11 +172,11 @@ void metalbear_repo_store_set_event_callback(metalbear_repo_store *store,
  * record-key rules, and a present `$type` must equal `collection`.
  */
 wf_status metalbear_repo_store_create_record(metalbear_repo_store *store,
-                                      const char *collection,
-                                      const char *rkey_or_null,
-                                      const char *record_json,
-                                      const char *swap_commit_or_null,
-                                      char **out_uri, char **out_cid);
+                                             const char *collection,
+                                             const char *rkey_or_null,
+                                             const char *record_json,
+                                             const char *swap_commit_or_null,
+                                             char **out_uri, char **out_cid);
 
 /**
  * Put a record (putRecord) — upsert by rkey.
@@ -186,13 +190,10 @@ wf_status metalbear_repo_store_create_record(metalbear_repo_store *store,
  * A NULL guard means "no guard". The `rkey` is validated against atproto's
  * record-key rules and a present `$type` must equal `collection`.
  */
-wf_status metalbear_repo_store_put_record(metalbear_repo_store *store,
-                                   const char *collection,
-                                   const char *rkey,
-                                   const char *record_json,
-                                   const char *swap_commit_or_null,
-                                   const char *swap_record_or_null,
-                                   char **out_uri, char **out_cid);
+wf_status metalbear_repo_store_put_record(
+    metalbear_repo_store *store, const char *collection, const char *rkey,
+    const char *record_json, const char *swap_commit_or_null,
+    const char *swap_record_or_null, char **out_uri, char **out_cid);
 
 /**
  * Delete a record (deleteRecord). Returns WF_ERR_NOT_FOUND when the
@@ -205,10 +206,10 @@ wf_status metalbear_repo_store_put_record(metalbear_repo_store *store,
  * atproto's record-key rules.
  */
 wf_status metalbear_repo_store_delete_record(metalbear_repo_store *store,
-                                      const char *collection,
-                                      const char *rkey,
-                                      const char *swap_commit_or_null,
-                                      const char *swap_record_or_null);
+                                             const char *collection,
+                                             const char *rkey,
+                                             const char *swap_commit_or_null,
+                                             const char *swap_record_or_null);
 
 /**
  * Fetch a record (getRecord).
@@ -219,10 +220,10 @@ wf_status metalbear_repo_store_delete_record(metalbear_repo_store *store,
  * does not exist.
  */
 wf_status metalbear_repo_store_get_record(metalbear_repo_store *store,
-                                   const char *collection,
-                                   const char *rkey,
-                                   char **out_record_json,
-                                   char **out_cid);
+                                          const char *collection,
+                                          const char *rkey,
+                                          char **out_record_json,
+                                          char **out_cid);
 
 /**
  * Apply a batch of writes (applyWrites).
@@ -252,11 +253,11 @@ wf_status metalbear_repo_store_get_record(metalbear_repo_store *store,
  * the batch is capped at 200 writes (mirroring atproto's limit).
  */
 wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *store,
-                                      const char *writes_json,
-                                      const char *swap_commit_or_null,
-                                      char **out_commit_cid,
-                                      char **out_commit_rev,
-                                      char **out_results_json);
+                                            const char *writes_json,
+                                            const char *swap_commit_or_null,
+                                            char **out_commit_cid,
+                                            char **out_commit_rev,
+                                            char **out_results_json);
 
 /**
  * Records written after `rev`, oldest first, as
@@ -279,7 +280,8 @@ wf_status metalbear_repo_store_records_since_rev(metalbear_repo_store *store,
  * The route handler adds the lexicon's required didDoc and handleIsCorrect,
  * which need the identity layer. *out_json is a caller-owned JSON string.
  */
-wf_status metalbear_repo_store_describe(metalbear_repo_store *store, char **out_json);
+wf_status metalbear_repo_store_describe(metalbear_repo_store *store,
+                                        char **out_json);
 
 /**
  * Verify the current head commit against the store's signing key using
@@ -289,8 +291,8 @@ wf_status metalbear_repo_store_describe(metalbear_repo_store *store, char **out_
  * commit is authentic, 0 otherwise. `out_commit` may be NULL.
  */
 wf_status metalbear_repo_store_verify_head(metalbear_repo_store *store,
-                                     int *out_verified,
-                                     wf_commit *out_commit);
+                                           int *out_verified,
+                                           wf_commit *out_commit);
 
 /**
  * List records in a collection (com.atproto.repo.listRecords).
@@ -308,11 +310,9 @@ wf_status metalbear_repo_store_verify_head(metalbear_repo_store *store,
  * {"records":[{"uri","cid","value"}], "cursor"?}. Free it with free().
  */
 wf_status metalbear_repo_store_list_records(metalbear_repo_store *store,
-                                     const char *collection,
-                                     const char *cursor,
-                                     bool reverse,
-                                     int limit,
-                                     char **out_json);
+                                            const char *collection,
+                                            const char *cursor, bool reverse,
+                                            int limit, char **out_json);
 
 /**
  * Stream every record in the repository (all collections) to a callback,
@@ -337,8 +337,8 @@ wf_status metalbear_repo_store_foreach_record(
  * repository is empty (no head commit yet). On WF_OK, *out_rev and
  * *out_cid are caller-owned strings (free() them).
  */
-wf_status metalbear_repo_store_get_head(metalbear_repo_store *store, char **out_rev,
-                                 char **out_cid);
+wf_status metalbear_repo_store_get_head(metalbear_repo_store *store,
+                                        char **out_rev, char **out_cid);
 
 /**
  * Export the repository as a CAR rooted at the current commit.
@@ -350,8 +350,9 @@ wf_status metalbear_repo_store_get_head(metalbear_repo_store *store, char **out_
  * `*out_data` is caller-owned and freed with free().
  */
 wf_status metalbear_repo_store_export(metalbear_repo_store *store,
-                               const char *since_or_null,
-                               unsigned char **out_data, size_t *out_len);
+                                      const char *since_or_null,
+                                      unsigned char **out_data,
+                                      size_t *out_len);
 
 /**
  * Export just the current commit block as a single-block CAR rooted at it.
@@ -374,10 +375,10 @@ wf_status metalbear_repo_store_export_commit(metalbear_repo_store *store,
  * caller owns `*out_data` and frees it with free().
  */
 wf_status metalbear_repo_store_get_blocks(metalbear_repo_store *store,
-                                     const char *const *cids,
-                                     size_t cid_count,
-                                     unsigned char **out_data,
-                                     size_t *out_len);
+                                          const char *const *cids,
+                                          size_t cid_count,
+                                          unsigned char **out_data,
+                                          size_t *out_len);
 
 /**
  * Fetch a single record as a CAR file rooted at the current commit.
@@ -387,17 +388,17 @@ wf_status metalbear_repo_store_get_blocks(metalbear_repo_store *store,
  * Returns WF_ERR_NOT_FOUND when the record does not exist.
  */
 wf_status metalbear_repo_store_get_record_car(metalbear_repo_store *store,
-                                       const char *collection,
-                                       const char *rkey,
-                                       unsigned char **out_data,
-                                       size_t *out_len);
+                                              const char *collection,
+                                              const char *rkey,
+                                              unsigned char **out_data,
+                                              size_t *out_len);
 
 /** Mint a service-auth JWT with the repository's persisted signing key. */
 wf_status metalbear_repo_store_create_service_auth(metalbear_repo_store *store,
-                                             const char *audience,
-                                             int64_t expiration,
-                                             const char *lxm,
-                                             char **out_token);
+                                                   const char *audience,
+                                                   int64_t expiration,
+                                                   const char *lxm,
+                                                   char **out_token);
 
 /* ------------------------------------------------------------------ */
 /* XRPC server integration                                             */
@@ -410,9 +411,9 @@ wf_status metalbear_repo_store_create_service_auth(metalbear_repo_store *store,
  * lifetime and free it after wf_xrpc_server_free.
  */
 wf_status metalbear_xrpc_server_register_pds_repo(wf_xrpc_server *server,
-                                             metalbear_repo_store *store,
-                                             const char *service_did,
-                                             const char *public_url);
+                                                  metalbear_repo_store *store,
+                                                  const char *service_did,
+                                                  const char *public_url);
 
 /*
  * Per-request resolver for multi-tenant PDS deployments. Given the
@@ -425,10 +426,9 @@ wf_status metalbear_xrpc_server_register_pds_repo(wf_xrpc_server *server,
  * to a 400 RepoNotFound / AccountNotFound. out_repo / out_blobs may be
  * independently NULL.
  */
-typedef wf_status (*metalbear_xrpc_repo_resolver)(void *ctx,
-                                           const wf_xrpc_request *req,
-                                           metalbear_repo_store **out_repo,
-                                           metalbear_blob_store **out_blobs);
+typedef wf_status (*metalbear_xrpc_repo_resolver)(
+    void *ctx, const wf_xrpc_request *req, metalbear_repo_store **out_repo,
+    metalbear_blob_store **out_blobs);
 
 /**
  * Register the com.atproto.repo read/write route handlers on an XRPC
@@ -485,8 +485,8 @@ wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url,
     metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx,
-    const wf_lexicon_registry *lexicons,
-    metalbear_xrpc_repo_access_guard guard, void *guard_ctx);
+    const wf_lexicon_registry *lexicons, metalbear_xrpc_repo_access_guard guard,
+    void *guard_ctx);
 
 /** Outcome of checking a record against the lexicon corpus. */
 typedef enum metalbear_validation_status {

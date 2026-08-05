@@ -42,9 +42,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static int rmtree_remove_cb(const char *path, const struct stat *sb,
-                            int type, struct FTW *ftwbuf) {
-    (void)sb; (void)type; (void)ftwbuf;
+static int rmtree_remove_cb(const char *path, const struct stat *sb, int type,
+                            struct FTW *ftwbuf) {
+    (void)sb;
+    (void)type;
+    (void)ftwbuf;
     return remove(path);
 }
 static void rmtree(const char *path) {
@@ -52,9 +54,13 @@ static void rmtree(const char *path) {
 }
 
 static int failures;
-#define CHECK(expr) do { if (!(expr)) { \
-    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-    failures++; } } while (0)
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        if (!(expr)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr);    \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
 
 static cJSON *json_response(wf_response *response) {
     return cJSON_ParseWithLength(response->body ? response->body : "",
@@ -88,8 +94,8 @@ static wf_status admin_post(wf_xrpc_client *client, const char *base,
     char cred[64];
     int n = snprintf(cred, sizeof(cred), "admin:%s", "secret-admin");
     char b64[128];
-    int len = EVP_EncodeBlock((unsigned char *)b64,
-                              (const unsigned char *)cred, n);
+    int len =
+        EVP_EncodeBlock((unsigned char *)b64, (const unsigned char *)cred, n);
     b64[len] = '\0';
     char auth[160];
     snprintf(auth, sizeof(auth), "Basic %s", b64);
@@ -105,8 +111,8 @@ static wf_status admin_get(wf_xrpc_client *client, const char *base,
     char cred[64];
     int n = snprintf(cred, sizeof(cred), "admin:%s", "secret-admin");
     char b64[128];
-    int len = EVP_EncodeBlock((unsigned char *)b64,
-                              (const unsigned char *)cred, n);
+    int len =
+        EVP_EncodeBlock((unsigned char *)b64, (const unsigned char *)cred, n);
     b64[len] = '\0';
     char auth[160];
     snprintf(auth, sizeof(auth), "Basic %s", b64);
@@ -142,7 +148,8 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
              handle, password, did, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
-                          &response) != WF_OK || response.status != 200) {
+                          &response) != WF_OK ||
+        response.status != 200) {
         wf_response_free(&response);
         return NULL;
     }
@@ -186,8 +193,8 @@ static long get_record(wf_xrpc_client *client, const char *repo,
 
 /* Upload a blob and copy its CID out. Returns the HTTP status. */
 static long upload_blob(wf_xrpc_client *client, const char *base,
-                        const char *token, const char *bytes,
-                        char *out_cid, size_t out_len) {
+                        const char *token, const char *bytes, char *out_cid,
+                        size_t out_len) {
     char url[256];
     snprintf(url, sizeof(url), "%s/xrpc/com.atproto.repo.uploadBlob", base);
     char auth[1024];
@@ -201,8 +208,8 @@ static long upload_blob(wf_xrpc_client *client, const char *base,
         cJSON *blob = cJSON_GetObjectItemCaseSensitive(json, "blob");
         cJSON *ref = cJSON_GetObjectItemCaseSensitive(blob, "ref");
         cJSON *link = cJSON_GetObjectItemCaseSensitive(ref, "$link");
-        if (cJSON_IsString(link)) snprintf(out_cid, out_len, "%s",
-                                          link->valuestring);
+        if (cJSON_IsString(link))
+            snprintf(out_cid, out_len, "%s", link->valuestring);
         cJSON_Delete(json);
     }
     wf_response_free(&response);
@@ -220,7 +227,8 @@ static int count_account_events(const char *seq_path, const char *did,
     int found = 0;
     if (sqlite3_open(seq_path, &db) == SQLITE_OK) {
         sqlite3_stmt *stmt = NULL;
-        if (sqlite3_prepare_v2(db,
+        if (sqlite3_prepare_v2(
+                db,
                 "SELECT COUNT(*) FROM events WHERE instr(frame, '#account') > 0"
                 " AND instr(frame, ?) > 0 AND instr(frame, ?) > 0;",
                 -1, &stmt, NULL) == SQLITE_OK) {
@@ -250,7 +258,10 @@ int main(void) {
     };
     metalbear_server *server = metalbear_server_start(&config);
     CHECK(server != NULL);
-    if (!server) { rmtree(directory); return 1; }
+    if (!server) {
+        rmtree(directory);
+        return 1;
+    }
 
     char base[80];
     snprintf(base, sizeof(base), "http://127.0.0.1:%u",
@@ -274,14 +285,14 @@ int main(void) {
     CHECK(create_record(client, mallory_did, "keep", "kept") == 200);
     CHECK(create_record(client, mallory_did, "bad", "offending") == 200);
     char mallory_blob[128] = "";
-    CHECK(upload_blob(client, base, mallory, "shared bytes",
-                      mallory_blob, sizeof(mallory_blob)) == 200);
+    CHECK(upload_blob(client, base, mallory, "shared bytes", mallory_blob,
+                      sizeof(mallory_blob)) == 200);
     CHECK(mallory_blob[0] != '\0');
 
     wf_xrpc_client_set_auth(client, victim);
     char victim_blob[128] = "";
-    CHECK(upload_blob(client, base, victim, "shared bytes",
-                      victim_blob, sizeof(victim_blob)) == 200);
+    CHECK(upload_blob(client, base, victim, "shared bytes", victim_blob,
+                      sizeof(victim_blob)) == 200);
     /* Same bytes, so necessarily the same CID: this is what makes a takedown
      * keyed on the CID alone a bug rather than a shortcut. */
     CHECK(strcmp(mallory_blob, victim_blob) == 0);
@@ -314,7 +325,8 @@ int main(void) {
         char query[512];
         snprintf(query, sizeof(query),
                  "com.atproto.admin.getSubjectStatus?uri=at://%s/"
-                 "app.bsky.feed.post/bad", mallory_did);
+                 "app.bsky.feed.post/bad",
+                 mallory_did);
         CHECK(admin_get(client, base, query, &response) == WF_OK);
         CHECK(response.status == 200);
         cJSON *json = json_response(&response);
@@ -331,11 +343,12 @@ int main(void) {
     /* ---- (e) blob takedown, scoped to one account ----------------------- */
     {
         char body[640];
-        snprintf(body, sizeof(body),
-                 "{\"subject\":{\"$type\":\"com.atproto.admin.defs#repoBlobRef\","
-                 "\"did\":\"%s\",\"cid\":\"%s\"},"
-                 "\"takedown\":{\"applied\":true,\"ref\":\"mod-blob\"}}",
-                 mallory_did, mallory_blob);
+        snprintf(
+            body, sizeof(body),
+            "{\"subject\":{\"$type\":\"com.atproto.admin.defs#repoBlobRef\","
+            "\"did\":\"%s\",\"cid\":\"%s\"},"
+            "\"takedown\":{\"applied\":true,\"ref\":\"mod-blob\"}}",
+            mallory_did, mallory_blob);
         CHECK(admin_post(client, base, "com.atproto.admin.updateSubjectStatus",
                          body, &response) == WF_OK);
         CHECK(response.status == 200);
@@ -481,8 +494,10 @@ int main(void) {
         snprintf(body, sizeof(body),
                  "{\"subject\":{\"$type\":\"com.atproto.admin.defs#repoRef\","
                  "\"did\":\"%s\"},\"takedown\":{\"applied\":true},"
-                 "\"deactivated\":{\"applied\":false}}", victim_did);
-        /* A refusal comes back as WF_ERR_HTTP, so only the status is checked. */
+                 "\"deactivated\":{\"applied\":false}}",
+                 victim_did);
+        /* A refusal comes back as WF_ERR_HTTP, so only the status is checked.
+         */
         admin_post(client, base, "com.atproto.admin.updateSubjectStatus", body,
                    &response);
         CHECK(response.status == 400);
@@ -578,13 +593,15 @@ int main(void) {
         char auth[160];
         snprintf(auth, sizeof(auth), "Basic %s", b64);
         wf_http_header hdr = {"Authorization", auth};
-        CHECK(wf_http_get_with_headers(client, url, &hdr, 1, &response)
-              == WF_OK);
+        CHECK(wf_http_get_with_headers(client, url, &hdr, 1, &response) ==
+              WF_OK);
         CHECK(response.status == 200);
         /* Prometheus rejects a counter with no TYPE line, so the exposition
          * has to carry them and not just the samples. */
-        CHECK(body_has(&response, "# TYPE metalbear_takedowns_applied_total counter"));
-        CHECK(body_has(&response, "metalbear_accounts{status=\"takendown\"} 1"));
+        CHECK(body_has(&response,
+                       "# TYPE metalbear_takedowns_applied_total counter"));
+        CHECK(
+            body_has(&response, "metalbear_accounts{status=\"takendown\"} 1"));
         CHECK(body_has(&response, "metalbear_build_info{version="));
         /* Four takedowns were applied above: a record, a blob, and the
          * account twice. Lifting one is not an application. */
@@ -599,9 +616,12 @@ int main(void) {
          * optional Wolfram feature, and asserting on it unconditionally
          * makes an optional dependency a required one.
          */
-        CHECK(body_has(&response, "metalbear_route_requests_total{route=\"com.atproto.sync.getRepo\"}"));
-        CHECK(body_has(&response, "metalbear_route_errors_total{route=\"com.atproto.sync.getRepo\"}"));
-        CHECK(body_has(&response, "metalbear_route_requests_total{route=\"/metrics\"}"));
+        CHECK(body_has(&response, "metalbear_route_requests_total{route=\"com."
+                                  "atproto.sync.getRepo\"}"));
+        CHECK(body_has(&response, "metalbear_route_errors_total{route=\"com."
+                                  "atproto.sync.getRepo\"}"));
+        CHECK(body_has(&response,
+                       "metalbear_route_requests_total{route=\"/metrics\"}"));
 #endif
         wf_response_free(&response);
     }

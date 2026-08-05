@@ -33,9 +33,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static int rmtree_remove_cb(const char *path, const struct stat *sb,
-                            int type, struct FTW *ftwbuf) {
-    (void)sb; (void)type; (void)ftwbuf;
+static int rmtree_remove_cb(const char *path, const struct stat *sb, int type,
+                            struct FTW *ftwbuf) {
+    (void)sb;
+    (void)type;
+    (void)ftwbuf;
     return remove(path);
 }
 static void rmtree(const char *path) {
@@ -43,9 +45,13 @@ static void rmtree(const char *path) {
 }
 
 static int failures;
-#define CHECK(expr) do { if (!(expr)) { \
-    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-    failures++; } } while (0)
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        if (!(expr)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr);    \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
 
 static int write_all(int fd, const void *data, size_t length) {
     const unsigned char *cursor = data;
@@ -80,8 +86,7 @@ static void *mock_upstream_run(void *arg) {
         char *buf = mock->captured[i];
         size_t total = 0;
         for (;;) {
-            ssize_t n = read(fd, buf + total,
-                             MOCK_CAPTURE_SIZE - total - 1);
+            ssize_t n = read(fd, buf + total, MOCK_CAPTURE_SIZE - total - 1);
             if (n < 0 && errno == EINTR) continue;
             if (n <= 0) break;
             total += (size_t)n;
@@ -89,13 +94,12 @@ static void *mock_upstream_run(void *arg) {
             if (strstr(buf, "\r\n\r\n")) break;
             if (total >= MOCK_CAPTURE_SIZE - 1) break;
         }
-        static const char response[] =
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: application/json\r\n"
-            "Content-Length: 2\r\n"
-            "Connection: close\r\n"
-            "\r\n"
-            "{}";
+        static const char response[] = "HTTP/1.1 200 OK\r\n"
+                                       "Content-Type: application/json\r\n"
+                                       "Content-Length: 2\r\n"
+                                       "Connection: close\r\n"
+                                       "\r\n"
+                                       "{}";
         write_all(fd, response, sizeof(response) - 1);
         close(fd);
     }
@@ -108,7 +112,7 @@ static int mock_upstream_start(mock_upstream *mock, uint16_t *port_out) {
     if (mock->listen_fd < 0) return 0;
     int reuse = 1;
     setsockopt(mock->listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse,
-              sizeof(reuse));
+               sizeof(reuse));
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = inet_addr("127.0.0.1");
@@ -149,7 +153,7 @@ int main(void) {
 
     char appview_url[64];
     snprintf(appview_url, sizeof(appview_url), "http://127.0.0.1:%u",
-            (unsigned)mock_port);
+             (unsigned)mock_port);
 
     metalbear_config config = {
         .listen_address = "127.0.0.1",
@@ -170,7 +174,7 @@ int main(void) {
     if (server) {
         char base[80];
         snprintf(base, sizeof(base), "http://127.0.0.1:%u",
-                (unsigned)metalbear_server_port(server));
+                 (unsigned)metalbear_server_port(server));
         wf_xrpc_client *client = wf_xrpc_client_new(base);
         CHECK(client != NULL);
 
@@ -183,20 +187,23 @@ int main(void) {
              * see req->authed_subject"). Create an account to get one.
              */
             wf_response create_response = {0};
-            CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
-                "{\"handle\":\"alice.example.com\","
-                "\"password\":\"correct horse battery staple\","
-                "\"did\":\"did:plc:metalbearproxytest\","
-                "\"email\":\"alice@example.com\"}", &create_response) == WF_OK);
+            CHECK(wf_xrpc_procedure(
+                      client, "com.atproto.server.createAccount",
+                      "{\"handle\":\"alice.example.com\","
+                      "\"password\":\"correct horse battery staple\","
+                      "\"did\":\"did:plc:metalbearproxytest\","
+                      "\"email\":\"alice@example.com\"}",
+                      &create_response) == WF_OK);
             CHECK(create_response.status == 200);
             cJSON *create_json = cJSON_ParseWithLength(
                 create_response.body ? create_response.body : "",
                 create_response.body_len);
-            cJSON *access = create_json ?
-                cJSON_GetObjectItemCaseSensitive(create_json, "accessJwt") :
-                NULL;
-            char *access_token = cJSON_IsString(access) ?
-                strdup(access->valuestring) : NULL;
+            cJSON *access =
+                create_json
+                    ? cJSON_GetObjectItemCaseSensitive(create_json, "accessJwt")
+                    : NULL;
+            char *access_token =
+                cJSON_IsString(access) ? strdup(access->valuestring) : NULL;
             cJSON_Delete(create_json);
             wf_response_free(&create_response);
             CHECK(access_token != NULL);
@@ -207,8 +214,8 @@ int main(void) {
              * needs a valid session. */
             wf_response feed_response = {0};
             wf_xrpc_client_set_auth(client, access_token);
-            CHECK(wf_xrpc_query(client, "app.bsky.feed.getFeedGenerators",
-                                NULL, &feed_response) == WF_OK);
+            CHECK(wf_xrpc_query(client, "app.bsky.feed.getFeedGenerators", NULL,
+                                &feed_response) == WF_OK);
             CHECK(feed_response.status == 200);
             wf_response_free(&feed_response);
 
@@ -217,8 +224,8 @@ int main(void) {
              * before auth. */
             wf_response fallback_response = {0};
             wf_xrpc_client_set_auth(client, NULL);
-            CHECK(wf_xrpc_query(client, "app.test.metalbearProxyProbe",
-                                NULL, &fallback_response) == WF_OK);
+            CHECK(wf_xrpc_query(client, "app.test.metalbearProxyProbe", NULL,
+                                &fallback_response) == WF_OK);
             CHECK(fallback_response.status == 200);
             wf_response_free(&fallback_response);
 

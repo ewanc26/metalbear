@@ -30,13 +30,19 @@
 #include <unistd.h>
 
 static int failures;
-#define CHECK(expr) do { if (!(expr)) { \
-    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-    failures++; } } while (0)
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        if (!(expr)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr);    \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
 
-static int rmtree_remove_cb(const char *path, const struct stat *sb,
-                            int type, struct FTW *ftwbuf) {
-    (void)sb; (void)type; (void)ftwbuf;
+static int rmtree_remove_cb(const char *path, const struct stat *sb, int type,
+                            struct FTW *ftwbuf) {
+    (void)sb;
+    (void)type;
+    (void)ftwbuf;
     return remove(path);
 }
 static void rmtree(const char *path) {
@@ -51,17 +57,19 @@ static cJSON *json_response(wf_response *response) {
 static wf_status create_test_account(wf_xrpc_client *client,
                                      char **out_access_token) {
     wf_response response = {0};
-    wf_status st = wf_xrpc_procedure(client, "com.atproto.server.createAccount",
-        "{\"handle\":\"alice.example.com\","
-        "\"password\":\"correct horse battery staple\","
-        "\"did\":\"did:plc:metalbeartest\","
-        "\"email\":\"alice@example.com\"}", &response);
+    wf_status st =
+        wf_xrpc_procedure(client, "com.atproto.server.createAccount",
+                          "{\"handle\":\"alice.example.com\","
+                          "\"password\":\"correct horse battery staple\","
+                          "\"did\":\"did:plc:metalbeartest\","
+                          "\"email\":\"alice@example.com\"}",
+                          &response);
     CHECK(st == WF_OK);
     CHECK(response.status == 200);
     cJSON *json = json_response(&response);
     cJSON *access = cJSON_GetObjectItemCaseSensitive(json, "accessJwt");
-    *out_access_token = cJSON_IsString(access)
-        ? strdup(access->valuestring) : NULL;
+    *out_access_token =
+        cJSON_IsString(access) ? strdup(access->valuestring) : NULL;
     cJSON_Delete(json);
     wf_response_free(&response);
     return *out_access_token ? WF_OK : WF_ERR_INVALID_ARG;
@@ -102,19 +110,21 @@ int main(void) {
             CHECK(create_test_account(client, &access_token) == WF_OK);
 
             wf_xrpc_client_set_auth(client, access_token);
-            CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
-                "{\"repo\":\"did:plc:metalbeartest\","
-                "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"first\","
-                "\"record\":{\"$type\":\"app.bsky.feed.post\","
-                "\"text\":\"hello from import test\","
-                "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
-                &response) == WF_OK);
+            CHECK(
+                wf_xrpc_procedure(
+                    client, "com.atproto.repo.createRecord",
+                    "{\"repo\":\"did:plc:metalbeartest\","
+                    "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"first\","
+                    "\"record\":{\"$type\":\"app.bsky.feed.post\","
+                    "\"text\":\"hello from import test\","
+                    "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
+                    &response) == WF_OK);
             CHECK(response.status == 200);
             wf_response_free(&response);
 
             wf_xrpc_param repo_params[] = {{"did", "did:plc:metalbeartest"}};
             CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getRepo",
-                repo_params, 1, &response) == WF_OK);
+                                       repo_params, 1, &response) == WF_OK);
             CHECK(response.status == 200 && response.body_len > 0);
             size_t car_len = response.body_len;
             unsigned char *car_bytes = malloc(car_len);
@@ -126,18 +136,20 @@ int main(void) {
              * requires ACCESS_FULL (the closest match this codebase has to
              * the reference's repo:manage scope), so it must be refused
              * before the CAR body is ever inspected. */
-            CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAppPassword",
-                "{\"name\":\"import-test\"}", &response) == WF_OK);
+            CHECK(wf_xrpc_procedure(
+                      client, "com.atproto.server.createAppPassword",
+                      "{\"name\":\"import-test\"}", &response) == WF_OK);
             cJSON *json = json_response(&response);
             cJSON *pw = cJSON_GetObjectItemCaseSensitive(json, "password");
-            char *app_password = cJSON_IsString(pw)
-                ? strdup(pw->valuestring) : NULL;
+            char *app_password =
+                cJSON_IsString(pw) ? strdup(pw->valuestring) : NULL;
             CHECK(app_password != NULL);
             cJSON_Delete(json);
             wf_response_free(&response);
 
             char login_body[256];
-            snprintf(login_body, sizeof(login_body),
+            snprintf(
+                login_body, sizeof(login_body),
                 "{\"identifier\":\"alice.example.com\",\"password\":\"%s\"}",
                 app_password ? app_password : "");
             wf_xrpc_client_set_auth(client, NULL);
@@ -145,16 +157,17 @@ int main(void) {
                                     login_body, &response) == WF_OK);
             json = json_response(&response);
             cJSON *access = cJSON_GetObjectItemCaseSensitive(json, "accessJwt");
-            char *app_access = cJSON_IsString(access)
-                ? strdup(access->valuestring) : NULL;
+            char *app_access =
+                cJSON_IsString(access) ? strdup(access->valuestring) : NULL;
             cJSON_Delete(json);
             wf_response_free(&response);
 
             if (car_bytes) {
                 wf_xrpc_client_set_auth(client, app_access);
                 CHECK(wf_xrpc_upload_blob(client, "com.atproto.repo.importRepo",
-                    car_bytes, car_len, "application/vnd.ipld.car",
-                    &response) == WF_ERR_HTTP);
+                                          car_bytes, car_len,
+                                          "application/vnd.ipld.car",
+                                          &response) == WF_ERR_HTTP);
                 CHECK(response.status == 401);
                 wf_response_free(&response);
 
@@ -163,11 +176,13 @@ int main(void) {
                 wf_xrpc_client_set_auth(client, access_token);
                 const unsigned char garbage[] = {0x00, 0x01, 0x02, 0x03};
                 CHECK(wf_xrpc_upload_blob(client, "com.atproto.repo.importRepo",
-                    garbage, sizeof(garbage), "application/vnd.ipld.car",
-                    &response) == WF_ERR_HTTP);
+                                          garbage, sizeof(garbage),
+                                          "application/vnd.ipld.car",
+                                          &response) == WF_ERR_HTTP);
                 CHECK(response.status == 400);
                 json = json_response(&response);
-                CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")
+                                 ->valuestring,
                              "InvalidCAR") == 0);
                 cJSON_Delete(json);
                 wf_response_free(&response);
@@ -176,8 +191,9 @@ int main(void) {
                  * its own genuinely exported CAR (a backup restore) is
                  * accepted. */
                 CHECK(wf_xrpc_upload_blob(client, "com.atproto.repo.importRepo",
-                    car_bytes, car_len, "application/vnd.ipld.car",
-                    &response) == WF_OK);
+                                          car_bytes, car_len,
+                                          "application/vnd.ipld.car",
+                                          &response) == WF_OK);
                 CHECK(response.status == 200);
                 wf_response_free(&response);
 
@@ -188,7 +204,7 @@ int main(void) {
                     {"rkey", "first"},
                 };
                 CHECK(wf_xrpc_query_params(client, "com.atproto.repo.getRecord",
-                    rec_params, 3, &response) == WF_OK);
+                                           rec_params, 3, &response) == WF_OK);
                 CHECK(response.status == 200);
                 wf_response_free(&response);
             }
@@ -234,14 +250,16 @@ int main(void) {
 
             const unsigned char body[] = {0x00, 0x01, 0x02, 0x03};
             wf_xrpc_client_set_auth(client, access_token);
-            CHECK(wf_xrpc_upload_blob(client, "com.atproto.repo.importRepo",
-                body, sizeof(body), "application/vnd.ipld.car",
-                &response) == WF_ERR_HTTP);
+            CHECK(wf_xrpc_upload_blob(
+                      client, "com.atproto.repo.importRepo", body, sizeof(body),
+                      "application/vnd.ipld.car", &response) == WF_ERR_HTTP);
             CHECK(response.status == 400);
             cJSON *json = json_response(&response);
-            CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+            CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")
+                             ->valuestring,
                          "InvalidRequest") == 0);
-            CHECK(strstr(cJSON_GetObjectItemCaseSensitive(json, "message")->valuestring,
+            CHECK(strstr(cJSON_GetObjectItemCaseSensitive(json, "message")
+                             ->valuestring,
                          "not accepting") != NULL);
             cJSON_Delete(json);
             wf_response_free(&response);
@@ -285,14 +303,16 @@ int main(void) {
             const unsigned char body[] = {0x00, 0x01, 0x02, 0x03};
             CHECK(sizeof(body) > 3);
             wf_xrpc_client_set_auth(client, access_token);
-            CHECK(wf_xrpc_upload_blob(client, "com.atproto.repo.importRepo",
-                body, sizeof(body), "application/vnd.ipld.car",
-                &response) == WF_ERR_HTTP);
+            CHECK(wf_xrpc_upload_blob(
+                      client, "com.atproto.repo.importRepo", body, sizeof(body),
+                      "application/vnd.ipld.car", &response) == WF_ERR_HTTP);
             CHECK(response.status == 400);
             cJSON *json = json_response(&response);
-            CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+            CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")
+                             ->valuestring,
                          "InvalidRequest") == 0);
-            CHECK(strstr(cJSON_GetObjectItemCaseSensitive(json, "message")->valuestring,
+            CHECK(strstr(cJSON_GetObjectItemCaseSensitive(json, "message")
+                             ->valuestring,
                          "maximum import size") != NULL);
             cJSON_Delete(json);
             wf_response_free(&response);

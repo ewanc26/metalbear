@@ -44,8 +44,7 @@
 #include <sys/socket.h>
 
 static const char ISSUER[] = "https://pds.example.com";
-static const char CLIENT_JKT[] =
-    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+static const char CLIENT_JKT[] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 static const char CLIENT_KID[] = "client-key-1";
 
 /* ------------------------------------------------------------------ */
@@ -56,13 +55,20 @@ static char *b64url(const unsigned char *in, size_t len) {
     size_t plen = ((len + 2) / 3) * 4;
     char *p = malloc(plen + 1), *out = malloc(plen + 1);
     size_t i, n = 0;
-    if (!p || !out) { free(p); free(out); return NULL; }
+    if (!p || !out) {
+        free(p);
+        free(out);
+        return NULL;
+    }
     EVP_EncodeBlock((unsigned char *)p, in, (int)len);
     for (i = 0; i < plen; i++) {
         char c = p[i];
-        if (c == '+') c = '-';
-        else if (c == '/') c = '_';
-        else if (c == '=') break;
+        if (c == '+')
+            c = '-';
+        else if (c == '/')
+            c = '_';
+        else if (c == '=')
+            break;
         out[n++] = c;
     }
     out[n] = '\0';
@@ -125,7 +131,12 @@ static char *make_assertion(EC_KEY *ec, const char *kid, const char *iss,
     size_t jlen = silen + 1 + strlen(sig);
     jwt = malloc(jlen + 1);
     snprintf(jwt, jlen + 1, "%s.%s", si, sig);
-    free(hj); free(pj); free(hb); free(pb); free(si); free(sig);
+    free(hj);
+    free(pj);
+    free(hb);
+    free(pb);
+    free(si);
+    free(sig);
     cJSON_Delete(h);
     cJSON_Delete(p);
     return jwt;
@@ -177,7 +188,7 @@ enum { METADATA_JWKS, METADATA_JWKS_URI, METADATA_NONE, METADATA_BROKEN };
 
 static struct {
     int auth_method;
-    char base[256];   /* http://127.0.0.1:PORT */
+    char base[256]; /* http://127.0.0.1:PORT */
     char jwks[2048];
 } stub;
 
@@ -196,11 +207,13 @@ static enum MHD_Result metadata_handler(void *cls, struct MHD_Connection *conn,
                                         const char *version,
                                         const char *upload_data,
                                         size_t *upload_size, void **con_cls) {
-    (void)cls; (void)version; (void)upload_data; (void)upload_size;
+    (void)cls;
+    (void)version;
+    (void)upload_data;
+    (void)upload_size;
     (void)con_cls;
     if (strcmp(method, "GET") != 0) return MHD_NO;
-    if (strcmp(url, "/jwks.json") == 0)
-        return send_json(conn, 200, stub.jwks);
+    if (strcmp(url, "/jwks.json") == 0) return send_json(conn, 200, stub.jwks);
     if (strcmp(url, "/metadata.json") != 0) return MHD_NO;
 
     char body[4096];
@@ -247,7 +260,10 @@ static int raw_post(const char *host, uint16_t port, const char *path,
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) { close(sock); return -1; }
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+        close(sock);
+        return -1;
+    }
     if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         close(sock);
         return -1;
@@ -267,12 +283,19 @@ static int raw_post(const char *host, uint16_t port, const char *path,
 
     size_t cap = 65536, got = 0;
     unsigned char *buf = (unsigned char *)malloc(cap);
-    if (!buf) { close(sock); return -1; }
+    if (!buf) {
+        close(sock);
+        return -1;
+    }
     for (;;) {
         if (got == cap) {
             cap *= 2;
             unsigned char *nb = (unsigned char *)realloc(buf, cap);
-            if (!nb) { free(buf); close(sock); return -1; }
+            if (!nb) {
+                free(buf);
+                close(sock);
+                return -1;
+            }
             buf = nb;
         }
         ssize_t n = recv(sock, buf + got, cap - got, 0);
@@ -283,17 +306,23 @@ static int raw_post(const char *host, uint16_t port, const char *path,
 
     const char *sep = NULL;
     for (size_t i = 0; i + 3 < got; i++) {
-        if (buf[i] == '\r' && buf[i + 1] == '\n' &&
-            buf[i + 2] == '\r' && buf[i + 3] == '\n') {
+        if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' &&
+            buf[i + 3] == '\n') {
             sep = (const char *)&buf[i + 4];
             break;
         }
     }
-    if (!sep) { free(buf); return -1; }
+    if (!sep) {
+        free(buf);
+        return -1;
+    }
     sscanf((const char *)buf, "HTTP/%*s %ld", out_status);
     size_t blen = got - (size_t)(sep - (char *)buf);
     unsigned char *body_out = (unsigned char *)malloc(blen ? blen : 1);
-    if (!body_out) { free(buf); return -1; }
+    if (!body_out) {
+        free(buf);
+        return -1;
+    }
     memcpy(body_out, sep, blen);
     *out_body = body_out;
     *out_len = blen;
@@ -353,7 +382,8 @@ static char *seed_refresh(metalbear_oauth_store *store, const char *client_id,
     char *request_uri = NULL, *code = NULL, *redirect_uri = NULL, *state = NULL;
     int64_t par_exp = 0;
     metalbear_oauth_grant grant = {0};
-    if (metalbear_oauth_create_par(store, &req, &request_uri, &par_exp) != WF_OK ||
+    if (metalbear_oauth_create_par(store, &req, &request_uri, &par_exp) !=
+            WF_OK ||
         metalbear_oauth_authorize(store, request_uri, req.client_id,
                                   "did:plc:alice", &code, &redirect_uri,
                                   &state) != WF_OK ||
@@ -391,9 +421,9 @@ static int run(void) {
     WF_CHECK(jwk != NULL);
 
     /* Client metadata stub. */
-    struct MHD_Daemon *stub_daemon = MHD_start_daemon(
-        MHD_USE_INTERNAL_POLLING_THREAD, 0, NULL, NULL, metadata_handler, NULL,
-        MHD_OPTION_END);
+    struct MHD_Daemon *stub_daemon =
+        MHD_start_daemon(MHD_USE_INTERNAL_POLLING_THREAD, 0, NULL, NULL,
+                         metadata_handler, NULL, MHD_OPTION_END);
     WF_CHECK(stub_daemon != NULL);
     const union MHD_DaemonInfo *info =
         MHD_get_daemon_info(stub_daemon, MHD_DAEMON_INFO_BIND_PORT);
@@ -402,8 +432,7 @@ static int run(void) {
              (unsigned)info->port);
     char client_id[256];
     snprintf(client_id, sizeof(client_id), "%s/metadata.json", stub.base);
-    snprintf(stub.jwks, sizeof(stub.jwks),
-             "{\"keys\":[%s]}", jwk);
+    snprintf(stub.jwks, sizeof(stub.jwks), "{\"keys\":[%s]}", jwk);
     stub.auth_method = METADATA_JWKS;
 
     /* OAuth store + server. */
@@ -453,244 +482,238 @@ static int run(void) {
     char *assertion = NULL, *form = NULL;
 
     /* Happy path: assertion signed with the published key. */
-        assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
-                                   ISSUER, "jti-ok-1", now, now + 60, NULL);
-        WF_CHECK(assertion != NULL);
-        {
-            char *enc_ass = urlencode(assertion);
-            size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) +
-                        200;
-            form = malloc(fl);
-            snprintf(form, fl,
-                     "grant_type=refresh_token&refresh_token=%s&client_id=%s"
-                     "&dpop_jkt=%s"
-                     "&client_assertion_type=urn:ietf:params:oauth:client-"
-                     "assertion-type:jwt-bearer&client_assertion=%s",
-                     enc_rt, enc_cid, CLIENT_JKT, enc_ass);
-            free(enc_ass);
-        }
-        WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                          "application/x-www-form-urlencoded", form, &body,
-                          &len, &status) == 0);
-        WF_CHECK(status == 200);
-        WF_CHECK(body && has_bytes(body, len, "\"access_token\"") != NULL);
-        free(body);
-        body = NULL;
-        free(form);
-        form = NULL;
-        free(assertion);
-        assertion = NULL;
+    assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
+                               ISSUER, "jti-ok-1", now, now + 60, NULL);
+    WF_CHECK(assertion != NULL);
+    {
+        char *enc_ass = urlencode(assertion);
+        size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) + 200;
+        form = malloc(fl);
+        snprintf(form, fl,
+                 "grant_type=refresh_token&refresh_token=%s&client_id=%s"
+                 "&dpop_jkt=%s"
+                 "&client_assertion_type=urn:ietf:params:oauth:client-"
+                 "assertion-type:jwt-bearer&client_assertion=%s",
+                 enc_rt, enc_cid, CLIENT_JKT, enc_ass);
+        free(enc_ass);
+    }
+    WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
+                      "application/x-www-form-urlencoded", form, &body, &len,
+                      &status) == 0);
+    WF_CHECK(status == 200);
+    WF_CHECK(body && has_bytes(body, len, "\"access_token\"") != NULL);
+    free(body);
+    body = NULL;
+    free(form);
+    form = NULL;
+    free(assertion);
+    assertion = NULL;
 
-        /* Happy path via jwks_uri instead of inline jwks. Refresh tokens
-         * rotate on use, so this case gets a freshly seeded one. */
-        stub.auth_method = METADATA_JWKS_URI;
-        free(refresh_token);
-        free(enc_rt);
-        refresh_token = seed_refresh(store, client_id, "assert-2");
-        WF_CHECK(refresh_token != NULL);
-        enc_rt = urlencode(refresh_token);
-        assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
-                                   ISSUER, "jti-ok-2", now, now + 60, NULL);
-        {
-            char *enc_ass = urlencode(assertion);
-            size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) +
-                        200;
-            form = malloc(fl);
-            snprintf(form, fl,
-                     "grant_type=refresh_token&refresh_token=%s&client_id=%s"
-                     "&dpop_jkt=%s"
-                     "&client_assertion_type=urn:ietf:params:oauth:client-"
-                     "assertion-type:jwt-bearer&client_assertion=%s",
-                     enc_rt, enc_cid, CLIENT_JKT, enc_ass);
-            free(enc_ass);
-        }
-        WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                          "application/x-www-form-urlencoded", form, &body,
-                          &len, &status) == 0);
-        WF_CHECK(status == 200);
-        free(body);
-        body = NULL;
-        free(form);
-        form = NULL;
-        free(assertion);
-        assertion = NULL;
+    /* Happy path via jwks_uri instead of inline jwks. Refresh tokens
+     * rotate on use, so this case gets a freshly seeded one. */
+    stub.auth_method = METADATA_JWKS_URI;
+    free(refresh_token);
+    free(enc_rt);
+    refresh_token = seed_refresh(store, client_id, "assert-2");
+    WF_CHECK(refresh_token != NULL);
+    enc_rt = urlencode(refresh_token);
+    assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
+                               ISSUER, "jti-ok-2", now, now + 60, NULL);
+    {
+        char *enc_ass = urlencode(assertion);
+        size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) + 200;
+        form = malloc(fl);
+        snprintf(form, fl,
+                 "grant_type=refresh_token&refresh_token=%s&client_id=%s"
+                 "&dpop_jkt=%s"
+                 "&client_assertion_type=urn:ietf:params:oauth:client-"
+                 "assertion-type:jwt-bearer&client_assertion=%s",
+                 enc_rt, enc_cid, CLIENT_JKT, enc_ass);
+        free(enc_ass);
+    }
+    WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
+                      "application/x-www-form-urlencoded", form, &body, &len,
+                      &status) == 0);
+    WF_CHECK(status == 200);
+    free(body);
+    body = NULL;
+    free(form);
+    form = NULL;
+    free(assertion);
+    assertion = NULL;
 
-        /* Wrong signing key: assertion signed by a key absent from the jwks. */
-        stub.auth_method = METADATA_JWKS;
-        assertion = make_assertion(other_ec, CLIENT_KID, client_id, client_id,
-                                   ISSUER, "jti-bad-1", now, now + 60, NULL);
-        {
-            char *enc_ass = urlencode(assertion);
-            size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) +
-                        200;
-            form = malloc(fl);
-            snprintf(form, fl,
-                     "grant_type=refresh_token&refresh_token=%s&client_id=%s"
-                     "&dpop_jkt=%s"
-                     "&client_assertion_type=urn:ietf:params:oauth:client-"
-                     "assertion-type:jwt-bearer&client_assertion=%s",
-                     enc_rt, enc_cid, CLIENT_JKT, enc_ass);
-            free(enc_ass);
-        }
-        WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                          "application/x-www-form-urlencoded", form, &body,
-                          &len, &status) == 0);
-        WF_CHECK(status == 400);
-        WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
-        free(body);
-        body = NULL;
-        free(form);
-        form = NULL;
-        free(assertion);
-        assertion = NULL;
+    /* Wrong signing key: assertion signed by a key absent from the jwks. */
+    stub.auth_method = METADATA_JWKS;
+    assertion = make_assertion(other_ec, CLIENT_KID, client_id, client_id,
+                               ISSUER, "jti-bad-1", now, now + 60, NULL);
+    {
+        char *enc_ass = urlencode(assertion);
+        size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) + 200;
+        form = malloc(fl);
+        snprintf(form, fl,
+                 "grant_type=refresh_token&refresh_token=%s&client_id=%s"
+                 "&dpop_jkt=%s"
+                 "&client_assertion_type=urn:ietf:params:oauth:client-"
+                 "assertion-type:jwt-bearer&client_assertion=%s",
+                 enc_rt, enc_cid, CLIENT_JKT, enc_ass);
+        free(enc_ass);
+    }
+    WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
+                      "application/x-www-form-urlencoded", form, &body, &len,
+                      &status) == 0);
+    WF_CHECK(status == 400);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    free(body);
+    body = NULL;
+    free(form);
+    form = NULL;
+    free(assertion);
+    assertion = NULL;
 
-        /* Wrong audience: assertion aimed at a different AS. */
-        assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
-                                   "https://evil.example", "jti-bad-2", now,
-                                   now + 60, NULL);
-        {
-            char *enc_ass = urlencode(assertion);
-            size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) +
-                        200;
-            form = malloc(fl);
-            snprintf(form, fl,
-                     "grant_type=refresh_token&refresh_token=%s&client_id=%s"
-                     "&dpop_jkt=%s"
-                     "&client_assertion_type=urn:ietf:params:oauth:client-"
-                     "assertion-type:jwt-bearer&client_assertion=%s",
-                     enc_rt, enc_cid, CLIENT_JKT, enc_ass);
-            free(enc_ass);
-        }
-        WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                          "application/x-www-form-urlencoded", form, &body,
-                          &len, &status) == 0);
-        WF_CHECK(status == 400);
-        WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
-        free(body);
-        body = NULL;
-        free(form);
-        form = NULL;
-        free(assertion);
-        assertion = NULL;
+    /* Wrong audience: assertion aimed at a different AS. */
+    assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
+                               "https://evil.example", "jti-bad-2", now,
+                               now + 60, NULL);
+    {
+        char *enc_ass = urlencode(assertion);
+        size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) + 200;
+        form = malloc(fl);
+        snprintf(form, fl,
+                 "grant_type=refresh_token&refresh_token=%s&client_id=%s"
+                 "&dpop_jkt=%s"
+                 "&client_assertion_type=urn:ietf:params:oauth:client-"
+                 "assertion-type:jwt-bearer&client_assertion=%s",
+                 enc_rt, enc_cid, CLIENT_JKT, enc_ass);
+        free(enc_ass);
+    }
+    WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
+                      "application/x-www-form-urlencoded", form, &body, &len,
+                      &status) == 0);
+    WF_CHECK(status == 400);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    free(body);
+    body = NULL;
+    free(form);
+    form = NULL;
+    free(assertion);
+    assertion = NULL;
 
-        /* Metadata declares the client public ("none"): an assertion must
-         * be refused rather than silently accepted. */
-        stub.auth_method = METADATA_NONE;
-        assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
-                                   ISSUER, "jti-bad-3", now, now + 60, NULL);
-        {
-            char *enc_ass = urlencode(assertion);
-            size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) +
-                        200;
-            form = malloc(fl);
-            snprintf(form, fl,
-                     "grant_type=refresh_token&refresh_token=%s&client_id=%s"
-                     "&dpop_jkt=%s"
-                     "&client_assertion_type=urn:ietf:params:oauth:client-"
-                     "assertion-type:jwt-bearer&client_assertion=%s",
-                     enc_rt, enc_cid, CLIENT_JKT, enc_ass);
-            free(enc_ass);
-        }
-        WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                          "application/x-www-form-urlencoded", form, &body,
-                          &len, &status) == 0);
-        WF_CHECK(status == 400);
-        WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
-        free(body);
-        body = NULL;
-        free(form);
-        form = NULL;
-        free(assertion);
-        assertion = NULL;
+    /* Metadata declares the client public ("none"): an assertion must
+     * be refused rather than silently accepted. */
+    stub.auth_method = METADATA_NONE;
+    assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
+                               ISSUER, "jti-bad-3", now, now + 60, NULL);
+    {
+        char *enc_ass = urlencode(assertion);
+        size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) + 200;
+        form = malloc(fl);
+        snprintf(form, fl,
+                 "grant_type=refresh_token&refresh_token=%s&client_id=%s"
+                 "&dpop_jkt=%s"
+                 "&client_assertion_type=urn:ietf:params:oauth:client-"
+                 "assertion-type:jwt-bearer&client_assertion=%s",
+                 enc_rt, enc_cid, CLIENT_JKT, enc_ass);
+        free(enc_ass);
+    }
+    WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
+                      "application/x-www-form-urlencoded", form, &body, &len,
+                      &status) == 0);
+    WF_CHECK(status == 400);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    free(body);
+    body = NULL;
+    free(form);
+    form = NULL;
+    free(assertion);
+    assertion = NULL;
 
-        /* Non-jwt-bearer assertion type. */
-        stub.auth_method = METADATA_JWKS;
-        assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
-                                   ISSUER, "jti-bad-4", now, now + 60, NULL);
-        {
-            char *enc_ass = urlencode(assertion);
-            size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) +
-                        200;
-            form = malloc(fl);
-            snprintf(form, fl,
-                     "grant_type=refresh_token&refresh_token=%s&client_id=%s"
-                     "&dpop_jkt=%s"
-                     "&client_assertion_type=not-jwt-bearer"
-                     "&client_assertion=%s",
-                     enc_rt, enc_cid, CLIENT_JKT, enc_ass);
-            free(enc_ass);
-        }
-        WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                          "application/x-www-form-urlencoded", form, &body,
-                          &len, &status) == 0);
-        WF_CHECK(status == 400);
-        WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
-        free(body);
-        body = NULL;
-        free(form);
-        form = NULL;
-        free(assertion);
-        assertion = NULL;
+    /* Non-jwt-bearer assertion type. */
+    stub.auth_method = METADATA_JWKS;
+    assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
+                               ISSUER, "jti-bad-4", now, now + 60, NULL);
+    {
+        char *enc_ass = urlencode(assertion);
+        size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) + 200;
+        form = malloc(fl);
+        snprintf(form, fl,
+                 "grant_type=refresh_token&refresh_token=%s&client_id=%s"
+                 "&dpop_jkt=%s"
+                 "&client_assertion_type=not-jwt-bearer"
+                 "&client_assertion=%s",
+                 enc_rt, enc_cid, CLIENT_JKT, enc_ass);
+        free(enc_ass);
+    }
+    WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
+                      "application/x-www-form-urlencoded", form, &body, &len,
+                      &status) == 0);
+    WF_CHECK(status == 400);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    free(body);
+    body = NULL;
+    free(form);
+    form = NULL;
+    free(assertion);
+    assertion = NULL;
 
-        /* Assertion with no client_id in the form. */
-        assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
-                                   ISSUER, "jti-bad-5", now, now + 60, NULL);
-        {
-            char *enc_ass = urlencode(assertion);
-            size_t fl = strlen(enc_rt) + strlen(enc_ass) + 200;
-            form = malloc(fl);
-            snprintf(form, fl,
-                     "grant_type=refresh_token&refresh_token=%s&dpop_jkt=%s"
-                     "&client_assertion_type=urn:ietf:params:oauth:client-"
-                     "assertion-type:jwt-bearer&client_assertion=%s",
-                     enc_rt, CLIENT_JKT, enc_ass);
-            free(enc_ass);
-        }
-        WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                          "application/x-www-form-urlencoded", form, &body,
-                          &len, &status) == 0);
-        WF_CHECK(status == 400);
-        WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
-        free(body);
-        body = NULL;
-        free(form);
-        form = NULL;
-        free(assertion);
-        assertion = NULL;
+    /* Assertion with no client_id in the form. */
+    assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
+                               ISSUER, "jti-bad-5", now, now + 60, NULL);
+    {
+        char *enc_ass = urlencode(assertion);
+        size_t fl = strlen(enc_rt) + strlen(enc_ass) + 200;
+        form = malloc(fl);
+        snprintf(form, fl,
+                 "grant_type=refresh_token&refresh_token=%s&dpop_jkt=%s"
+                 "&client_assertion_type=urn:ietf:params:oauth:client-"
+                 "assertion-type:jwt-bearer&client_assertion=%s",
+                 enc_rt, CLIENT_JKT, enc_ass);
+        free(enc_ass);
+    }
+    WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
+                      "application/x-www-form-urlencoded", form, &body, &len,
+                      &status) == 0);
+    WF_CHECK(status == 400);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    free(body);
+    body = NULL;
+    free(form);
+    form = NULL;
+    free(assertion);
+    assertion = NULL;
 
-        /* A client_id that is not https and not loopback must be refused
-         * before any fetch happens (SSRF). */
-        assertion = make_assertion(client_ec, CLIENT_KID,
-                                   "http://169.254.169.254/latest/meta-data",
-                                   "http://169.254.169.254/latest/meta-data",
-                                   ISSUER, "jti-bad-6", now, now + 60, NULL);
-        {
-            char *enc_ass = urlencode(assertion);
-            size_t fl = strlen(enc_rt) + strlen(enc_ass) + 400;
-            form = malloc(fl);
-            snprintf(form, fl,
-                     "grant_type=refresh_token&refresh_token=%s&dpop_jkt=%s"
-                     "&client_id=http://169.254.169.254/latest/meta-data"
-                     "&client_assertion_type=urn:ietf:params:oauth:client-"
-                     "assertion-type:jwt-bearer&client_assertion=%s",
-                     enc_rt, CLIENT_JKT, enc_ass);
-            free(enc_ass);
-        }
-        WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                          "application/x-www-form-urlencoded", form, &body,
-                          &len, &status) == 0);
-        WF_CHECK(status == 400);
-        WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
-        free(body);
-        body = NULL;
-        free(form);
-        form = NULL;
-        free(assertion);
-        assertion = NULL;
+    /* A client_id that is not https and not loopback must be refused
+     * before any fetch happens (SSRF). */
+    assertion = make_assertion(client_ec, CLIENT_KID,
+                               "http://169.254.169.254/latest/meta-data",
+                               "http://169.254.169.254/latest/meta-data",
+                               ISSUER, "jti-bad-6", now, now + 60, NULL);
+    {
+        char *enc_ass = urlencode(assertion);
+        size_t fl = strlen(enc_rt) + strlen(enc_ass) + 400;
+        form = malloc(fl);
+        snprintf(form, fl,
+                 "grant_type=refresh_token&refresh_token=%s&dpop_jkt=%s"
+                 "&client_id=http://169.254.169.254/latest/meta-data"
+                 "&client_assertion_type=urn:ietf:params:oauth:client-"
+                 "assertion-type:jwt-bearer&client_assertion=%s",
+                 enc_rt, CLIENT_JKT, enc_ass);
+        free(enc_ass);
+    }
+    WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
+                      "application/x-www-form-urlencoded", form, &body, &len,
+                      &status) == 0);
+    WF_CHECK(status == 400);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    free(body);
+    body = NULL;
+    free(form);
+    form = NULL;
+    free(assertion);
+    assertion = NULL;
 
-        free(enc_cid);
-        free(enc_rt);
-        free(refresh_token);
+    free(enc_cid);
+    free(enc_rt);
+    free(refresh_token);
 
     wf_xrpc_server_free(server);
     metalbear_oauth_store_free(store);

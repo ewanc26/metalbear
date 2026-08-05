@@ -10,7 +10,9 @@
 #include <memory>
 
 struct sqlite3_deleter {
-    void operator()(sqlite3 *db) const noexcept { sqlite3_close(db); }
+    void operator()(sqlite3 *db) const noexcept {
+        sqlite3_close(db);
+    }
 };
 
 using sqlite3_ptr = std::unique_ptr<sqlite3, sqlite3_deleter>;
@@ -41,12 +43,12 @@ wf_status metalbear_key_rotation_open(const char *path,
     }
     store->db.reset(raw_db);
     if (sqlite3_exec(store->db.get(),
-            "PRAGMA journal_mode=WAL;"
-            "CREATE TABLE IF NOT EXISTS signing_keys("
-            "id INTEGER PRIMARY KEY CHECK(id=0),"
-            "key_bytes BLOB NOT NULL,"
-            "created_at TEXT NOT NULL);",
-            nullptr, nullptr, nullptr) != SQLITE_OK) {
+                     "PRAGMA journal_mode=WAL;"
+                     "CREATE TABLE IF NOT EXISTS signing_keys("
+                     "id INTEGER PRIMARY KEY CHECK(id=0),"
+                     "key_bytes BLOB NOT NULL,"
+                     "created_at TEXT NOT NULL);",
+                     nullptr, nullptr, nullptr) != SQLITE_OK) {
         metalbear_key_rotation_free(store);
         return WF_ERR_INTERNAL;
     }
@@ -61,18 +63,19 @@ void metalbear_key_rotation_free(metalbear_key_rotation *store) {
     std::free(store);
 }
 
-wf_status metalbear_key_rotation_current_key(
-    metalbear_key_rotation *store, wf_signing_key *out) {
+wf_status metalbear_key_rotation_current_key(metalbear_key_rotation *store,
+                                             wf_signing_key *out) {
     if (!store || !out) return WF_ERR_INVALID_ARG;
     std::memset(out, 0, sizeof(*out));
     pthread_mutex_lock(&store->mutex);
 
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(store->db.get(),
-            "SELECT key_bytes FROM signing_keys WHERE id=0;", -1, &stmt,
-            nullptr) == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
-        const unsigned char *bytes = static_cast<const unsigned char *>(
-            sqlite3_column_blob(stmt, 0));
+                           "SELECT key_bytes FROM signing_keys WHERE id=0;", -1,
+                           &stmt, nullptr) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW) {
+        const unsigned char *bytes =
+            static_cast<const unsigned char *>(sqlite3_column_blob(stmt, 0));
         int length = sqlite3_column_bytes(stmt, 0);
         if (bytes && length == 32) {
             std::memcpy(out->bytes, bytes, 32);
@@ -89,7 +92,8 @@ wf_status metalbear_key_rotation_current_key(
         return WF_ERR_CRYPTO;
     }
 
-    if (sqlite3_prepare_v2(store->db.get(),
+    if (sqlite3_prepare_v2(
+            store->db.get(),
             "INSERT OR REPLACE INTO signing_keys(id,key_bytes,created_at) "
             "VALUES(0,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
             -1, &stmt, nullptr) == SQLITE_OK) {
@@ -109,7 +113,8 @@ wf_status metalbear_key_rotation_import(metalbear_key_rotation *store,
     pthread_mutex_lock(&store->mutex);
     sqlite3_stmt *stmt = nullptr;
     wf_status status = WF_ERR_INTERNAL;
-    if (sqlite3_prepare_v2(store->db.get(),
+    if (sqlite3_prepare_v2(
+            store->db.get(),
             "INSERT OR REPLACE INTO signing_keys(id,key_bytes,created_at) "
             "VALUES(0,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
             -1, &stmt, nullptr) == SQLITE_OK) {
@@ -133,7 +138,8 @@ wf_status metalbear_key_rotation_rotate(metalbear_key_rotation *store,
 
     pthread_mutex_lock(&store->mutex);
     sqlite3_stmt *stmt = nullptr;
-    if (sqlite3_prepare_v2(store->db.get(),
+    if (sqlite3_prepare_v2(
+            store->db.get(),
             "INSERT OR REPLACE INTO signing_keys(id,key_bytes,created_at) "
             "VALUES(0,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
             -1, &stmt, nullptr) == SQLITE_OK) {
