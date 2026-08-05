@@ -34,12 +34,10 @@ wf_status metalbear_email_open(const metalbear_email_config *config,
     email->smtp_host = strdup(config->smtp_host);
     email->from_address = strdup(config->from_address);
     email->from_name = config->from_name ? strdup(config->from_name) : NULL;
-    email->smtp_username = config->smtp_username
-                               ? strdup(config->smtp_username)
-                               : NULL;
-    email->smtp_password = config->smtp_password
-                               ? strdup(config->smtp_password)
-                               : NULL;
+    email->smtp_username =
+        config->smtp_username ? strdup(config->smtp_username) : NULL;
+    email->smtp_password =
+        config->smtp_password ? strdup(config->smtp_password) : NULL;
     email->smtp_port = config->smtp_port;
     email->smtp_starttls = config->smtp_starttls;
     if (!email->smtp_host || !email->from_address) {
@@ -79,7 +77,7 @@ static wf_status send_email(metalbear_email *email, const char *to,
     headers = curl_slist_append(headers, subject_header);
     headers = curl_slist_append(headers, "MIME-Version: 1.0");
     headers = curl_slist_append(headers, "Content-Type: text/plain; "
-                                        "charset=utf-8");
+                                         "charset=utf-8");
     recipients = curl_slist_append(recipients, to);
     curl_easy_setopt(curl, CURLOPT_URL, email->smtp_host);
     curl_easy_setopt(curl, CURLOPT_PORT, (long)email->smtp_port);
@@ -87,12 +85,11 @@ static wf_status send_email(metalbear_email *email, const char *to,
     curl_easy_setopt(curl, CURLOPT_MAIL_RCPT, recipients);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_READDATA, body);
-    curl_easy_setopt(curl, CURLOPT_READFUNCTION,
-                     (curl_read_callback)fread);
+    curl_easy_setopt(curl, CURLOPT_READFUNCTION, (curl_read_callback)fread);
     curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
-    curl_easy_setopt(curl, CURLOPT_USE_SSL,
-                     (long)(email->smtp_starttls ? CURLUSESSL_ALL
-                                                 : CURLUSESSL_NONE));
+    curl_easy_setopt(
+        curl, CURLOPT_USE_SSL,
+        (long)(email->smtp_starttls ? CURLUSESSL_ALL : CURLUSESSL_NONE));
     if (email->smtp_username && email->smtp_username[0]) {
         curl_easy_setopt(curl, CURLOPT_USERNAME, email->smtp_username);
         curl_easy_setopt(curl, CURLOPT_PASSWORD, email->smtp_password);
@@ -113,8 +110,7 @@ static wf_status send_email(metalbear_email *email, const char *to,
 wf_status metalbear_email_send_verification(metalbear_email *email,
                                             const char *to_address,
                                             const char *verification_code) {
-    if (!email || !to_address || !verification_code)
-        return WF_ERR_INVALID_ARG;
+    if (!email || !to_address || !verification_code) return WF_ERR_INVALID_ARG;
     char subject[256];
     char body[1024];
     snprintf(subject, sizeof(subject), "Verify your email address");
@@ -144,10 +140,9 @@ wf_status metalbear_email_send_password_reset(metalbear_email *email,
 }
 
 wf_status metalbear_email_send_account_deletion(metalbear_email *email,
-                                                 const char *to_address,
-                                                 const char *confirmation_code) {
-    if (!email || !to_address || !confirmation_code)
-        return WF_ERR_INVALID_ARG;
+                                                const char *to_address,
+                                                const char *confirmation_code) {
+    if (!email || !to_address || !confirmation_code) return WF_ERR_INVALID_ARG;
     char subject[256];
     char body[1024];
     snprintf(subject, sizeof(subject), "Confirm account deletion");
@@ -161,9 +156,7 @@ wf_status metalbear_email_send_account_deletion(metalbear_email *email,
     return send_email(email, to_address, subject, body);
 }
 
-wf_status metalbear_email_send(metalbear_email *email,
-                               const char *to_address,
-                               const char *subject,
-                               const char *body) {
+wf_status metalbear_email_send(metalbear_email *email, const char *to_address,
+                               const char *subject, const char *body) {
     return send_email(email, to_address, subject, body);
 }

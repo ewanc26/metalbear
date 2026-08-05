@@ -44,8 +44,8 @@ void metalbear_log(metalbear_log_level level, const char *fmt, ...)
 void metalbear_log_close(void);
 
 #define LOG_DEBUG(...) metalbear_log(METALBEAR_LOG_DEBUG, __VA_ARGS__)
-#define LOG_INFO(...)  metalbear_log(METALBEAR_LOG_INFO, __VA_ARGS__)
-#define LOG_WARN(...)  metalbear_log(METALBEAR_LOG_WARN, __VA_ARGS__)
+#define LOG_INFO(...) metalbear_log(METALBEAR_LOG_INFO, __VA_ARGS__)
+#define LOG_WARN(...) metalbear_log(METALBEAR_LOG_WARN, __VA_ARGS__)
 #define LOG_ERROR(...) metalbear_log(METALBEAR_LOG_ERROR, __VA_ARGS__)
 
 #ifdef __cplusplus

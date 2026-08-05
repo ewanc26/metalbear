@@ -14,13 +14,18 @@ static bool log_json = false;
 static metalbear_log_level metalbear_log_level_from_env(void) {
     const char *level = std::getenv("METALBEAR_LOG_LEVEL");
     if (!level || !level[0]) return METALBEAR_LOG_INFO;
-    if (std::strcmp(level, "debug") == 0 || std::strcmp(level, "DEBUG") == 0) return METALBEAR_LOG_DEBUG;
-    if (std::strcmp(level, "info") == 0 || std::strcmp(level, "INFO") == 0) return METALBEAR_LOG_INFO;
-    if (std::strcmp(level, "warn") == 0 || std::strcmp(level, "WARN") == 0) return METALBEAR_LOG_WARN;
-    if (std::strcmp(level, "error") == 0 || std::strcmp(level, "ERROR") == 0) return METALBEAR_LOG_ERROR;
+    if (std::strcmp(level, "debug") == 0 || std::strcmp(level, "DEBUG") == 0)
+        return METALBEAR_LOG_DEBUG;
+    if (std::strcmp(level, "info") == 0 || std::strcmp(level, "INFO") == 0)
+        return METALBEAR_LOG_INFO;
+    if (std::strcmp(level, "warn") == 0 || std::strcmp(level, "WARN") == 0)
+        return METALBEAR_LOG_WARN;
+    if (std::strcmp(level, "error") == 0 || std::strcmp(level, "ERROR") == 0)
+        return METALBEAR_LOG_ERROR;
     char *end = nullptr;
     long v = std::strtol(level, &end, 10);
-    if (end && *end == '\0' && v >= 0 && v <= 3) return static_cast<metalbear_log_level>(v);
+    if (end && *end == '\0' && v >= 0 && v <= 3)
+        return static_cast<metalbear_log_level>(v);
     return METALBEAR_LOG_INFO;
 }
 
@@ -37,16 +42,29 @@ static bool metalbear_log_json_from_env(void) {
 }
 
 static void json_escape_into(FILE *out, const char *text) {
-    for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text); *p; p++) {
+    for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text);
+         *p; p++) {
         switch (*p) {
-        case '"':  std::fputs("\\\"", out); break;
-        case '\\': std::fputs("\\\\", out); break;
-        case '\n': std::fputs("\\n", out); break;
-        case '\r': std::fputs("\\r", out); break;
-        case '\t': std::fputs("\\t", out); break;
-        default:
-            if (*p < 0x20) std::fprintf(out, "\\u%04x", *p);
-            else std::fputc(*p, out);
+            case '"':
+                std::fputs("\\\"", out);
+                break;
+            case '\\':
+                std::fputs("\\\\", out);
+                break;
+            case '\n':
+                std::fputs("\\n", out);
+                break;
+            case '\r':
+                std::fputs("\\r", out);
+                break;
+            case '\t':
+                std::fputs("\\t", out);
+                break;
+            default:
+                if (*p < 0x20)
+                    std::fprintf(out, "\\u%04x", *p);
+                else
+                    std::fputc(*p, out);
         }
     }
 }
@@ -67,9 +85,10 @@ void metalbear_log(metalbear_log_level level, const char *fmt, ...) {
         va_start(args, fmt);
         std::vsnprintf(message, sizeof(message), fmt, args);
         va_end(args);
-        std::fprintf(out, "{\"time\":\"%s\",\"level\":\"%s\",\"service\":"
-                          "\"metalbear\",\"message\":\"", ts,
-                      level_names[level]);
+        std::fprintf(out,
+                     "{\"time\":\"%s\",\"level\":\"%s\",\"service\":"
+                     "\"metalbear\",\"message\":\"",
+                     ts, level_names[level]);
         json_escape_into(out, message);
         std::fputs("\"}\n", out);
     } else {

@@ -38,7 +38,8 @@ typedef struct metalbear_blob_store metalbear_blob_store;
  */
 metalbear_blob_store *metalbear_blob_store_new(const char *path);
 
-/** Free the store. File-backed blobs are left on disk (caller removes `path`). */
+/** Free the store. File-backed blobs are left on disk (caller removes `path`).
+ */
 void metalbear_blob_store_free(metalbear_blob_store *store);
 
 /**
@@ -47,21 +48,23 @@ void metalbear_blob_store_free(metalbear_blob_store *store);
  * WF_ERR_INTERNAL on file IO failure.
  */
 wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
-                            const char *mime_type,
-                            const unsigned char *data, size_t len);
+                                   const char *mime_type,
+                                   const unsigned char *data, size_t len);
 
 /**
  * Retrieve a blob. On WF_OK, out_data/out_len/out_mime are set to owned
  * buffers (each freed with free()). Returns WF_ERR_NOT_FOUND if absent.
  */
 wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
-                            unsigned char **out_data, size_t *out_len,
-                            char **out_mime);
+                                   unsigned char **out_data, size_t *out_len,
+                                   char **out_mime);
 
 /** Return WF_OK if the blob exists, WF_ERR_NOT_FOUND otherwise. */
-wf_status metalbear_blob_store_exists(metalbear_blob_store *store, const char *cid);
+wf_status metalbear_blob_store_exists(metalbear_blob_store *store,
+                                      const char *cid);
 
-wf_status metalbear_blob_store_delete(metalbear_blob_store *store, const char *cid);
+wf_status metalbear_blob_store_delete(metalbear_blob_store *store,
+                                      const char *cid);
 
 /**
  * Enumerate every stored blob CID. On WF_OK, *out_cids receives a
@@ -69,10 +72,11 @@ wf_status metalbear_blob_store_delete(metalbear_blob_store *store, const char *c
  * free()); use metalbear_blob_store_list_free to release it. Returns
  * WF_ERR_ALLOC on OOM. The order of CIDs is unspecified.
  */
-wf_status metalbear_blob_store_list(metalbear_blob_store *store, char ***out_cids,
-                             size_t *out_count);
+wf_status metalbear_blob_store_list(metalbear_blob_store *store,
+                                    char ***out_cids, size_t *out_count);
 
-/** Free a CID array returned by metalbear_blob_store_list. Safe to call with NULL. */
+/** Free a CID array returned by metalbear_blob_store_list. Safe to call with
+ * NULL. */
 void metalbear_blob_store_list_free(char **cids, size_t count);
 
 /*
@@ -83,8 +87,9 @@ void metalbear_blob_store_list_free(char **cids, size_t count);
  * serves the raw bytes with the stored Content-Type. `store` must outlive the
  * server registration.
  */
-wf_status metalbear_xrpc_server_register_blob_store(wf_xrpc_server *server,
-                                              metalbear_blob_store *store);
+wf_status
+metalbear_xrpc_server_register_blob_store(wf_xrpc_server *server,
+                                          metalbear_blob_store *store);
 
 /*
  * Register the blob routes with a per-request resolver for multi-tenant PDS

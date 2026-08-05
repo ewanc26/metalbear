@@ -50,12 +50,12 @@ static void collect(void *ctx, const char *route, uint64_t requests,
     }
 }
 
-#define CHECK(cond)                                                        \
-    do {                                                                   \
-        if (!(cond)) {                                                     \
-            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-            fail++;                                                        \
-        }                                                                  \
+#define CHECK(cond)                                                            \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);    \
+            fail++;                                                            \
+        }                                                                      \
     } while (0)
 
 /* ------------------------------------------------------------------ */

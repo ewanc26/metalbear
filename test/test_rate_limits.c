@@ -40,9 +40,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static int rmtree_remove_cb(const char *path, const struct stat *sb,
-                            int type, struct FTW *ftwbuf) {
-    (void)sb; (void)type; (void)ftwbuf;
+static int rmtree_remove_cb(const char *path, const struct stat *sb, int type,
+                            struct FTW *ftwbuf) {
+    (void)sb;
+    (void)type;
+    (void)ftwbuf;
     return remove(path);
 }
 static void rmtree(const char *path) {
@@ -50,9 +52,13 @@ static void rmtree(const char *path) {
 }
 
 static int failures;
-#define CHECK(expr) do { if (!(expr)) { \
-    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-    failures++; } } while (0)
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        if (!(expr)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr);    \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
 
 static char *create_account(wf_xrpc_client *client, const char *handle,
                             const char *did, const char *password) {
@@ -63,14 +69,15 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
              handle, password, did, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
-                          &response) != WF_OK || response.status != 200) {
+                          &response) != WF_OK ||
+        response.status != 200) {
         wf_response_free(&response);
         return NULL;
     }
     cJSON *json = cJSON_ParseWithLength(response.body ? response.body : "",
                                         response.body_len);
-    cJSON *access = json ? cJSON_GetObjectItemCaseSensitive(json, "accessJwt")
-                        : NULL;
+    cJSON *access =
+        json ? cJSON_GetObjectItemCaseSensitive(json, "accessJwt") : NULL;
     char *token = cJSON_IsString(access) ? strdup(access->valuestring) : NULL;
     cJSON_Delete(json);
     wf_response_free(&response);
@@ -84,8 +91,7 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
  * this test needs. An invalid body (no handle/password/etc.) reaches the
  * handler and gets a 400 — the rate limiter runs before that, so it is
  * charged all the same. */
-static int run_create_account_limit(wf_xrpc_client *client,
-                                    int already_spent) {
+static int run_create_account_limit(wf_xrpc_client *client, int already_spent) {
     int failures_before = failures;
     wf_response response = {0};
     int last_status = 0;
@@ -93,12 +99,13 @@ static int run_create_account_limit(wf_xrpc_client *client,
 
     for (int i = 0; i < remaining; i++) {
         wf_response_free(&response);
-        wf_status s = wf_xrpc_procedure(client, "com.atproto.server.createAccount",
-                                        "{}", &response);
+        wf_status s = wf_xrpc_procedure(
+            client, "com.atproto.server.createAccount", "{}", &response);
         last_status = (int)response.status;
         if (s != WF_OK && s != WF_ERR_HTTP) {
-            fprintf(stderr, "FAIL createAccount attempt %d: transport error %d\n",
-                    i, (int)s);
+            fprintf(stderr,
+                    "FAIL createAccount attempt %d: transport error %d\n", i,
+                    (int)s);
             failures++;
         }
     }
@@ -111,8 +118,8 @@ static int run_create_account_limit(wf_xrpc_client *client,
     cJSON *body = cJSON_ParseWithLength(response.body ? response.body : "",
                                         response.body_len);
     cJSON *err = body ? cJSON_GetObjectItemCaseSensitive(body, "error") : NULL;
-    CHECK(cJSON_IsString(err) && strcmp(err->valuestring,
-                                       "RateLimitExceeded") == 0);
+    CHECK(cJSON_IsString(err) &&
+          strcmp(err->valuestring, "RateLimitExceeded") == 0);
     cJSON_Delete(body);
     wf_response_free(&response);
 
@@ -128,8 +135,10 @@ static int run_create_session_limit(wf_xrpc_client *client) {
 
     for (int i = 0; i < 30; i++) {
         wf_response_free(&response);
-        wf_status s = wf_xrpc_procedure(client, "com.atproto.server.createSession",
-            "{\"identifier\":\"quota-user\",\"password\":\"wrong\"}", &response);
+        wf_status s = wf_xrpc_procedure(
+            client, "com.atproto.server.createSession",
+            "{\"identifier\":\"quota-user\",\"password\":\"wrong\"}",
+            &response);
         if (s != WF_ERR_HTTP || response.status != 401) {
             fprintf(stderr,
                     "FAIL createSession attempt %d: expected 401 (bad "
@@ -140,13 +149,15 @@ static int run_create_session_limit(wf_xrpc_client *client) {
     }
 
     wf_response_free(&response);
-    wf_status s = wf_xrpc_procedure(client, "com.atproto.server.createSession",
+    wf_status s = wf_xrpc_procedure(
+        client, "com.atproto.server.createSession",
         "{\"identifier\":\"quota-user\",\"password\":\"wrong\"}", &response);
     CHECK(s == WF_ERR_HTTP && response.status == 429);
     wf_response_free(&response);
 
     /* A different identifier, same IP: its own bucket is untouched. */
-    s = wf_xrpc_procedure(client, "com.atproto.server.createSession",
+    s = wf_xrpc_procedure(
+        client, "com.atproto.server.createSession",
         "{\"identifier\":\"someone-else\",\"password\":\"wrong\"}", &response);
     CHECK(s == WF_ERR_HTTP && response.status == 401);
     wf_response_free(&response);
@@ -169,29 +180,32 @@ static wf_status bearer_post(wf_xrpc_client *client, const char *base,
 }
 
 static int run_request_account_delete_limit(wf_xrpc_client *client,
-                                             const char *base,
-                                             const char *access_jwt) {
+                                            const char *base,
+                                            const char *access_jwt) {
     int failures_before = failures;
     wf_response response = {0};
     int last_status = 0;
 
     for (int i = 0; i < 5; i++) {
         wf_response_free(&response);
-        wf_status s = bearer_post(client, base,
-            "com.atproto.server.requestAccountDelete", access_jwt, &response);
+        wf_status s =
+            bearer_post(client, base, "com.atproto.server.requestAccountDelete",
+                        access_jwt, &response);
         last_status = (int)response.status;
         if (s != WF_OK) {
-            fprintf(stderr,
-                    "FAIL requestAccountDelete attempt %d: transport error %d\n",
-                    i, (int)s);
+            fprintf(
+                stderr,
+                "FAIL requestAccountDelete attempt %d: transport error %d\n", i,
+                (int)s);
             failures++;
         }
     }
     CHECK(last_status == 200); /* the 5th still reached the handler */
 
     wf_response_free(&response);
-    wf_status s = bearer_post(client, base,
-        "com.atproto.server.requestAccountDelete", access_jwt, &response);
+    wf_status s =
+        bearer_post(client, base, "com.atproto.server.requestAccountDelete",
+                    access_jwt, &response);
     CHECK(s == WF_ERR_HTTP && response.status == 429);
     wf_response_free(&response);
 
@@ -234,8 +248,10 @@ int main(void) {
                                           "did:plc:quotatest", "quotasecret");
         CHECK(access_jwt != NULL);
         if (access_jwt) {
-            if (run_request_account_delete_limit(client, base, access_jwt) != 0) {
-                fprintf(stderr, "requestAccountDelete rate limit test failed\n");
+            if (run_request_account_delete_limit(client, base, access_jwt) !=
+                0) {
+                fprintf(stderr,
+                        "requestAccountDelete rate limit test failed\n");
             } else {
                 printf("PASS: requestAccountDelete rate limit (5/hour, "
                        "DID-keyed)\n");

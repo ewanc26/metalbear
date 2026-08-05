@@ -26,9 +26,13 @@
 #include <string.h>
 
 static int failures;
-#define CHECK(expr) do { if (!(expr)) { \
-    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-    failures++; } } while (0)
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        if (!(expr)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr);    \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
 
 /* ------------------------------------------------------------------ */
 /* A stand-in Cloudflare API                                           */
@@ -43,8 +47,11 @@ typedef struct {
     char auth[512];
 } call;
 
-typedef enum { FLAVOUR_CLOUDFLARE, FLAVOUR_DIGITALOCEAN, FLAVOUR_DESEC }
-    flavour;
+typedef enum {
+    FLAVOUR_CLOUDFLARE,
+    FLAVOUR_DIGITALOCEAN,
+    FLAVOUR_DESEC
+} flavour;
 
 static struct {
     pthread_mutex_t lock;
@@ -92,7 +99,8 @@ static enum MHD_Result handler(void *cls, struct MHD_Connection *conn,
                                const char *url, const char *method,
                                const char *version, const char *upload_data,
                                size_t *upload_size, void **con_cls) {
-    (void)cls; (void)version;
+    (void)cls;
+    (void)version;
 
     /* libmicrohttpd delivers a body across several calls; accumulate first. */
     upload *up = *con_cls;
@@ -112,14 +120,16 @@ static enum MHD_Result handler(void *cls, struct MHD_Connection *conn,
         return MHD_YES;
     }
 
-    const char *query = MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND,
-                                                    "name");
+    const char *query =
+        MHD_lookup_connection_value(conn, MHD_GET_ARGUMENT_KIND, "name");
     char full[512];
-    if (query) snprintf(full, sizeof(full), "%s?name=%s", url, query);
-    else snprintf(full, sizeof(full), "%s", url);
+    if (query)
+        snprintf(full, sizeof(full), "%s?name=%s", url, query);
+    else
+        snprintf(full, sizeof(full), "%s", url);
 
-    const char *auth = MHD_lookup_connection_value(conn, MHD_HEADER_KIND,
-                                                   "Authorization");
+    const char *auth =
+        MHD_lookup_connection_value(conn, MHD_HEADER_KIND, "Authorization");
     record_call(method, full, up->body, auth);
 
     if (zone.reject) {
@@ -132,36 +142,38 @@ static enum MHD_Result handler(void *cls, struct MHD_Connection *conn,
             return send_json(conn, 401,
                              "{\"id\":\"unauthorized\","
                              "\"message\":\"Authentication error\"}");
-        return send_json(conn, 403,
-                         "{\"detail\":\"Authentication error\"}");
+        return send_json(conn, 403, "{\"detail\":\"Authentication error\"}");
     }
 
     if (strcmp(method, "GET") == 0) {
         char body[512];
         switch (zone.flavour) {
-        case FLAVOUR_CLOUDFLARE:
-            if (!zone.has_record)
-                return send_json(conn, 200, "{\"success\":true,\"result\":[]}");
-            snprintf(body, sizeof(body),
-                     "{\"success\":true,\"result\":[{\"id\":\"rec123\","
-                     "\"content\":\"%s\"}]}", zone.record_content);
-            return send_json(conn, 200, body);
-        case FLAVOUR_DIGITALOCEAN:
-            if (!zone.has_record)
-                return send_json(conn, 200, "{\"domain_records\":[]}");
-            snprintf(body, sizeof(body),
-                     "{\"domain_records\":[{\"id\":42,\"type\":\"TXT\","
-                     "\"data\":\"%s\"}]}", zone.record_content);
-            return send_json(conn, 200, body);
-        case FLAVOUR_DESEC:
-            /* Absence is a 404 here, not an empty list. */
-            if (!zone.has_record)
-                return send_json(conn, 404, "{\"detail\":\"Not found.\"}");
-            snprintf(body, sizeof(body),
-                     "{\"subname\":\"_atproto.x\",\"type\":\"TXT\","
-                     "\"ttl\":3600,\"records\":[\"\\\"%s\\\"\"]}",
-                     zone.record_content);
-            return send_json(conn, 200, body);
+            case FLAVOUR_CLOUDFLARE:
+                if (!zone.has_record)
+                    return send_json(conn, 200,
+                                     "{\"success\":true,\"result\":[]}");
+                snprintf(body, sizeof(body),
+                         "{\"success\":true,\"result\":[{\"id\":\"rec123\","
+                         "\"content\":\"%s\"}]}",
+                         zone.record_content);
+                return send_json(conn, 200, body);
+            case FLAVOUR_DIGITALOCEAN:
+                if (!zone.has_record)
+                    return send_json(conn, 200, "{\"domain_records\":[]}");
+                snprintf(body, sizeof(body),
+                         "{\"domain_records\":[{\"id\":42,\"type\":\"TXT\","
+                         "\"data\":\"%s\"}]}",
+                         zone.record_content);
+                return send_json(conn, 200, body);
+            case FLAVOUR_DESEC:
+                /* Absence is a 404 here, not an empty list. */
+                if (!zone.has_record)
+                    return send_json(conn, 404, "{\"detail\":\"Not found.\"}");
+                snprintf(body, sizeof(body),
+                         "{\"subname\":\"_atproto.x\",\"type\":\"TXT\","
+                         "\"ttl\":3600,\"records\":[\"\\\"%s\\\"\"]}",
+                         zone.record_content);
+                return send_json(conn, 200, body);
         }
     }
 
@@ -185,13 +197,13 @@ static enum MHD_Result handler(void *cls, struct MHD_Connection *conn,
                 cJSON_Delete(doc);
                 return send_json(conn, 200, "{\"records\":[]}");
             }
-            cJSON *first = cJSON_IsArray(records)
-                ? cJSON_GetArrayItem(records, 0) : NULL;
+            cJSON *first =
+                cJSON_IsArray(records) ? cJSON_GetArrayItem(records, 0) : NULL;
             if (cJSON_IsString(first)) {
                 size_t len = strlen(first->valuestring);
                 if (len >= 2 && first->valuestring[0] == '"') {
-                    snprintf(unquoted, sizeof(unquoted), "%.*s",
-                             (int)(len - 2), first->valuestring + 1);
+                    snprintf(unquoted, sizeof(unquoted), "%.*s", (int)(len - 2),
+                             first->valuestring + 1);
                     value = unquoted;
                 } else {
                     value = first->valuestring;
@@ -205,11 +217,10 @@ static enum MHD_Result handler(void *cls, struct MHD_Connection *conn,
         }
         cJSON_Delete(doc);
         if (zone.flavour == FLAVOUR_CLOUDFLARE)
-            return send_json(conn, 200,
-                             "{\"success\":true,\"result\":{\"id\":\"rec123\"}}");
+            return send_json(
+                conn, 200, "{\"success\":true,\"result\":{\"id\":\"rec123\"}}");
         if (zone.flavour == FLAVOUR_DIGITALOCEAN)
-            return send_json(conn, 201,
-                             "{\"domain_record\":{\"id\":42}}");
+            return send_json(conn, 201, "{\"domain_record\":{\"id\":42}}");
         return send_json(conn, 200, "{\"records\":[]}");
     }
 
@@ -233,9 +244,14 @@ static enum MHD_Result handler(void *cls, struct MHD_Connection *conn,
 
 static void free_upload(void *cls, struct MHD_Connection *conn, void **con_cls,
                         enum MHD_RequestTerminationCode code) {
-    (void)cls; (void)conn; (void)code;
+    (void)cls;
+    (void)conn;
+    (void)code;
     upload *up = *con_cls;
-    if (up) { free(up->body); free(up); }
+    if (up) {
+        free(up->body);
+        free(up);
+    }
     *con_cls = NULL;
 }
 
@@ -249,7 +265,9 @@ static void zone_reset_as(flavour which) {
     pthread_mutex_unlock(&zone.lock);
 }
 
-static void zone_reset(void) { zone_reset_as(FLAVOUR_CLOUDFLARE); }
+static void zone_reset(void) {
+    zone_reset_as(FLAVOUR_CLOUDFLARE);
+}
 
 static int call_count(void) {
     pthread_mutex_lock(&zone.lock);
@@ -275,7 +293,8 @@ static void test_no_provider_is_not_an_error(void) {
 
     /* And the calls on a NULL publisher must succeed, so callers need no
      * branch of their own. */
-    CHECK(metalbear_handle_dns_publish(NULL, "a.example.com", "did:plc:x") == WF_OK);
+    CHECK(metalbear_handle_dns_publish(NULL, "a.example.com", "did:plc:x") ==
+          WF_OK);
     CHECK(metalbear_handle_dns_retract(NULL, "a.example.com") == WF_OK);
 }
 
@@ -286,14 +305,17 @@ static void test_no_provider_is_not_an_error(void) {
  */
 static void test_incomplete_credentials_are_rejected(void) {
     metalbear_handle_dns *dns = NULL;
-    CHECK(metalbear_handle_dns_open("cloudflare", NULL, "zone", 0, &dns) != WF_OK);
+    CHECK(metalbear_handle_dns_open("cloudflare", NULL, "zone", 0, &dns) !=
+          WF_OK);
     CHECK(dns == NULL);
-    CHECK(metalbear_handle_dns_open("cloudflare", "token", NULL, 0, &dns) != WF_OK);
+    CHECK(metalbear_handle_dns_open("cloudflare", "token", NULL, 0, &dns) !=
+          WF_OK);
     CHECK(dns == NULL);
     CHECK(metalbear_handle_dns_open("cloudflare", "", "", 0, &dns) != WF_OK);
     CHECK(dns == NULL);
     /* An unimplemented provider is an error rather than a silent fallback. */
-    CHECK(metalbear_handle_dns_open("route53", "token", "zone", 0, &dns) != WF_OK);
+    CHECK(metalbear_handle_dns_open("route53", "token", "zone", 0, &dns) !=
+          WF_OK);
     CHECK(dns == NULL);
 }
 
@@ -322,10 +344,11 @@ static void test_publish_creates_the_record(void) {
 
     /* The record must carry the `did=` prefix; without it the value is not a
      * handle declaration and no resolver will accept it. */
-    CHECK(strstr(zone.calls[1].body, "\"content\":\"did=did:plc:alice\"") != NULL);
+    CHECK(strstr(zone.calls[1].body, "\"content\":\"did=did:plc:alice\"") !=
+          NULL);
     CHECK(strstr(zone.calls[1].body, "\"type\":\"TXT\"") != NULL);
-    CHECK(strstr(zone.calls[1].body, "\"name\":\"_atproto.alice.pds.example.com\"")
-          != NULL);
+    CHECK(strstr(zone.calls[1].body,
+                 "\"name\":\"_atproto.alice.pds.example.com\"") != NULL);
     CHECK(strstr(zone.calls[1].body, "\"ttl\":120") != NULL);
     /* Bearer auth, not the legacy key headers. */
     CHECK(strcmp(zone.calls[1].auth, "Bearer test-token") == 0);
@@ -360,7 +383,8 @@ static void test_publish_updates_a_stale_record(void) {
     if (!dns) return;
 
     zone.has_record = 1;
-    snprintf(zone.record_content, sizeof(zone.record_content), "did=did:plc:old");
+    snprintf(zone.record_content, sizeof(zone.record_content),
+             "did=did:plc:old");
 
     CHECK(metalbear_handle_dns_publish(dns, "carol.pds.example.com",
                                        "did:plc:new") == WF_OK);
@@ -378,7 +402,8 @@ static void test_retract_removes_the_record(void) {
     if (!dns) return;
 
     zone.has_record = 1;
-    snprintf(zone.record_content, sizeof(zone.record_content), "did=did:plc:dave");
+    snprintf(zone.record_content, sizeof(zone.record_content),
+             "did=did:plc:dave");
 
     CHECK(metalbear_handle_dns_retract(dns, "dave.pds.example.com") == WF_OK);
     CHECK(call_count() == 2);
@@ -417,8 +442,8 @@ static void test_a_rejected_request_is_a_failure(void) {
                                        "did:plc:frank") != WF_OK);
     /* And the provider's own message must survive, because "DNS failed" and
      * "the token cannot edit this zone" need different actions. */
-    CHECK(strstr(metalbear_handle_dns_last_error(dns), "Authentication error")
-          != NULL);
+    CHECK(strstr(metalbear_handle_dns_last_error(dns),
+                 "Authentication error") != NULL);
 
     metalbear_handle_dns_free(dns);
 }
@@ -452,7 +477,8 @@ static metalbear_handle_dns *open_digitalocean(void) {
  * The zone is addressed by domain name rather than an opaque id, the TXT value
  * is `data` rather than `content`, and the name is sent fully qualified with a
  * trailing dot — without it the API appends the domain to a name that already
- * ends with it and the record lands at `_atproto.alice.example.com.example.com`.
+ * ends with it and the record lands at
+ * `_atproto.alice.example.com.example.com`.
  */
 static void test_digitalocean_publish_creates_the_record(void) {
     zone_reset_as(FLAVOUR_DIGITALOCEAN);
@@ -518,8 +544,8 @@ static void test_digitalocean_reports_a_rejection(void) {
     zone.reject = 1;
     CHECK(metalbear_handle_dns_publish(dns, "frank.example.com",
                                        "did:plc:frank") != WF_OK);
-    CHECK(strstr(metalbear_handle_dns_last_error(dns), "Authentication error")
-          != NULL);
+    CHECK(strstr(metalbear_handle_dns_last_error(dns),
+                 "Authentication error") != NULL);
 
     metalbear_handle_dns_free(dns);
 }
@@ -530,8 +556,8 @@ static void test_digitalocean_reports_a_rejection(void) {
 
 static metalbear_handle_dns *open_desec(void) {
     metalbear_handle_dns *dns = NULL;
-    CHECK(metalbear_handle_dns_open("desec", "desec-token", "example.com",
-                                    120, &dns) == WF_OK);
+    CHECK(metalbear_handle_dns_open("desec", "desec-token", "example.com", 120,
+                                    &dns) == WF_OK);
     return dns;
 }
 
@@ -583,11 +609,11 @@ static void test_desec_publish_is_idempotent_through_the_quoting(void) {
     metalbear_handle_dns *dns = open_desec();
     if (!dns) return;
 
-    CHECK(metalbear_handle_dns_publish(dns, "bob.example.com",
-                                       "did:plc:bob") == WF_OK);
+    CHECK(metalbear_handle_dns_publish(dns, "bob.example.com", "did:plc:bob") ==
+          WF_OK);
     int after_first = call_count();
-    CHECK(metalbear_handle_dns_publish(dns, "bob.example.com",
-                                       "did:plc:bob") == WF_OK);
+    CHECK(metalbear_handle_dns_publish(dns, "bob.example.com", "did:plc:bob") ==
+          WF_OK);
     CHECK(call_count() == after_first + 1);
     CHECK(strcmp(zone.calls[after_first].method, "GET") == 0);
 
@@ -682,7 +708,10 @@ int main(void) {
     MHD_stop_daemon(stub);
     pthread_mutex_destroy(&zone.lock);
 
-    if (failures == 0) { printf("All tests passed.\n"); return 0; }
+    if (failures == 0) {
+        printf("All tests passed.\n");
+        return 0;
+    }
     fprintf(stderr, "%d checks failed\n", failures);
     return 1;
 }

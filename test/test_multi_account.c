@@ -32,9 +32,11 @@
 #include <unistd.h>
 
 /* Recursively remove a directory tree (used for test cleanup). */
-static int rmtree_remove_cb(const char *path, const struct stat *sb,
-                            int type, struct FTW *ftwbuf) {
-    (void)sb; (void)type; (void)ftwbuf;
+static int rmtree_remove_cb(const char *path, const struct stat *sb, int type,
+                            struct FTW *ftwbuf) {
+    (void)sb;
+    (void)type;
+    (void)ftwbuf;
     return remove(path);
 }
 static void rmtree(const char *path) {
@@ -42,9 +44,13 @@ static void rmtree(const char *path) {
 }
 
 static int failures;
-#define CHECK(expr) do { if (!(expr)) { \
-    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-    failures++; } } while (0)
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        if (!(expr)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr);    \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
 
 static cJSON *json_response(wf_response *response) {
     return cJSON_ParseWithLength(response->body ? response->body : "",
@@ -68,11 +74,13 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
                             const char *did, const char *password) {
     char body[512];
     snprintf(body, sizeof(body),
-             "{\"handle\":\"%s\",\"password\":\"%s\",\"did\":\"%s\",\"email\":\"%s@example.com\"}",
+             "{\"handle\":\"%s\",\"password\":\"%s\",\"did\":\"%s\",\"email\":"
+             "\"%s@example.com\"}",
              handle, password, did, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
-                          &response) != WF_OK || response.status != 200) {
+                          &response) != WF_OK ||
+        response.status != 200) {
         wf_response_free(&response);
         return NULL;
     }
@@ -90,12 +98,12 @@ static bool create_session(wf_xrpc_client *client, const char *identifier,
     *out_access = NULL;
     *out_refresh = NULL;
     char body[512];
-    snprintf(body, sizeof(body),
-             "{\"identifier\":\"%s\",\"password\":\"%s\"}",
+    snprintf(body, sizeof(body), "{\"identifier\":\"%s\",\"password\":\"%s\"}",
              identifier, password);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createSession", body,
-                          &response) != WF_OK || response.status != 200) {
+                          &response) != WF_OK ||
+        response.status != 200) {
         wf_response_free(&response);
         return false;
     }
@@ -133,8 +141,8 @@ static int count_commit_events(const char *seq_path) {
     int commits = 0;
     if (sqlite3_open(seq_path, &db) == SQLITE_OK) {
         sqlite3_stmt *stmt = NULL;
-        if (sqlite3_prepare_v2(db,
-                "SELECT COUNT(*) FROM events WHERE length(frame) > 400;",
+        if (sqlite3_prepare_v2(
+                db, "SELECT COUNT(*) FROM events WHERE length(frame) > 400;",
                 -1, &stmt, NULL) == SQLITE_OK &&
             sqlite3_step(stmt) == SQLITE_ROW)
             commits = sqlite3_column_int(stmt, 0);
@@ -157,7 +165,8 @@ static int count_identity_events_for(const char *seq_path, const char *handle) {
     int found = 0;
     if (sqlite3_open(seq_path, &db) == SQLITE_OK) {
         sqlite3_stmt *stmt = NULL;
-        if (sqlite3_prepare_v2(db,
+        if (sqlite3_prepare_v2(
+                db,
                 "SELECT COUNT(*) FROM events "
                 "WHERE instr(frame, '#identity') > 0 AND instr(frame, ?) > 0;",
                 -1, &stmt, NULL) == SQLITE_OK) {
@@ -185,8 +194,8 @@ static int count_events_mentioning(const char *seq_path, const char *did) {
     int found = 0;
     if (sqlite3_open(seq_path, &db) == SQLITE_OK) {
         sqlite3_stmt *stmt = NULL;
-        if (sqlite3_prepare_v2(db,
-                "SELECT COUNT(*) FROM events WHERE instr(frame, ?) > 0;",
+        if (sqlite3_prepare_v2(
+                db, "SELECT COUNT(*) FROM events WHERE instr(frame, ?) > 0;",
                 -1, &stmt, NULL) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, did, -1, SQLITE_STATIC);
             if (sqlite3_step(stmt) == SQLITE_ROW)
@@ -204,7 +213,8 @@ static int count_deleted_events_for(const char *seq_path, const char *did) {
     int found = 0;
     if (sqlite3_open(seq_path, &db) == SQLITE_OK) {
         sqlite3_stmt *stmt = NULL;
-        if (sqlite3_prepare_v2(db,
+        if (sqlite3_prepare_v2(
+                db,
                 "SELECT COUNT(*) FROM events "
                 "WHERE instr(frame, '#account') > 0 AND instr(frame, ?) > 0 "
                 "AND instr(frame, 'deleted') > 0;",
@@ -293,7 +303,10 @@ int main(void) {
     };
     metalbear_server *server = metalbear_server_start(&config);
     CHECK(server != NULL);
-    if (!server) { rmtree(directory); return 1; }
+    if (!server) {
+        rmtree(directory);
+        return 1;
+    }
 
     char base[80];
     snprintf(base, sizeof(base), "http://127.0.0.1:%u",
@@ -303,13 +316,13 @@ int main(void) {
 
     /* (a) Accounts created via createAccount — including the one this test
      * later expects to see listed. No account exists until one is created. */
-    char *token_alice = create_account(client, "alice.example.com",
-                                       "did:plc:metalbeartest",
-                                       "correct horse battery staple");
+    char *token_alice =
+        create_account(client, "alice.example.com", "did:plc:metalbeartest",
+                       "correct horse battery staple");
     CHECK(token_alice != NULL);
     free(token_alice);
-    char *token_bob = create_account(client, "bob.example.com", "did:plc:bob",
-                                     "bobsecret");
+    char *token_bob =
+        create_account(client, "bob.example.com", "did:plc:bob", "bobsecret");
     char *token_carol = create_account(client, "carol.example.com",
                                        "did:plc:carol", "carolsecret");
     CHECK(token_bob != NULL);
@@ -426,13 +439,11 @@ int main(void) {
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);
         wf_response response = {0};
-        CHECK(wf_xrpc_procedure(client,
-                                "com.atproto.server.createAppPassword",
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAppPassword",
                                 "{}", &response) == WF_ERR_HTTP);
         CHECK(response.status == 400);
         wf_response_free(&response);
-        CHECK(wf_xrpc_procedure(client,
-                                "com.atproto.server.createAppPassword",
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAppPassword",
                                 "{\"name\":\"shared-device\"}",
                                 &response) == WF_OK);
         CHECK(response.status == 200);
@@ -446,8 +457,8 @@ int main(void) {
         CHECK(cJSON_IsString(created_at) && created_at->valuestring[0]);
         cJSON_Delete(json);
         wf_response_free(&response);
-        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords",
-                            NULL, &response) == WF_OK);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords", NULL,
+                            &response) == WF_OK);
         CHECK(response.status == 200);
         CHECK(body_contains(&response, "shared-device"));
         wf_response_free(&response);
@@ -455,29 +466,28 @@ int main(void) {
     if (token_carol) {
         wf_xrpc_client_set_auth(client, token_carol);
         wf_response response = {0};
-        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords",
-                            NULL, &response) == WF_OK);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords", NULL,
+                            &response) == WF_OK);
         CHECK(response.status == 200);
         CHECK(!body_contains(&response, "shared-device"));
         wf_response_free(&response);
-        CHECK(wf_xrpc_procedure(client,
-                                "com.atproto.server.createAppPassword",
-                                "{\"name\":\"shared-device\",\"privileged\":true}",
-                                &response) == WF_OK);
+        CHECK(wf_xrpc_procedure(
+                  client, "com.atproto.server.createAppPassword",
+                  "{\"name\":\"shared-device\",\"privileged\":true}",
+                  &response) == WF_OK);
         CHECK(response.status == 200);
         wf_response_free(&response);
     }
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);
         wf_response response = {0};
-        CHECK(wf_xrpc_procedure(client,
-                                "com.atproto.server.revokeAppPassword",
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.revokeAppPassword",
                                 "{\"name\":\"shared-device\"}",
                                 &response) == WF_OK);
         CHECK(response.status == 200);
         wf_response_free(&response);
-        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords",
-                            NULL, &response) == WF_OK);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords", NULL,
+                            &response) == WF_OK);
         CHECK(response.status == 200);
         CHECK(!body_contains(&response, "shared-device"));
         wf_response_free(&response);
@@ -485,8 +495,8 @@ int main(void) {
     if (token_carol) {
         wf_xrpc_client_set_auth(client, token_carol);
         wf_response response = {0};
-        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords",
-                            NULL, &response) == WF_OK);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords", NULL,
+                            &response) == WF_OK);
         CHECK(response.status == 200);
         CHECK(body_contains(&response, "shared-device"));
         wf_response_free(&response);
@@ -505,8 +515,7 @@ int main(void) {
         CHECK(body_contains(&response, "bob@example.net"));
         CHECK(!body_contains(&response, "carol@example.net"));
         wf_response_free(&response);
-        CHECK(wf_xrpc_procedure(client,
-                                "com.atproto.server.requestEmailUpdate",
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestEmailUpdate",
                                 NULL, &response) == WF_OK);
         CHECK(response.status == 200);
         CHECK(body_contains(&response, "\"tokenRequired\":true"));
@@ -534,7 +543,8 @@ int main(void) {
         wf_response_free(&response);
         wf_xrpc_procedure(client, "com.atproto.server.confirmEmail",
                           "{\"email\":\"carol@example.net\","
-                          "\"token\":\"invalid\"}", &response);
+                          "\"token\":\"invalid\"}",
+                          &response);
         CHECK(response.status == 400);
         CHECK(body_contains(&response, "InvalidToken"));
         wf_response_free(&response);
@@ -550,19 +560,16 @@ int main(void) {
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);
         wf_response response = {0};
-        CHECK(wf_xrpc_procedure(client,
-                                "com.atproto.server.deactivateAccount",
-                                "{\"deleteAfter\":1}", &response) ==
-              WF_ERR_HTTP);
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.deactivateAccount",
+                                "{\"deleteAfter\":1}",
+                                &response) == WF_ERR_HTTP);
         CHECK(response.status == 400);
         wf_response_free(&response);
-        CHECK(wf_xrpc_procedure(client,
-                                "com.atproto.server.deactivateAccount",
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.deactivateAccount",
                                 "{}", &response) == WF_OK);
         CHECK(response.status == 200);
         wf_response_free(&response);
-        CHECK(wf_xrpc_query(client,
-                            "com.atproto.server.checkAccountStatus",
+        CHECK(wf_xrpc_query(client, "com.atproto.server.checkAccountStatus",
                             NULL, &response) == WF_OK);
         CHECK(response.status == 200);
         cJSON *json = json_response(&response);
@@ -574,8 +581,7 @@ int main(void) {
     if (token_carol) {
         wf_xrpc_client_set_auth(client, token_carol);
         wf_response response = {0};
-        CHECK(wf_xrpc_query(client,
-                            "com.atproto.server.checkAccountStatus",
+        CHECK(wf_xrpc_query(client, "com.atproto.server.checkAccountStatus",
                             NULL, &response) == WF_OK);
         CHECK(response.status == 200);
         cJSON *json = json_response(&response);
@@ -587,13 +593,11 @@ int main(void) {
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);
         wf_response response = {0};
-        CHECK(wf_xrpc_procedure(client,
-                                "com.atproto.server.activateAccount",
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.activateAccount",
                                 NULL, &response) == WF_OK);
         CHECK(response.status == 200);
         wf_response_free(&response);
-        CHECK(wf_xrpc_query(client,
-                            "com.atproto.server.checkAccountStatus",
+        CHECK(wf_xrpc_query(client, "com.atproto.server.checkAccountStatus",
                             NULL, &response) == WF_OK);
         CHECK(response.status == 200);
         cJSON *json = json_response(&response);
@@ -618,8 +622,8 @@ int main(void) {
                             "bob-only-secret") == 200);
     }
     char text[256] = {0};
-    CHECK(get_record(client, "did:plc:bob", "isolated", text,
-                     sizeof(text)) == 200);
+    CHECK(get_record(client, "did:plc:bob", "isolated", text, sizeof(text)) ==
+          200);
     CHECK(strcmp(text, "bob-only-secret") == 0);
     /* The same record key must NOT resolve under carol's repository. */
     CHECK(get_record(client, "did:plc:carol", "isolated", NULL, 0) == 404);
@@ -629,11 +633,12 @@ int main(void) {
      * repository, never carol's. */
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);
-        CHECK(create_record(client, "did:plc:carol", "spoof",
-                            "still-bobs") == 200);
+        CHECK(create_record(client, "did:plc:carol", "spoof", "still-bobs") ==
+              200);
     }
     text[0] = '\0';
-    CHECK(get_record(client, "did:plc:bob", "spoof", text, sizeof(text)) == 200);
+    CHECK(get_record(client, "did:plc:bob", "spoof", text, sizeof(text)) ==
+          200);
     CHECK(strcmp(text, "still-bobs") == 0);
     CHECK(get_record(client, "did:plc:carol", "spoof", NULL, 0) == 404);
 
@@ -681,8 +686,8 @@ int main(void) {
     {
         wf_response response = {0};
         wf_xrpc_param params[] = {{"limit", "1"}};
-        CHECK(wf_xrpc_query_params(client, "com.atproto.sync.listRepos",
-                                   params, 1, &response) == WF_OK);
+        CHECK(wf_xrpc_query_params(client, "com.atproto.sync.listRepos", params,
+                                   1, &response) == WF_OK);
         cJSON *json = json_response(&response);
         cJSON *repos = cJSON_GetObjectItemCaseSensitive(json, "repos");
         CHECK(cJSON_IsArray(repos) && cJSON_GetArraySize(repos) == 1);
@@ -771,21 +776,22 @@ int main(void) {
         int commits_pre = count_commit_events(shared_seq);
         wf_xrpc_client_set_auth(client, token_carol);
         wf_response batch = {0};
-        CHECK(wf_xrpc_procedure(client, "com.atproto.repo.applyWrites",
-            "{\"repo\":\"did:plc:carol\",\"writes\":["
-            "{\"$type\":\"com.atproto.repo.applyWrites#create\","
-            "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"b1\","
-            "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"b1\","
-            "\"createdAt\":\"2026-07-20T00:00:00.000Z\"}},"
-            "{\"$type\":\"com.atproto.repo.applyWrites#create\","
-            "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"b2\","
-            "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"b2\","
-            "\"createdAt\":\"2026-07-20T00:00:00.000Z\"}},"
-            "{\"$type\":\"com.atproto.repo.applyWrites#create\","
-            "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"b3\","
-            "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"b3\","
-            "\"createdAt\":\"2026-07-20T00:00:00.000Z\"}}]}",
-            &batch) == WF_OK);
+        CHECK(wf_xrpc_procedure(
+                  client, "com.atproto.repo.applyWrites",
+                  "{\"repo\":\"did:plc:carol\",\"writes\":["
+                  "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+                  "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"b1\","
+                  "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"b1\","
+                  "\"createdAt\":\"2026-07-20T00:00:00.000Z\"}},"
+                  "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+                  "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"b2\","
+                  "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"b2\","
+                  "\"createdAt\":\"2026-07-20T00:00:00.000Z\"}},"
+                  "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+                  "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"b3\","
+                  "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"b3\","
+                  "\"createdAt\":\"2026-07-20T00:00:00.000Z\"}}]}",
+                  &batch) == WF_OK);
         CHECK(batch.status == 200);
         wf_response_free(&batch);
         CHECK(count_commit_events(shared_seq) == commits_pre + 1);
@@ -810,11 +816,12 @@ int main(void) {
                             NULL, &response) == WF_OK);
         CHECK(response.status == 200);
         cJSON *json = json_response(&response);
-        cJSON *repo_blocks = cJSON_GetObjectItemCaseSensitive(json, "repoBlocks");
-        cJSON *indexed_records = cJSON_GetObjectItemCaseSensitive(
-            json, "indexedRecords");
-        cJSON *imported_blobs = cJSON_GetObjectItemCaseSensitive(
-            json, "importedBlobs");
+        cJSON *repo_blocks =
+            cJSON_GetObjectItemCaseSensitive(json, "repoBlocks");
+        cJSON *indexed_records =
+            cJSON_GetObjectItemCaseSensitive(json, "indexedRecords");
+        cJSON *imported_blobs =
+            cJSON_GetObjectItemCaseSensitive(json, "importedBlobs");
         CHECK(cJSON_IsNumber(repo_blocks) && repo_blocks->valuedouble > 0);
         CHECK(cJSON_IsNumber(indexed_records) &&
               indexed_records->valuedouble == 2);
@@ -877,7 +884,8 @@ int main(void) {
             /* Creation, identity and two commits at least. */
             CHECK(count_events_mentioning(shared_seq, "did:plc:dave") > 2);
 
-            int64_t others_before = count_all_events(shared_seq) -
+            int64_t others_before =
+                count_all_events(shared_seq) -
                 count_events_mentioning(shared_seq, "did:plc:dave");
             wf_response response = {0};
             char url[256];
@@ -903,7 +911,7 @@ int main(void) {
              * were caught by the sweep. */
             CHECK(count_deleted_events_for(shared_seq, "did:plc:dave") == 1);
             CHECK(count_all_events(shared_seq) -
-                  count_events_mentioning(shared_seq, "did:plc:dave") ==
+                      count_events_mentioning(shared_seq, "did:plc:dave") ==
                   others_before);
             free(token_dave);
         }

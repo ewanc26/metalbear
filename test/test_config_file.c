@@ -17,9 +17,13 @@
 #include <unistd.h>
 
 static int failures;
-#define CHECK(expr) do { if (!(expr)) { \
-    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-    failures++; } } while (0)
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        if (!(expr)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr);    \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
 
 static char *write_temp(const char *body) {
     static char path[] = "/tmp/metalbear-cfg-XXXXXX";
@@ -53,11 +57,13 @@ static void test_reads_every_type(void) {
     metalbear_config cfg = {0};
     metalbear_config_file *owner = NULL;
     char err[256] = "";
-    CHECK(metalbear_config_file_load(path, &cfg, &owner, err, sizeof(err)) == WF_OK);
+    CHECK(metalbear_config_file_load(path, &cfg, &owner, err, sizeof(err)) ==
+          WF_OK);
     CHECK(cfg.listen_address && strcmp(cfg.listen_address, "0.0.0.0") == 0);
     CHECK(cfg.port == 8080);
     CHECK(cfg.thread_count == 6);
-    CHECK(cfg.service_did && strcmp(cfg.service_did, "did:web:example.com") == 0);
+    CHECK(cfg.service_did &&
+          strcmp(cfg.service_did, "did:web:example.com") == 0);
     CHECK(cfg.invite_required == false);
     CHECK(cfg.rate_limit == 2500);
     /* An array becomes the comma-separated form used everywhere else, rather
@@ -65,7 +71,8 @@ static void test_reads_every_type(void) {
     CHECK(cfg.crawlers &&
           strcmp(cfg.crawlers, "https://a.example,https://b.example") == 0);
     metalbear_config_file_free(owner);
-    unlink(path); free(path);
+    unlink(path);
+    free(path);
 }
 
 static void test_absent_settings_are_left_alone(void) {
@@ -79,18 +86,19 @@ static void test_absent_settings_are_left_alone(void) {
     CHECK(strcmp(cfg.listen_address, "preset") == 0);
     CHECK(cfg.rate_limit == 42);
     metalbear_config_file_free(owner);
-    unlink(path); free(path);
+    unlink(path);
+    free(path);
 }
 
 /* Each of these must fail loudly, naming the line. */
 static void test_rejects_bad_input(void) {
     const char *cases[][2] = {
-        {"unknown setting",  "[server]\nnonsense = 1\n"},
-        {"missing equals",   "[server]\nport 8080\n"},
-        {"unquoted string",  "[server]\nlisten = 0.0.0.0\n"},
+        {"unknown setting", "[server]\nnonsense = 1\n"},
+        {"missing equals", "[server]\nport 8080\n"},
+        {"unquoted string", "[server]\nlisten = 0.0.0.0\n"},
         {"non-integer port", "[server]\nport = \"eighty\"\n"},
-        {"bad boolean",      "[accounts]\ninvite_required = yes\n"},
-        {"out-of-range port","[server]\nport = 70000\n"},
+        {"bad boolean", "[accounts]\ninvite_required = yes\n"},
+        {"out-of-range port", "[server]\nport = 70000\n"},
         {"unterminated section", "[server\nport = 1\n"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
@@ -98,8 +106,8 @@ static void test_rejects_bad_input(void) {
         metalbear_config cfg = {0};
         metalbear_config_file *owner = NULL;
         char err[256] = "";
-        wf_status st = metalbear_config_file_load(path, &cfg, &owner, err,
-                                                  sizeof(err));
+        wf_status st =
+            metalbear_config_file_load(path, &cfg, &owner, err, sizeof(err));
         if (st == WF_OK) {
             fprintf(stderr, "FAIL: accepted bad input (%s)\n", cases[i][0]);
             failures++;
@@ -112,7 +120,8 @@ static void test_rejects_bad_input(void) {
         }
         CHECK(owner == NULL);
         metalbear_config_file_free(owner);
-        unlink(path); free(path);
+        unlink(path);
+        free(path);
     }
 }
 
@@ -127,8 +136,7 @@ static void test_missing_file_is_reported(void) {
 
 /* The shipped example must actually parse, or it is documentation that lies. */
 static void test_example_config_parses(void) {
-    const char *candidates[] = {"config.example.toml",
-                                "../config.example.toml",
+    const char *candidates[] = {"config.example.toml", "../config.example.toml",
                                 "../../config.example.toml"};
     for (size_t i = 0; i < 3; i++) {
         if (access(candidates[i], R_OK) != 0) continue;
@@ -156,7 +164,10 @@ int main(void) {
     test_rejects_bad_input();
     test_missing_file_is_reported();
     test_example_config_parses();
-    if (failures == 0) { printf("All tests passed.\n"); return 0; }
+    if (failures == 0) {
+        printf("All tests passed.\n");
+        return 0;
+    }
     fprintf(stderr, "%d checks failed\n", failures);
     return 1;
 }

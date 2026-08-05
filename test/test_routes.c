@@ -14,9 +14,14 @@
 #include <unistd.h>
 
 static int failures;
-#define CHECK(expression) do { if (!(expression)) { \
-    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expression); \
-    failures++; } } while (0)
+#define CHECK(expression)                                                      \
+    do {                                                                       \
+        if (!(expression)) {                                                   \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__,            \
+                    #expression);                                              \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
 
 static cJSON *json_response(wf_response *response) {
     return cJSON_ParseWithLength(response->body ? response->body : "",
@@ -46,8 +51,7 @@ int main(void) {
 
     wf_signing_key rotated = {0};
     char *didkey = NULL;
-    CHECK(metalbear_key_rotation_rotate(key_store, &rotated,
-                                         &didkey) == WF_OK);
+    CHECK(metalbear_key_rotation_rotate(key_store, &rotated, &didkey) == WF_OK);
     CHECK(rotated.type == WF_KEY_TYPE_SECP256K1);
     CHECK(didkey != NULL && strstr(didkey, "did:key:") != NULL);
     free(didkey);
@@ -74,8 +78,7 @@ int main(void) {
     unlink(oauth_path);
 
     metalbear_oauth_store *oauth_store = NULL;
-    CHECK(metalbear_oauth_store_open(oauth_path,
-                                     "https://pds.example.com",
+    CHECK(metalbear_oauth_store_open(oauth_path, "https://pds.example.com",
                                      &oauth_store) == WF_OK);
     CHECK(oauth_store != NULL);
 
@@ -88,7 +91,8 @@ int main(void) {
     /* Test PAR + authorize + token flow */
     wf_oauth_pkce pkce = {0};
     CHECK(wf_oauth_pkce_from_verifier(
-              "test-route-verifier-with-enough-entropy-012345", &pkce) == WF_OK);
+              "test-route-verifier-with-enough-entropy-012345", &pkce) ==
+          WF_OK);
 
     metalbear_oauth_request request = {
         .client_id = "https://client.example/metadata.json",
@@ -100,38 +104,34 @@ int main(void) {
     };
     char *request_uri = NULL;
     int64_t expires_in = 0;
-    CHECK(metalbear_oauth_create_par(oauth_store, &request,
-                                      &request_uri, &expires_in) == WF_OK);
+    CHECK(metalbear_oauth_create_par(oauth_store, &request, &request_uri,
+                                     &expires_in) == WF_OK);
     CHECK(request_uri != NULL);
 
     char *code = NULL;
     char *redirect_uri = NULL;
     char *state = NULL;
-    CHECK(metalbear_oauth_authorize(oauth_store, request_uri,
-                                     request.client_id, "did:plc:alice",
-                                     &code, &redirect_uri, &state) == WF_OK);
+    CHECK(metalbear_oauth_authorize(oauth_store, request_uri, request.client_id,
+                                    "did:plc:alice", &code, &redirect_uri,
+                                    &state) == WF_OK);
     CHECK(code != NULL && redirect_uri != NULL && state != NULL);
 
     metalbear_oauth_grant grant = {0};
-    CHECK(metalbear_oauth_exchange_code(oauth_store, code,
-                                         request.client_id,
-                                         request.redirect_uri,
-                                         pkce.verifier,
-                                         request.dpop_jkt,
-                                         &grant) == WF_OK);
+    CHECK(metalbear_oauth_exchange_code(oauth_store, code, request.client_id,
+                                        request.redirect_uri, pkce.verifier,
+                                        request.dpop_jkt, &grant) == WF_OK);
     CHECK(grant.access_token != NULL && grant.refresh_token != NULL);
 
     /* Test token refresh */
     metalbear_oauth_grant rotated_grant = {0};
     CHECK(metalbear_oauth_refresh(oauth_store, grant.refresh_token,
-                                   request.client_id,
-                                   request.dpop_jkt,
-                                   &rotated_grant) == WF_OK);
+                                  request.client_id, request.dpop_jkt,
+                                  &rotated_grant) == WF_OK);
     CHECK(rotated_grant.access_token != NULL);
 
     /* Test revocation */
-    CHECK(metalbear_oauth_revoke(oauth_store,
-                                  rotated_grant.refresh_token) == WF_OK);
+    CHECK(metalbear_oauth_revoke(oauth_store, rotated_grant.refresh_token) ==
+          WF_OK);
 
     metalbear_oauth_grant_free(&grant);
     metalbear_oauth_grant_free(&rotated_grant);

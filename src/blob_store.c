@@ -14,19 +14,19 @@
 #include <dirent.h>
 
 typedef struct metalbear_blob_node {
-    char                *cid;    /* owned CID string (key) */
-    char                *mime;   /* owned MIME type */
-    unsigned char       *data;   /* owned blob bytes */
-    size_t               len;
-    char               **refs;   /* owned array of owned record URI strings */
-    size_t               ref_count;
+    char *cid;           /* owned CID string (key) */
+    char *mime;          /* owned MIME type */
+    unsigned char *data; /* owned blob bytes */
+    size_t len;
+    char **refs; /* owned array of owned record URI strings */
+    size_t ref_count;
     struct metalbear_blob_node *next;
 } metalbear_blob_node;
 
 struct metalbear_blob_store {
-    bool          file_backed;
-    char         *dir;        /* owned base directory (file-backed only) */
-    metalbear_blob_node *head;      /* in-memory index; source of truth */
+    bool file_backed;
+    char *dir;                 /* owned base directory (file-backed only) */
+    metalbear_blob_node *head; /* in-memory index; source of truth */
 };
 
 /* Join dir + name into a heap buffer (caller frees). Tolerates a trailing
@@ -34,7 +34,7 @@ struct metalbear_blob_store {
 static char *blob_path(const char *dir, const char *name) {
     size_t dlen = strlen(dir);
     size_t nlen = strlen(name);
-    int   sep = (dlen > 0 && dir[dlen - 1] == '/') ? 0 : 1;
+    int sep = (dlen > 0 && dir[dlen - 1] == '/') ? 0 : 1;
     char *out = (char *)malloc(dlen + nlen + 1 + sep);
     if (!out) return NULL;
     memcpy(out, dir, dlen);
@@ -46,11 +46,12 @@ static char *blob_path(const char *dir, const char *name) {
 
 /* Append a node to the store's in-memory index (takes ownership of args). */
 static wf_status blob_node_push(metalbear_blob_store *store, char *cid,
-                                    char *mime, unsigned char *data,
-                                    size_t len) {
+                                char *mime, unsigned char *data, size_t len) {
     metalbear_blob_node *node = (metalbear_blob_node *)calloc(1, sizeof(*node));
     if (!node) {
-        free(cid); free(mime); free(data);
+        free(cid);
+        free(mime);
+        free(data);
         return WF_ERR_ALLOC;
     }
     node->cid = cid;
@@ -74,7 +75,7 @@ static void blob_node_free(metalbear_blob_node *node) {
 
 /* Find a node by CID, or NULL. */
 static metalbear_blob_node *blob_node_find(metalbear_blob_store *store,
-                                            const char *cid) {
+                                           const char *cid) {
     for (metalbear_blob_node *n = store->head; n; n = n->next)
         if (strcmp(n->cid, cid) == 0) return n;
     return NULL;
@@ -89,7 +90,8 @@ static size_t refs_index_of(metalbear_blob_node *n, const char *uri) {
 /* Append `uri` to a node's association list (caller has already checked it
  * is not a duplicate). Returns WF_ERR_ALLOC on OOM. */
 static wf_status refs_append(metalbear_blob_node *n, const char *uri) {
-    char **grown = (char **)realloc(n->refs, (n->ref_count + 1) * sizeof(*grown));
+    char **grown =
+        (char **)realloc(n->refs, (n->ref_count + 1) * sizeof(*grown));
     if (!grown) return WF_ERR_ALLOC;
     n->refs = grown;
     char *copy = strdup(uri);
@@ -113,7 +115,10 @@ static char *blob_refs_path(const char *dir, const char *cid) {
     if (!p) return NULL;
     size_t plen = strlen(p);
     char *grown = (char *)realloc(p, plen + 6); /* ".refs\0" */
-    if (!grown) { free(p); return NULL; }
+    if (!grown) {
+        free(p);
+        return NULL;
+    }
     memcpy(grown + plen, ".refs", 6);
     return grown;
 }
@@ -160,20 +165,37 @@ static void load_refs(metalbear_blob_store *store, metalbear_blob_node *n) {
 }
 
 /* Read an entire file into a heap buffer (caller frees). Returns WF_OK and sets
- * the output buffer and length; WF_ERR_NOT_FOUND if unopenable; WF_ERR_ALLOC on OOM. */
+ * the output buffer and length; WF_ERR_NOT_FOUND if unopenable; WF_ERR_ALLOC on
+ * OOM. */
 static wf_status blob_read_file(const char *path, unsigned char **out,
-                                    size_t *out_len) {
+                                size_t *out_len) {
     FILE *f = fopen(path, "rb");
     if (!f) return WF_ERR_NOT_FOUND;
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return WF_ERR_INTERNAL; }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return WF_ERR_INTERNAL;
+    }
     long size = ftell(f);
-    if (size < 0) { fclose(f); return WF_ERR_INTERNAL; }
-    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return WF_ERR_INTERNAL; }
-    unsigned char *buf = (unsigned char *)malloc((size_t)size ? (size_t)size : 1);
-    if (!buf) { fclose(f); return WF_ERR_ALLOC; }
+    if (size < 0) {
+        fclose(f);
+        return WF_ERR_INTERNAL;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return WF_ERR_INTERNAL;
+    }
+    unsigned char *buf =
+        (unsigned char *)malloc((size_t)size ? (size_t)size : 1);
+    if (!buf) {
+        fclose(f);
+        return WF_ERR_ALLOC;
+    }
     size_t got = fread(buf, 1, (size_t)size, f);
     fclose(f);
-    if (got != (size_t)size) { free(buf); return WF_ERR_INTERNAL; }
+    if (got != (size_t)size) {
+        free(buf);
+        return WF_ERR_INTERNAL;
+    }
     *out = buf;
     *out_len = (size_t)size;
     return WF_OK;
@@ -196,7 +218,8 @@ static bool blob_cid_is_valid(const char *cid) {
 }
 
 metalbear_blob_store *metalbear_blob_store_new(const char *path) {
-    metalbear_blob_store *store = (metalbear_blob_store *)calloc(1, sizeof(*store));
+    metalbear_blob_store *store =
+        (metalbear_blob_store *)calloc(1, sizeof(*store));
     if (!store) return NULL;
 
     if (path && path[0] != '\0') {
@@ -221,13 +244,18 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path) {
                 char *datap = blob_path(store->dir, name);
                 char *mimep = blob_path(store->dir, name);
                 if (!datap || !mimep) {
-                    free(datap); free(mimep);
+                    free(datap);
+                    free(mimep);
                     continue;
                 }
                 /* Append ".mime" to the mime sidecar path. */
                 size_t plen = strlen(mimep);
                 char *mp = (char *)realloc(mimep, plen + 6);
-                if (!mp) { free(datap); free(mimep); continue; }
+                if (!mp) {
+                    free(datap);
+                    free(mimep);
+                    continue;
+                }
                 mimep = mp;
                 memcpy(mimep + plen, ".mime", 6);
 
@@ -239,14 +267,23 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path) {
                 size_t mraw_len = 0;
 
                 if (blob_read_file(datap, &data, &dlen) != WF_OK) {
-                    free(datap); free(mimep); continue;
+                    free(datap);
+                    free(mimep);
+                    continue;
                 }
                 if (blob_read_file(mimep, &mraw, &mraw_len) != WF_OK) {
-                    free(datap); free(mimep); free(data); continue;
+                    free(datap);
+                    free(mimep);
+                    free(data);
+                    continue;
                 }
                 mime = (char *)malloc(mraw_len + 1);
                 if (!mime) {
-                    free(datap); free(mimep); free(data); free(mraw); continue;
+                    free(datap);
+                    free(mimep);
+                    free(data);
+                    free(mraw);
+                    continue;
                 }
                 memcpy(mime, mraw, mraw_len);
                 mime[mraw_len] = '\0';
@@ -255,14 +292,20 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path) {
 
                 char *cid = strdup(name);
                 if (!cid) {
-                    free(datap); free(mimep); free(data); free(mraw);
-                    free(mime); continue;
+                    free(datap);
+                    free(mimep);
+                    free(data);
+                    free(mraw);
+                    free(mime);
+                    continue;
                 }
                 /* Best-effort index load; ignore failures. */
                 if (blob_node_push(store, cid, mime, data, dlen) == WF_OK)
                     load_refs(store, store->head); /* push inserts at head */
 
-                free(datap); free(mimep); free(mraw);
+                free(datap);
+                free(mimep);
+                free(mraw);
             }
             closedir(d);
         }
@@ -284,8 +327,8 @@ void metalbear_blob_store_free(metalbear_blob_store *store) {
 }
 
 wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
-                            const char *mime_type,
-                            const unsigned char *data, size_t len) {
+                                   const char *mime_type,
+                                   const unsigned char *data, size_t len) {
     if (!store || !blob_cid_is_valid(cid) || !mime_type || !data) {
         return WF_ERR_INVALID_ARG;
     }
@@ -296,7 +339,9 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
     char *cid_copy = strdup(cid);
     char *mime_copy = strdup(mime_type);
     if (!cid_copy || !mime_copy) {
-        free(data_copy); free(cid_copy); free(mime_copy);
+        free(data_copy);
+        free(cid_copy);
+        free(mime_copy);
         return WF_ERR_ALLOC;
     }
 
@@ -323,31 +368,40 @@ persist:
         char *mimep = blob_path(store->dir, cid);
         wf_status st = WF_OK;
         if (!datap || !mimep) {
-            free(datap); free(mimep);
+            free(datap);
+            free(mimep);
             return WF_ERR_INTERNAL;
         }
         size_t plen = strlen(mimep);
         char *mp = (char *)realloc(mimep, plen + 6);
-        if (!mp) { free(datap); free(mimep); return WF_ERR_INTERNAL; }
+        if (!mp) {
+            free(datap);
+            free(mimep);
+            return WF_ERR_INTERNAL;
+        }
         mimep = mp;
         memcpy(mimep + plen, ".mime", 6);
 
         FILE *f = fopen(datap, "wb");
-        if (!f) { st = WF_ERR_INTERNAL; }
-        else {
+        if (!f) {
+            st = WF_ERR_INTERNAL;
+        } else {
             if (fwrite(data, 1, len, f) != len) st = WF_ERR_INTERNAL;
             fclose(f);
         }
         if (st == WF_OK) {
             FILE *mf = fopen(mimep, "wb");
-            if (!mf) { st = WF_ERR_INTERNAL; }
-            else {
-                if (fwrite(mime_type, 1, strlen(mime_type), mf) != strlen(mime_type))
+            if (!mf) {
+                st = WF_ERR_INTERNAL;
+            } else {
+                if (fwrite(mime_type, 1, strlen(mime_type), mf) !=
+                    strlen(mime_type))
                     st = WF_ERR_INTERNAL;
                 fclose(mf);
             }
         }
-        free(datap); free(mimep);
+        free(datap);
+        free(mimep);
         if (st != WF_OK) return st;
     }
 
@@ -355,8 +409,8 @@ persist:
 }
 
 wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
-                            unsigned char **out_data, size_t *out_len,
-                            char **out_mime) {
+                                   unsigned char **out_data, size_t *out_len,
+                                   char **out_mime) {
     if (!store || !blob_cid_is_valid(cid) || !out_data || !out_len ||
         !out_mime) {
         return WF_ERR_INVALID_ARG;
@@ -370,7 +424,8 @@ wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
             unsigned char *data = (unsigned char *)malloc(n->len ? n->len : 1);
             char *mime = strdup(n->mime);
             if (!data || !mime) {
-                free(data); free(mime);
+                free(data);
+                free(mime);
                 return WF_ERR_ALLOC;
             }
             memcpy(data, n->data, n->len);
@@ -384,7 +439,8 @@ wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
     return WF_ERR_NOT_FOUND;
 }
 
-wf_status metalbear_blob_store_exists(metalbear_blob_store *store, const char *cid) {
+wf_status metalbear_blob_store_exists(metalbear_blob_store *store,
+                                      const char *cid) {
     if (!store || !blob_cid_is_valid(cid)) return WF_ERR_INVALID_ARG;
     for (metalbear_blob_node *n = store->head; n; n = n->next) {
         if (strcmp(n->cid, cid) == 0) return WF_OK;
@@ -392,7 +448,8 @@ wf_status metalbear_blob_store_exists(metalbear_blob_store *store, const char *c
     return WF_ERR_NOT_FOUND;
 }
 
-wf_status metalbear_blob_store_delete(metalbear_blob_store *store, const char *cid) {
+wf_status metalbear_blob_store_delete(metalbear_blob_store *store,
+                                      const char *cid) {
     if (!store || !blob_cid_is_valid(cid)) return WF_ERR_INVALID_ARG;
 
     metalbear_blob_node **link = &store->head;
@@ -442,7 +499,10 @@ wf_status metalbear_blob_store_delete(metalbear_blob_store *store, const char *c
          * loader's blob_cid_is_valid check either way), but remove it so a
          * stale one can never be misread if a future CID happens to collide. */
         char *refsp = blob_refs_path(store->dir, cid);
-        if (refsp) { remove(refsp); free(refsp); }
+        if (refsp) {
+            remove(refsp);
+            free(refsp);
+        }
     }
 
     metalbear_blob_node *node = *link;
@@ -451,8 +511,8 @@ wf_status metalbear_blob_store_delete(metalbear_blob_store *store, const char *c
     return WF_OK;
 }
 
-wf_status metalbear_blob_store_list(metalbear_blob_store *store, char ***out_cids,
-                             size_t *out_count) {
+wf_status metalbear_blob_store_list(metalbear_blob_store *store,
+                                    char ***out_cids, size_t *out_count) {
     if (!store || !out_cids || !out_count) return WF_ERR_INVALID_ARG;
     *out_cids = NULL;
     *out_count = 0;
@@ -465,10 +525,13 @@ wf_status metalbear_blob_store_list(metalbear_blob_store *store, char ***out_cid
     if (!cids) return WF_ERR_ALLOC;
     size_t i = 0;
     wf_status status = WF_OK;
-    for (metalbear_blob_node *n = store->head; n && status == WF_OK; n = n->next) {
+    for (metalbear_blob_node *n = store->head; n && status == WF_OK;
+         n = n->next) {
         cids[i] = strdup(n->cid);
-        if (!cids[i]) status = WF_ERR_ALLOC;
-        else i++;
+        if (!cids[i])
+            status = WF_ERR_ALLOC;
+        else
+            i++;
     }
     if (status != WF_OK) {
         for (size_t j = 0; j < i; j++) free(cids[j]);
@@ -495,16 +558,18 @@ void metalbear_blob_walk_refs(const cJSON *node,
         if (cJSON_IsString(type) && type->valuestring &&
             strcmp(type->valuestring, "blob") == 0) {
             const cJSON *ref = cJSON_GetObjectItemCaseSensitive(node, "ref");
-            const cJSON *link = cJSON_IsObject(ref)
-                ? cJSON_GetObjectItemCaseSensitive(ref, "$link") : NULL;
+            const cJSON *link =
+                cJSON_IsObject(ref)
+                    ? cJSON_GetObjectItemCaseSensitive(ref, "$link")
+                    : NULL;
             if (cJSON_IsString(link) && link->valuestring)
                 cb(link->valuestring, ctx);
             return; /* blob objects carry no nested records */
         }
         if (!cJSON_IsString(type)) {
             const cJSON *cid = cJSON_GetObjectItemCaseSensitive(node, "cid");
-            const cJSON *mime = cJSON_GetObjectItemCaseSensitive(node,
-                                                                 "mimeType");
+            const cJSON *mime =
+                cJSON_GetObjectItemCaseSensitive(node, "mimeType");
             if (cJSON_IsString(cid) && cid->valuestring &&
                 cJSON_IsString(mime)) {
                 cb(cid->valuestring, ctx);
@@ -512,16 +577,18 @@ void metalbear_blob_walk_refs(const cJSON *node,
             }
         }
         const cJSON *child = NULL;
-        cJSON_ArrayForEach(child, node) metalbear_blob_walk_refs(child, cb, ctx);
+        cJSON_ArrayForEach(child, node)
+            metalbear_blob_walk_refs(child, cb, ctx);
     } else if (cJSON_IsArray(node)) {
         const cJSON *child = NULL;
-        cJSON_ArrayForEach(child, node) metalbear_blob_walk_refs(child, cb, ctx);
+        cJSON_ArrayForEach(child, node)
+            metalbear_blob_walk_refs(child, cb, ctx);
     }
 }
 
 wf_status metalbear_blob_store_associate(metalbear_blob_store *store,
-                                          const char *cid,
-                                          const char *record_uri) {
+                                         const char *cid,
+                                         const char *record_uri) {
     if (!store || !blob_cid_is_valid(cid) || !record_uri || !record_uri[0])
         return WF_ERR_INVALID_ARG;
     metalbear_blob_node *n = blob_node_find(store, cid);
@@ -535,8 +602,8 @@ wf_status metalbear_blob_store_associate(metalbear_blob_store *store,
 }
 
 wf_status metalbear_blob_store_dissociate(metalbear_blob_store *store,
-                                           const char *cid,
-                                           const char *record_uri) {
+                                          const char *cid,
+                                          const char *record_uri) {
     if (!store || !blob_cid_is_valid(cid) || !record_uri || !record_uri[0])
         return WF_ERR_INVALID_ARG;
     metalbear_blob_node *n = blob_node_find(store, cid);
@@ -555,7 +622,7 @@ wf_status metalbear_blob_store_dissociate(metalbear_blob_store *store,
 }
 
 wf_status metalbear_blob_store_is_referenced(metalbear_blob_store *store,
-                                              const char *cid) {
+                                             const char *cid) {
     if (!store || !blob_cid_is_valid(cid)) return WF_ERR_INVALID_ARG;
     metalbear_blob_node *n = blob_node_find(store, cid);
     if (!n) return WF_ERR_NOT_FOUND;
