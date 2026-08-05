@@ -2391,20 +2391,23 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
 static wf_status h_query_labels(void *ctx, const wf_xrpc_request *req,
                                 wf_xrpc_response *resp) {
     (void)req;
-    metalbear_pds_repo_bundle *b = ctx;
-    (void)b;
-    cJSON *root = cJSON_CreateObject();
-    cJSON *labels = cJSON_CreateArray();
-    if (!root || !labels) {
-        cJSON_Delete(root);
-        cJSON_Delete(labels);
-        return WF_ERR_ALLOC;
-    }
-    cJSON_AddItemToObject(root, "labels", labels);
-    char *js = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (!js) return WF_ERR_ALLOC;
-    wf_xrpc_response_set_body(resp, js, strlen(js));
+    (void)ctx;
+    /* MetalBear is a PDS: it stores no labels and runs no moderation
+     * service. The reference implementation does not serve this endpoint
+     * from the PDS at all -- com.atproto.label.queryLabels is implemented
+     * by the AppView (packages/bsky/src/api/com/atproto/label/queryLabels.ts),
+     * reading rows populated from the com.atproto.label.subscribeLabels
+     * firehose that a labeler publishes. Returning {"labels":[]} would claim
+     * "queried, found none" when the truth is "this server cannot answer
+     * this query at all" -- exactly the fabricated success AGENTS.md
+     * forbids for a stub. Report the honest XRPC status instead. TODO: if
+     * MetalBear ever hosts its own labeler, replace this with real storage
+     * and per-collection/source/date filtering. */
+    wf_xrpc_response_set_error(resp, 501, "MethodNotImplemented",
+                                "com.atproto.label.queryLabels is not served "
+                                "by this PDS; label data is published by "
+                                "labelers via com.atproto.label.subscribeLabels "
+                                "and queried from an AppView, not a PDS");
     return WF_OK;
 }
 
