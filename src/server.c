@@ -660,6 +660,20 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
                     collection = cJSON_IsString(coll_param)
                         ? coll_param->valuestring : NULL;
 
+                    /* A collection may also arrive on a read that isn't one
+                     * of the three write NSIDs above (e.g. a future or
+                     * currently-public route reached with an OAuth token).
+                     * Recover it generically so a matching repo scope is
+                     * honored for those too, rather than only for writes. */
+                    if (action == MB_REPO_ACTION_NONE && !collection) {
+                        cJSON *generic_coll = req->params
+                            ? cJSON_GetObjectItemCaseSensitive(req->params,
+                                                               "collection")
+                            : NULL;
+                        collection = cJSON_IsString(generic_coll)
+                            ? generic_coll->valuestring : NULL;
+                    }
+
                     if (action != MB_REPO_ACTION_NONE && collection) {
                         if (!mb_scope_set_allows_repo(&scope_set,
                                                        collection, action)) {
@@ -672,17 +686,25 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
                             return WF_ERR_PERMISSION;
                         }
                     } else if (action == MB_REPO_ACTION_NONE) {
-                        /* Read or non-repo operation: check read access.
-                         * For now, allow reads if any repo scope matches
-                         * or if the scope set is not empty. Full enforcement
-                         * of read scopes will be added once the upstream
-                         * spec finalizes read permissions. */
-                        if (collection &&
-                            !mb_scope_set_allows_read(&scope_set, collection) &&
-                            !mb_scope_set_is_full_access(&scope_set)) {
+                        /* Read or non-repo operation reaching this point
+                         * without full ("atproto") access. A narrowly
+                         * scoped OAuth grant must be limited to exactly the
+                         * reads its scope implies: a matching repo scope for
+                         * the request's collection, nothing broader. The AT
+                         * Protocol OAuth spec requires every authorization
+                         * request to include "atproto"
+                         * (https://atproto.com/specs/oauth), so a grant that
+                         * omits it and also carries no collection-scoped
+                         * repo permission has no basis to read anything
+                         * through this path -- deny outright rather than
+                         * falling back to an implicit allow, which is what
+                         * let any non-empty, non-full scope set reach every
+                         * authenticated read regardless of what it actually
+                         * named. */
+                        if (!mb_scope_set_allows_read(&scope_set, collection)) {
                             LOG_WARN("authenticate: OAuth scope denied read "
                                      "did=%s nsid=%s collection=%s",
-                                     sub, nsid, collection);
+                                     sub, nsid, collection ? collection : "-");
                             mb_scope_set_free(&scope_set);
                             free(oauth_scope_str);
                             free(sub);
