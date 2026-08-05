@@ -26,7 +26,6 @@
 #include "metalbear/update_watcher.h"
 #include "wolfram/crypto.h"
 #include "wolfram/plc.h"
-#include "wolfram/version.h"
 #include "metalbear/repo_store.h"
 #include "wolfram/repo/cid.h"
 #include "wolfram/syntax.h"
