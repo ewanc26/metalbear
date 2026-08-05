@@ -77,17 +77,34 @@ jobs:
             echo "ref=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check formatting of changed lines
+      - name: Check formatting of changed files
         run: |
           BASE="${{ steps.base.outputs.ref }}"
           if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE" 2>/dev/null; then
             echo "No usable diff base (e.g. first commit on a new branch) — skipping."
             exit 0
           fi
-          OUT="$(git-clang-format --diff "$BASE" -- '*.c' '*.h' '*.cpp' '*.hpp' '*.cc' 2>&1)"
-          echo "$OUT"
-          if [ -n "$OUT" ] && [ "$OUT" != "no modified files to format" ] && [ "$OUT" != "clang-format did not modify any files" ]; then
-            echo "::error::Changed lines are not clang-format clean (diff above). Run: git-clang-format \"$BASE\" -- '*.c' '*.h' '*.cpp' '*.hpp' '*.cc', review, and commit the result."
+          # Per-file --dry-run --Werror rather than git-clang-format: that
+          # wrapper unconditionally calls `clang-format -list-ignored`
+          # (added in newer LLVM releases), which crashes silently under
+          # `set -e` against an apt-installed clang-format that predates it,
+          # failing the job with no diagnostic. The whole tree is fully
+          # clang-format-clean as of the repo-wide reformat, so checking a
+          # changed file in full is equivalent to checking just its changed
+          # lines and needs no wrapper script at all.
+          CHANGED="$(git diff --name-only --diff-filter=d "$BASE" -- '*.c' '*.h' '*.cpp' '*.hpp' '*.cc')"
+          if [ -z "$CHANGED" ]; then
+            echo "No C/C++ files changed."
+            exit 0
+          fi
+          echo "Checking: $CHANGED"
+          FAIL=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            clang-format --dry-run --Werror -style=file "$f" || FAIL=1
+          done <<< "$CHANGED"
+          if [ "$FAIL" -ne 0 ]; then
+            echo "::error::One or more changed files are not clang-format clean (see errors above). Run: clang-format -i <file>, review, and commit the result."
             exit 1
           fi
 
