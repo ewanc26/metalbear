@@ -61,6 +61,46 @@ the same way.
   Never skip a patch, minor, or major number; do not backfill gaps with
   phantom tags or releases.
 
+## Release and redeploy
+
+A shipped feature runs one flow end to end. Skipping a step is how a page
+stays stale or a daemon rebuilds the same state twice.
+
+1. **Verify locally**: `cmake -S . -B build && cmake --build build && ctest
+   --test-dir build --output-on-failure`. When the landing page or another
+   `frontend/` surface changed, also rebuild the frontend with `npm run build`
+   in `frontend/`.
+2. **Commit and version**: land the feature as its own atomic conventional
+   commit, then a `version: bump to x.y.z` commit changing `VERSION` in
+   `CMakeLists.txt`. Tag that commit (`git tag -s vx.y.z -m "vx.y.z"`), push
+   `main` and the tag, and create the GitHub release in the same commit as the
+   tag — no bump without a tag, no release without one.
+3. **Deploy to bear1.croft.click**: `docker compose build bear-pds && docker
+   compose up -d bear-pds` in `/Volumes/Storage/Server/bear`. When the
+   frontend changed, copy the fresh `frontend/build/` over
+   `/Volumes/Storage/Server/stack/nginx/bear1-site` (nginx serves it read-only
+   from a bind mount, so no restart is needed). Finally write the deployed
+   commit pair to `.last-build-commit` as `<metalbear HEAD>:<wolfram HEAD>` —
+   the daemon at `/Volumes/Storage/Server/stack/server-daemon.sh` rebuilds
+   whenever that marker differs from the checkouts' current HEADs, so syncing
+   it is what stops a duplicate build. Verify on the public ingress, not
+   localhost: `curl https://bear1.croft.click/xrpc/_health` for the version,
+   `/_debug/health` (admin-gated) for the debug dump.
+
+## The landing page is two pages
+
+`GET /` on the PDS port serves `landing_handler`'s static HTML and is almost
+never seen. The public page at bear1.croft.click is the SvelteKit frontend in
+`frontend/`, prerendered to `build/` and copied to
+`/Volumes/Storage/Server/stack/nginx/bear1-site`; nginx serves only
+`index.html`, `_app/` and `robots.txt` statically and falls every other path
+through to the PDS. The page reads what it displays from the server at request
+time, so anything it shows must come from a public endpoint a browser can
+fetch — `operator.json` carries `software.version` and `software.wolframVersion`
+for exactly that reason. A version added only to `landing_handler` is invisible
+on the public site, and a rebuilt frontend is not a redeployed container: the
+server still has to be rebuilt with the matching `operator.json` change.
+
 ## Reuse and safety
 
 - Reuse Wolfram primitives and server infrastructure. Do not copy Wolfram code into this repository or hand-roll cryptography.
