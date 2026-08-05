@@ -102,6 +102,19 @@ if(METALBEAR_BUILD_TESTS)
         "${METALBEAR_CJSON_SOURCE_DIR}" "${WOLFRAM_SOURCE_DIR}/test")
     add_test(NAME metalbear_oauth_metadata COMMAND test_metalbear_oauth_metadata)
 
+    # private_key_jwt client auth at the token endpoint: serves the client's
+    # metadata + jwks from a local MHD stub and drives /oauth/token over the
+    # wire, covering the happy path and every client-auth failure.
+    add_executable(test_metalbear_oauth_token_assertion
+        test/test_oauth_token_assertion.c)
+    target_link_libraries(test_metalbear_oauth_token_assertion PRIVATE
+        metalbear_core ${MICROHTTPD_LIBRARY} Threads::Threads OpenSSL::Crypto)
+    target_include_directories(test_metalbear_oauth_token_assertion PRIVATE
+        "${METALBEAR_CJSON_SOURCE_DIR}" "${WOLFRAM_SOURCE_DIR}/test"
+        ${MICROHTTPD_INCLUDE_DIR})
+    add_test(NAME metalbear_oauth_token_assertion
+        COMMAND test_metalbear_oauth_token_assertion)
+
     add_executable(test_metalbear_oauth_scope test/test_oauth_scope.c)
     target_link_libraries(test_metalbear_oauth_scope PRIVATE metalbear_core)
     target_include_directories(test_metalbear_oauth_scope PRIVATE
