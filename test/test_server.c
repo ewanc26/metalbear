@@ -1580,7 +1580,26 @@ int main(void) {
     CHECK(response.status == 200);
     wf_response_free(&response);
 
-    /* resetPassword with wrong token should fail */
+    /* resetPassword is the forgot-password endpoint: a user who has lost
+     * their password has no session to present, so the reference PDS
+     * registers it with no auth verifier at all — the emailed token in the
+     * body is the authentication. Prove it works with NO bearer token: a
+     * request that reaches token validation (InvalidToken) rather than being
+     * turned away at the auth layer confirms the route is public. */
+    wf_xrpc_client_set_auth(client, NULL);
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.resetPassword",
+        "{\"token\":\"bad\",\"password\":\"newpassword123\"}",
+        &response) == WF_ERR_HTTP);
+    CHECK(response.status == 400);
+    json = json_response(&response);
+    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
+                 "InvalidToken") == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+    wf_xrpc_client_set_auth(client, access_token);
+
+    /* resetPassword with wrong token should fail the same way when a bearer
+     * token IS present, too — auth is simply irrelevant to this route. */
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.resetPassword",
         "{\"token\":\"bad\",\"password\":\"newpassword123\"}",
         &response) == WF_ERR_HTTP);
