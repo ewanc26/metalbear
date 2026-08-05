@@ -67,7 +67,7 @@ static char *find_cookie(const char *cookie_header, const char *name) {
 }
 
 static wf_status json_response(wf_xrpc_response *resp, cJSON *root,
-                                const char *cache_control) {
+                               const char *cache_control) {
     if (!root) return WF_ERR_ALLOC;
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -108,26 +108,25 @@ static wf_status oauth_metadata(void *ctx, const wf_xrpc_request *req,
 
     endpoint = malloc(base_len + sizeof("/oauth/token"));
     if (endpoint) {
-        snprintf(endpoint, base_len + sizeof("/oauth/token"),
-                 "%s/oauth/token", issuer);
+        snprintf(endpoint, base_len + sizeof("/oauth/token"), "%s/oauth/token",
+                 issuer);
         cJSON_AddStringToObject(root, "token_endpoint", endpoint);
         free(endpoint);
     }
 
     endpoint = malloc(base_len + sizeof("/oauth/jwks"));
     if (endpoint) {
-        snprintf(endpoint, base_len + sizeof("/oauth/jwks"),
-                 "%s/oauth/jwks", issuer);
+        snprintf(endpoint, base_len + sizeof("/oauth/jwks"), "%s/oauth/jwks",
+                 issuer);
         cJSON_AddStringToObject(root, "jwks_uri", endpoint);
         free(endpoint);
     }
 
     endpoint = malloc(base_len + sizeof("/oauth/par"));
     if (endpoint) {
-        snprintf(endpoint, base_len + sizeof("/oauth/par"),
-                 "%s/oauth/par", issuer);
-        cJSON_AddStringToObject(root,
-                                "pushed_authorization_request_endpoint",
+        snprintf(endpoint, base_len + sizeof("/oauth/par"), "%s/oauth/par",
+                 issuer);
+        cJSON_AddStringToObject(root, "pushed_authorization_request_endpoint",
                                 endpoint);
         free(endpoint);
     }
@@ -177,8 +176,7 @@ static wf_status oauth_metadata(void *ctx, const wf_xrpc_request *req,
      * algorithm this server can actually verify a DPoP proof with. */
     cJSON *dpop_algs = cJSON_CreateArray();
     cJSON_AddItemToArray(dpop_algs, cJSON_CreateString("ES256"));
-    cJSON_AddItemToObject(root, "dpop_signing_alg_values_supported",
-                          dpop_algs);
+    cJSON_AddItemToObject(root, "dpop_signing_alg_values_supported", dpop_algs);
 
     /* Both "none" (public clients) and "private_key_jwt" (confidential
      * clients) are honored by the token endpoint: oauth_token verifies an
@@ -195,9 +193,8 @@ static wf_status oauth_metadata(void *ctx, const wf_xrpc_request *req,
      * accepts ES256 and rejects every other algorithm. */
     cJSON *token_algs = cJSON_CreateArray();
     cJSON_AddItemToArray(token_algs, cJSON_CreateString("ES256"));
-    cJSON_AddItemToObject(root,
-                          "token_endpoint_auth_signing_alg_values_supported",
-                          token_algs);
+    cJSON_AddItemToObject(
+        root, "token_endpoint_auth_signing_alg_values_supported", token_algs);
 
     cJSON *locales = cJSON_CreateArray();
     cJSON_AddItemToArray(locales, cJSON_CreateString("en-US"));
@@ -206,11 +203,9 @@ static wf_status oauth_metadata(void *ctx, const wf_xrpc_request *req,
     cJSON_AddBoolToObject(root, "request_parameter_supported", true);
     cJSON_AddBoolToObject(root, "request_uri_parameter_supported", true);
     cJSON_AddBoolToObject(root, "require_request_uri_registration", true);
-    cJSON_AddBoolToObject(root,
-                          "authorization_response_iss_parameter_supported",
-                          true);
-    cJSON_AddBoolToObject(root, "client_id_metadata_document_supported",
-                          true);
+    cJSON_AddBoolToObject(
+        root, "authorization_response_iss_parameter_supported", true);
+    cJSON_AddBoolToObject(root, "client_id_metadata_document_supported", true);
 
     return json_response(resp, root, "max-age=300");
 }
@@ -282,13 +277,22 @@ static wf_status form_decode(const char *value, size_t len, char **out) {
         if (ch == '+') {
             decoded[write++] = ' ';
         } else if (ch == '%') {
-            if (read + 2 >= len) { free(decoded); return WF_ERR_INVALID_ARG; }
+            if (read + 2 >= len) {
+                free(decoded);
+                return WF_ERR_INVALID_ARG;
+            }
             int high = hex_value((unsigned char)value[++read]);
             int low = hex_value((unsigned char)value[++read]);
-            if (high < 0 || low < 0) { free(decoded); return WF_ERR_INVALID_ARG; }
+            if (high < 0 || low < 0) {
+                free(decoded);
+                return WF_ERR_INVALID_ARG;
+            }
             ch = (unsigned char)((high << 4) | low);
             /* cJSON values are C strings; embedded NUL cannot be preserved. */
-            if (ch == '\0') { free(decoded); return WF_ERR_INVALID_ARG; }
+            if (ch == '\0') {
+                free(decoded);
+                return WF_ERR_INVALID_ARG;
+            }
             decoded[write++] = (char)ch;
         } else {
             decoded[write++] = (char)ch;
@@ -315,8 +319,8 @@ static wf_status parse_form_body(const wf_xrpc_request *req, cJSON **out) {
     if (!req->body || req->body_len == 0) return WF_ERR_INVALID_ARG;
 
     if (media_type_is(req->content_type, "application/json")) {
-        cJSON *json = cJSON_ParseWithLength((const char *)req->body,
-                                             req->body_len);
+        cJSON *json =
+            cJSON_ParseWithLength((const char *)req->body, req->body_len);
         if (!json || !cJSON_IsObject(json)) {
             cJSON_Delete(json);
             return WF_ERR_INVALID_ARG;
@@ -324,8 +328,7 @@ static wf_status parse_form_body(const wf_xrpc_request *req, cJSON **out) {
         *out = json;
         return WF_OK;
     }
-    if (!media_type_is(req->content_type,
-                       "application/x-www-form-urlencoded"))
+    if (!media_type_is(req->content_type, "application/x-www-form-urlencoded"))
         return WF_ERR_INVALID_ARG;
 
     cJSON *form = cJSON_CreateObject();
@@ -339,7 +342,8 @@ static wf_status parse_form_body(const wf_xrpc_request *req, cJSON **out) {
         char *key = NULL, *value = NULL;
         wf_status status = WF_ERR_INVALID_ARG;
         if (!equals || equals == start ||
-            (status = form_decode(start, (size_t)(equals - start), &key)) != WF_OK ||
+            (status = form_decode(start, (size_t)(equals - start), &key)) !=
+                WF_OK ||
             !key[0] || cJSON_GetObjectItemCaseSensitive(form, key) ||
             (status = form_decode(equals + 1,
                                   pair_len - (size_t)(equals - start) - 1,
@@ -369,16 +373,14 @@ static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
-    cJSON *client_id = cJSON_GetObjectItemCaseSensitive(body,
-                                                        "client_id");
-    cJSON *redirect_uri = cJSON_GetObjectItemCaseSensitive(body,
-                                                           "redirect_uri");
+    cJSON *client_id = cJSON_GetObjectItemCaseSensitive(body, "client_id");
+    cJSON *redirect_uri =
+        cJSON_GetObjectItemCaseSensitive(body, "redirect_uri");
     cJSON *scope = cJSON_GetObjectItemCaseSensitive(body, "scope");
     cJSON *state = cJSON_GetObjectItemCaseSensitive(body, "state");
-    cJSON *code_challenge = cJSON_GetObjectItemCaseSensitive(body,
-                                                            "code_challenge");
-    cJSON *dpop_jkt = cJSON_GetObjectItemCaseSensitive(body,
-                                                       "dpop_jkt");
+    cJSON *code_challenge =
+        cJSON_GetObjectItemCaseSensitive(body, "code_challenge");
+    cJSON *dpop_jkt = cJSON_GetObjectItemCaseSensitive(body, "dpop_jkt");
 
     if (!cJSON_IsString(client_id) || !cJSON_IsString(redirect_uri) ||
         !cJSON_IsString(scope) || !cJSON_IsString(code_challenge) ||
@@ -424,8 +426,7 @@ static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
     char *request_uri = NULL;
     int64_t expires_in = 0;
     wf_status status = metalbear_oauth_create_par(rctx->store, &request,
-                                                   &request_uri,
-                                                   &expires_in);
+                                                  &request_uri, &expires_in);
     cJSON_Delete(body);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
@@ -434,7 +435,10 @@ static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
     }
 
     cJSON *root = cJSON_CreateObject();
-    if (!root) { free(request_uri); return WF_ERR_ALLOC; }
+    if (!root) {
+        free(request_uri);
+        return WF_ERR_ALLOC;
+    }
     cJSON_AddStringToObject(root, "request_uri", request_uri);
     cJSON_AddNumberToObject(root, "expires_in", (double)expires_in);
     free(request_uri);
@@ -450,10 +454,9 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
     const char *request_uri = NULL;
     const char *client_id = NULL;
     if (req->params && cJSON_IsObject(req->params)) {
-        cJSON *ru = cJSON_GetObjectItemCaseSensitive(req->params,
-                                                     "request_uri");
-        cJSON *cid = cJSON_GetObjectItemCaseSensitive(req->params,
-                                                      "client_id");
+        cJSON *ru =
+            cJSON_GetObjectItemCaseSensitive(req->params, "request_uri");
+        cJSON *cid = cJSON_GetObjectItemCaseSensitive(req->params, "client_id");
         if (cJSON_IsString(ru)) request_uri = ru->valuestring;
         if (cJSON_IsString(cid)) client_id = cid->valuestring;
     }
@@ -473,8 +476,7 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
      */
     const char *hint = NULL;
     if (req->params && cJSON_IsObject(req->params)) {
-        cJSON *lh = cJSON_GetObjectItemCaseSensitive(req->params,
-                                                     "login_hint");
+        cJSON *lh = cJSON_GetObjectItemCaseSensitive(req->params, "login_hint");
         if (cJSON_IsString(lh)) hint = lh->valuestring;
     }
     char subject[256];
@@ -510,12 +512,11 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
      */
     char *device_token = find_cookie(req->cookie_header, MB_DEVICE_COOKIE);
     char verified_subject[256];
-    bool authenticated =
-        device_token &&
-        metalbear_oauth_device_session_verify(
-            rctx->store, device_token, verified_subject,
-            sizeof(verified_subject)) == WF_OK &&
-        strcmp(verified_subject, subject) == 0;
+    bool authenticated = device_token &&
+                         metalbear_oauth_device_session_verify(
+                             rctx->store, device_token, verified_subject,
+                             sizeof(verified_subject)) == WF_OK &&
+                         strcmp(verified_subject, subject) == 0;
     free(device_token);
 
     if (!authenticated) {
@@ -523,14 +524,19 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
         char *enc_cid = url_escape(client_id);
         char *enc_hint = url_escape(hint);
         if (!enc_ru || !enc_cid || !enc_hint) {
-            curl_free(enc_ru); curl_free(enc_cid); curl_free(enc_hint);
+            curl_free(enc_ru);
+            curl_free(enc_cid);
+            curl_free(enc_hint);
             return WF_ERR_ALLOC;
         }
         char redirect[1024];
-        int n = snprintf(redirect, sizeof(redirect),
-                         "/oauth/consent?request_uri=%s&client_id=%s&login_hint=%s",
-                         enc_ru, enc_cid, enc_hint);
-        curl_free(enc_ru); curl_free(enc_cid); curl_free(enc_hint);
+        int n =
+            snprintf(redirect, sizeof(redirect),
+                     "/oauth/consent?request_uri=%s&client_id=%s&login_hint=%s",
+                     enc_ru, enc_cid, enc_hint);
+        curl_free(enc_ru);
+        curl_free(enc_cid);
+        curl_free(enc_hint);
         if (n < 0 || (size_t)n >= sizeof(redirect)) {
             wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                        "Request too large to continue");
@@ -545,9 +551,9 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
     char *code = NULL;
     char *redirect_uri = NULL;
     char *state = NULL;
-    wf_status status = metalbear_oauth_authorize(rctx->store, request_uri,
-                                                  client_id, subject, &code,
-                                                  &redirect_uri, &state);
+    wf_status status =
+        metalbear_oauth_authorize(rctx->store, request_uri, client_id, subject,
+                                  &code, &redirect_uri, &state);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                    "Authorization failed");
@@ -561,7 +567,9 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
         curl_free(escaped_code);
         curl_free(escaped_state);
         curl_free(escaped_issuer);
-        free(code); free(redirect_uri); free(state);
+        free(code);
+        free(redirect_uri);
+        free(state);
         return WF_ERR_ALLOC;
     }
     const char separator = strchr(redirect_uri, '?') ? '&' : '?';
@@ -573,11 +581,13 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
         curl_free(escaped_code);
         curl_free(escaped_state);
         curl_free(escaped_issuer);
-        free(code); free(redirect_uri); free(state);
+        free(code);
+        free(redirect_uri);
+        free(state);
         return WF_ERR_ALLOC;
     }
-    snprintf(url, url_len, "%s%ccode=%s%s%s&iss=%s", redirect_uri,
-             separator, escaped_code, escaped_state ? "&state=" : "",
+    snprintf(url, url_len, "%s%ccode=%s%s%s&iss=%s", redirect_uri, separator,
+             escaped_code, escaped_state ? "&state=" : "",
              escaped_state ? escaped_state : "", escaped_issuer);
 
     wf_xrpc_response_set_content_type(resp, "text/html");
@@ -651,7 +661,10 @@ static wf_status http_get_json(const char *url, cJSON **out_json) {
     if (rc != CURLE_OK || !body.data) goto done;
 
     json = cJSON_ParseWithLength(body.data, body.len);
-    if (!json) { status = WF_ERR_PARSE; goto done; }
+    if (!json) {
+        status = WF_ERR_PARSE;
+        goto done;
+    }
     *out_json = json;
     json = NULL;
     status = WF_OK;
@@ -691,8 +704,7 @@ static bool client_id_fetchable(const char *client_id) {
  * object with a `keys` array); the caller must free it with cJSON_Delete.
  * WF_ERR_NOT_FOUND if the metadata declares token_endpoint_auth_method
  * "none"; WF_ERR_PARSE on an unresolvable/invalid document. */
-static wf_status client_jwks_resolve(const char *client_id,
-                                     cJSON **out_jwks) {
+static wf_status client_jwks_resolve(const char *client_id, cJSON **out_jwks) {
     cJSON *metadata = NULL, *jwks = NULL, *jwks_uri = NULL;
     const cJSON *auth_method;
     wf_status status;
@@ -707,8 +719,8 @@ static wf_status client_jwks_resolve(const char *client_id,
 
     /* A public client must not present a client_assertion; the reference
      * provider routes on this field and would ignore the assertion. */
-    auth_method = cJSON_GetObjectItemCaseSensitive(metadata,
-                                                   "token_endpoint_auth_method");
+    auth_method = cJSON_GetObjectItemCaseSensitive(
+        metadata, "token_endpoint_auth_method");
     if (cJSON_IsString(auth_method) &&
         strcmp(auth_method->valuestring, "none") == 0) {
         status = WF_ERR_NOT_FOUND;
@@ -718,7 +730,10 @@ static wf_status client_jwks_resolve(const char *client_id,
     jwks = cJSON_GetObjectItemCaseSensitive(metadata, "jwks");
     if (cJSON_IsObject(jwks)) {
         *out_jwks = cJSON_Duplicate(jwks, 1);
-        if (!*out_jwks) { status = WF_ERR_ALLOC; goto done; }
+        if (!*out_jwks) {
+            status = WF_ERR_ALLOC;
+            goto done;
+        }
         status = WF_OK;
         goto done;
     }
@@ -770,18 +785,26 @@ static wf_status client_assertion_authenticate(oauth_route_ctx *rctx,
             wf_status add;
             if (!cJSON_IsObject(key)) continue;
             jwk_json = cJSON_PrintUnformatted(key);
-            if (!jwk_json) { status = WF_ERR_ALLOC; goto done; }
+            if (!jwk_json) {
+                status = WF_ERR_ALLOC;
+                goto done;
+            }
             add = wf_oauth_trusted_keys_add_jwk(keys, jwk_json);
             free(jwk_json);
-            if (add != WF_OK) { status = add; goto done; }
+            if (add != WF_OK) {
+                status = add;
+                goto done;
+            }
         }
     }
-    status = wf_oauth_verify_client_assertion(assertion, client_id,
-                                              rctx->public_url, keys,
-                                              &verified);
+    status = wf_oauth_verify_client_assertion(
+        assertion, client_id, rctx->public_url, keys, &verified);
     if (status != WF_OK) goto done;
     *out_client_id = strdup(verified->client_id);
-    if (!*out_client_id) { status = WF_ERR_ALLOC; goto done; }
+    if (!*out_client_id) {
+        status = WF_ERR_ALLOC;
+        goto done;
+    }
     status = WF_OK;
 done:
     wf_oauth_client_assertion_verified_free(verified);
@@ -812,13 +835,12 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
     /* private_key_jwt client authentication (RFC 7523). When a
      * client_assertion is present it authenticates the client; the verified
      * client_id is the authority, not the untrusted form field alone. */
-    cJSON *client_assertion = cJSON_GetObjectItemCaseSensitive(
-        body, "client_assertion");
+    cJSON *client_assertion =
+        cJSON_GetObjectItemCaseSensitive(body, "client_assertion");
     char *auth_client_id = NULL;
-    if (cJSON_IsString(client_assertion) &&
-        client_assertion->valuestring[0]) {
-        cJSON *assertion_type = cJSON_GetObjectItemCaseSensitive(
-            body, "client_assertion_type");
+    if (cJSON_IsString(client_assertion) && client_assertion->valuestring[0]) {
+        cJSON *assertion_type =
+            cJSON_GetObjectItemCaseSensitive(body, "client_assertion_type");
         cJSON *form_cid = cJSON_GetObjectItemCaseSensitive(body, "client_id");
         if (!cJSON_IsString(assertion_type) ||
             strcmp(assertion_type->valuestring,
@@ -849,8 +871,8 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
         cJSON *code = cJSON_GetObjectItemCaseSensitive(body, "code");
         cJSON *cid = cJSON_GetObjectItemCaseSensitive(body, "client_id");
         cJSON *redir = cJSON_GetObjectItemCaseSensitive(body, "redirect_uri");
-        cJSON *verifier = cJSON_GetObjectItemCaseSensitive(body,
-                                                           "code_verifier");
+        cJSON *verifier =
+            cJSON_GetObjectItemCaseSensitive(body, "code_verifier");
         cJSON *jkt = cJSON_GetObjectItemCaseSensitive(body, "dpop_jkt");
 
         if (!cJSON_IsString(code) || !cJSON_IsString(cid) ||
@@ -867,8 +889,8 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
             redir->valuestring, verifier->valuestring, jkt->valuestring,
             &grant);
     } else if (strcmp(grant_type->valuestring, "refresh_token") == 0) {
-        cJSON *refresh = cJSON_GetObjectItemCaseSensitive(body,
-                                                          "refresh_token");
+        cJSON *refresh =
+            cJSON_GetObjectItemCaseSensitive(body, "refresh_token");
         cJSON *cid = cJSON_GetObjectItemCaseSensitive(body, "client_id");
         cJSON *jkt = cJSON_GetObjectItemCaseSensitive(body, "dpop_jkt");
 
@@ -879,10 +901,10 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
                                        "Missing required parameters");
             return WF_OK;
         }
-        status = metalbear_oauth_refresh(
-            rctx->store, refresh->valuestring,
-            auth_client_id ? auth_client_id : cid->valuestring,
-            jkt->valuestring, &grant);
+        status = metalbear_oauth_refresh(rctx->store, refresh->valuestring,
+                                         auth_client_id ? auth_client_id
+                                                        : cid->valuestring,
+                                         jkt->valuestring, &grant);
     }
 
     cJSON_Delete(body);
@@ -895,7 +917,10 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
     }
 
     cJSON *root = cJSON_CreateObject();
-    if (!root) { metalbear_oauth_grant_free(&grant); return WF_ERR_ALLOC; }
+    if (!root) {
+        metalbear_oauth_grant_free(&grant);
+        return WF_ERR_ALLOC;
+    }
     cJSON_AddStringToObject(root, "access_token", grant.access_token);
     cJSON_AddStringToObject(root, "token_type", "DPoP");
     cJSON_AddNumberToObject(root, "expires_in", (double)grant.expires_in);
@@ -942,9 +967,9 @@ static void set_device_cookie(wf_xrpc_response *resp, const char *token,
                               int64_t max_age_seconds) {
     char cookie[512];
     snprintf(cookie, sizeof(cookie),
-            MB_DEVICE_COOKIE "=%s; Path=/; HttpOnly; Secure; SameSite=Lax; "
-            "Max-Age=%lld",
-            token ? token : "", (long long)max_age_seconds);
+             MB_DEVICE_COOKIE "=%s; Path=/; HttpOnly; Secure; SameSite=Lax; "
+                              "Max-Age=%lld",
+             token ? token : "", (long long)max_age_seconds);
     wf_xrpc_response_add_header(resp, "Set-Cookie", cookie);
 }
 
@@ -971,10 +996,9 @@ static wf_status oauth_signin(void *ctx, const wf_xrpc_request *req,
                                    "Missing or invalid request body");
         return WF_OK;
     }
-    cJSON *identifier = cJSON_GetObjectItemCaseSensitive(req->params,
-                                                         "identifier");
-    cJSON *password = cJSON_GetObjectItemCaseSensitive(req->params,
-                                                       "password");
+    cJSON *identifier =
+        cJSON_GetObjectItemCaseSensitive(req->params, "identifier");
+    cJSON *password = cJSON_GetObjectItemCaseSensitive(req->params, "password");
     if (!cJSON_IsString(identifier) || !cJSON_IsString(password)) {
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                    "identifier and password are required");
@@ -1033,8 +1057,7 @@ wf_status metalbear_oauth_routes_register(
     wf_xrpc_server *server, metalbear_oauth_store *store,
     const char *public_url, const char *service_did,
     metalbear_oauth_subject_resolver resolve_subject,
-    metalbear_oauth_credential_verifier verify_credential,
-    void *resolver_ctx) {
+    metalbear_oauth_credential_verifier verify_credential, void *resolver_ctx) {
     (void)service_did;
 
     if (!server || !store) return WF_ERR_INVALID_ARG;
@@ -1047,26 +1070,26 @@ wf_status metalbear_oauth_routes_register(
     ctx->verify_credential = verify_credential;
     ctx->resolver_ctx = resolver_ctx;
 
-    if (wf_xrpc_server_register_http_route(server, "GET",
-            "/.well-known/oauth-authorization-server",
+    if (wf_xrpc_server_register_http_route(
+            server, "GET", "/.well-known/oauth-authorization-server",
             oauth_metadata, ctx) != WF_OK ||
-        wf_xrpc_server_register_http_route(server, "GET",
-            "/.well-known/oauth-protected-resource",
+        wf_xrpc_server_register_http_route(
+            server, "GET", "/.well-known/oauth-protected-resource",
             protected_resource_metadata, ctx) != WF_OK ||
-        wf_xrpc_server_register_http_route(server, "GET",
-            "/oauth/jwks", oauth_jwks, ctx) != WF_OK ||
-        wf_xrpc_server_register_http_route(server, "POST",
-            "/oauth/par", oauth_par, ctx) != WF_OK ||
-        wf_xrpc_server_register_http_route(server, "POST",
-            "/oauth/token", oauth_token, ctx) != WF_OK ||
-        wf_xrpc_server_register_http_route(server, "POST",
-            "/oauth/revoke", oauth_revoke, ctx) != WF_OK ||
-        wf_xrpc_server_register_http_route(server, "GET",
-            "/oauth/authorize", oauth_authorize, ctx) != WF_OK ||
-        wf_xrpc_server_register_http_route(server, "POST",
-            "/oauth/signin", oauth_signin, ctx) != WF_OK ||
-        wf_xrpc_server_register_http_route(server, "POST",
-            "/oauth/signout", oauth_signout, ctx) != WF_OK) {
+        wf_xrpc_server_register_http_route(server, "GET", "/oauth/jwks",
+                                           oauth_jwks, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(server, "POST", "/oauth/par",
+                                           oauth_par, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(server, "POST", "/oauth/token",
+                                           oauth_token, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(server, "POST", "/oauth/revoke",
+                                           oauth_revoke, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(server, "GET", "/oauth/authorize",
+                                           oauth_authorize, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(server, "POST", "/oauth/signin",
+                                           oauth_signin, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(server, "POST", "/oauth/signout",
+                                           oauth_signout, ctx) != WF_OK) {
         free(ctx->public_url);
         free(ctx);
         return WF_ERR_INTERNAL;

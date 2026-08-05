@@ -36,9 +36,9 @@ typedef int (*metalbear_oauth_subject_resolver)(void *ctx, const char *hint,
  * password rather than the account's own.
  */
 typedef int (*metalbear_oauth_credential_verifier)(void *ctx,
-                                                    const char *identifier,
-                                                    const char *password,
-                                                    char *out, size_t out_len);
+                                                   const char *identifier,
+                                                   const char *password,
+                                                   char *out, size_t out_len);
 
 /*
  * `resolve_subject` names which account an authorization is for. It is

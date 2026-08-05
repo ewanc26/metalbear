@@ -35,26 +35,28 @@ wf_status metalbear_account_registry_open(const char *path,
 void metalbear_account_registry_free(metalbear_account_registry *registry);
 
 /* Register a new account. Returns WF_ERR_CONFLICT if handle is taken. */
-wf_status metalbear_account_registry_add(
-    metalbear_account_registry *registry,
-    const char *did, const char *handle,
-    const char *password_hash, const char *data_directory);
+wf_status metalbear_account_registry_add(metalbear_account_registry *registry,
+                                         const char *did, const char *handle,
+                                         const char *password_hash,
+                                         const char *data_directory);
 
 /* Look up an account by handle. Caller must free the returned entry. */
-wf_status metalbear_account_registry_find_by_handle(
-    metalbear_account_registry *registry,
-    const char *handle, metalbear_account_entry **out);
+wf_status
+metalbear_account_registry_find_by_handle(metalbear_account_registry *registry,
+                                          const char *handle,
+                                          metalbear_account_entry **out);
 
 /* Look up an account by DID. Caller must free the returned entry. */
-wf_status metalbear_account_registry_find_by_did(
-    metalbear_account_registry *registry,
-    const char *did, metalbear_account_entry **out);
+wf_status
+metalbear_account_registry_find_by_did(metalbear_account_registry *registry,
+                                       const char *did,
+                                       metalbear_account_entry **out);
 
 /* List all accounts, ordered by handle. Caller must free the array and each
  * entry. For anything a client pages through, use the keyset walk below. */
-wf_status metalbear_account_registry_list(
-    metalbear_account_registry *registry,
-    metalbear_account_entry **out_entries, size_t *out_count);
+wf_status metalbear_account_registry_list(metalbear_account_registry *registry,
+                                          metalbear_account_entry **out_entries,
+                                          size_t *out_count);
 
 /*
  * One page of accounts with a DID strictly greater than `after` (NULL or ""
@@ -76,15 +78,16 @@ void metalbear_account_entries_free(metalbear_account_entry *entries,
                                     size_t count);
 
 /* Remove an account from the registry. */
-wf_status metalbear_account_registry_remove(
-    metalbear_account_registry *registry,
-    const char *did);
+wf_status
+metalbear_account_registry_remove(metalbear_account_registry *registry,
+                                  const char *did);
 
 /* Update the handle for an existing account (keyed by DID). Returns
  * WF_ERR_CONFLICT if the new handle is already taken by another account. */
-wf_status metalbear_account_registry_update_handle(
-    metalbear_account_registry *registry,
-    const char *did, const char *new_handle);
+wf_status
+metalbear_account_registry_update_handle(metalbear_account_registry *registry,
+                                         const char *did,
+                                         const char *new_handle);
 
 /*
  * Compute the per-account data directory name for `did` under `root`.
@@ -102,34 +105,30 @@ wf_status metalbear_account_dir_for_did(const char *root, const char *did,
 /* --- Invite codes ------------------------------------------------------- */
 
 wf_status metalbear_account_registry_create_invite_codes(
-    metalbear_account_registry *registry,
-    const char *for_account,
-    const char **codes, size_t code_count,
-    int use_count);
+    metalbear_account_registry *registry, const char *for_account,
+    const char **codes, size_t code_count, int use_count);
 
 /* Validate and consume an invite code.  Returns WF_OK on success,
  * WF_ERR_NOT_FOUND if the code does not exist or is exhausted, and
  * WF_ERR_CONFLICT if the code is disabled. */
 wf_status metalbear_account_registry_consume_invite_code(
-    metalbear_account_registry *registry,
-    const char *code, const char *used_by);
+    metalbear_account_registry *registry, const char *code,
+    const char *used_by);
 
 /* Return invite codes created for (or attributed to) the given DID. */
 wf_status metalbear_account_registry_get_invite_codes(
-    metalbear_account_registry *registry,
-    const char *did,
+    metalbear_account_registry *registry, const char *did,
     metalbear_invite_code_entry **out, size_t *out_count);
 
 /* Disable invite codes by exact code string or by account. Pass an array of
  *  codes and/or accounts; both may be NULL/empty. Returns WF_OK when at least
  *  one row was touched, WF_ERR_NOT_FOUND when nothing matched. */
 wf_status metalbear_account_registry_disable_invite_codes(
-    metalbear_account_registry *registry,
-    const char **codes, size_t code_count,
+    metalbear_account_registry *registry, const char **codes, size_t code_count,
     const char **accounts, size_t account_count);
 
 void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
-                                       size_t count);
+                                        size_t count);
 
 /* --- Subject takedown status -------------------------------------------- */
 
@@ -147,17 +146,17 @@ void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
  */
 
 /* Set or clear a takedown on a subject.  Pass ref=NULL to clear it. */
-wf_status metalbear_account_registry_set_takedown(
-    metalbear_account_registry *registry,
-    const char *did, const char *uri, const char *blob_cid,
-    const char *ref);
+wf_status
+metalbear_account_registry_set_takedown(metalbear_account_registry *registry,
+                                        const char *did, const char *uri,
+                                        const char *blob_cid, const char *ref);
 
 /* Get takedown status for a subject.  On WF_OK *out_ref is either NULL (no
  * takedown) or a heap-allocated ref string; caller frees it. */
-wf_status metalbear_account_registry_get_takedown(
-    metalbear_account_registry *registry,
-    const char *did, const char *uri, const char *blob_cid,
-    char **out_ref);
+wf_status
+metalbear_account_registry_get_takedown(metalbear_account_registry *registry,
+                                        const char *did, const char *uri,
+                                        const char *blob_cid, char **out_ref);
 
 /* Drop every takedown belonging to an account — the account itself, its
  * records, and its blobs.  Called when the account is deleted, so a DID that

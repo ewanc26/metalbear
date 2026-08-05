@@ -38,10 +38,9 @@ wf_status metalbear_account_context_open_with_key(
     const char *service_did, const char *public_url, const char *did,
     const char *handle, const char *data_directory, const char *password,
     const wf_signing_key *signing_key, metalbear_account_context **out) {
-    return metalbear_account_context_open_shared(service_did, public_url, did,
-                                                 handle, data_directory,
-                                                 password, signing_key, NULL,
-                                                 out);
+    return metalbear_account_context_open_shared(
+        service_did, public_url, did, handle, data_directory, password,
+        signing_key, NULL, out);
 }
 
 wf_status metalbear_account_context_open_shared(
@@ -52,8 +51,7 @@ wf_status metalbear_account_context_open_shared(
     if (!service_did || !did || !handle || !data_directory || !out)
         return WF_ERR_INVALID_ARG;
     *out = NULL;
-    if (!make_directory(data_directory))
-        return WF_ERR_INTERNAL;
+    if (!make_directory(data_directory)) return WF_ERR_INTERNAL;
 
     metalbear_account_context *ctx = calloc(1, sizeof(*ctx));
     if (!ctx) return WF_ERR_ALLOC;
@@ -73,9 +71,8 @@ wf_status metalbear_account_context_open_shared(
     char *oauth_path = join_path(data_directory, "oauth.sqlite3");
     char *key_path = join_path(data_directory, "keys.sqlite3");
     wf_status status = WF_ERR_ALLOC;
-    if (!repo_path || !blob_path || !auth_path || !account_path ||
-        !seq_path || !oauth_path || !key_path ||
-        !make_directory(blob_path))
+    if (!repo_path || !blob_path || !auth_path || !account_path || !seq_path ||
+        !oauth_path || !key_path || !make_directory(blob_path))
         goto cleanup;
 
     if (metalbear_repo_store_open_with_key(repo_path, did, handle, signing_key,
@@ -83,15 +80,15 @@ wf_status metalbear_account_context_open_shared(
         goto cleanup;
     ctx->blobs = metalbear_blob_store_new(blob_path);
     if (!ctx->blobs) goto cleanup;
-    if (metalbear_auth_store_open(auth_path, service_did, did,
-                                  &ctx->auth) != WF_OK)
+    if (metalbear_auth_store_open(auth_path, service_did, did, &ctx->auth) !=
+        WF_OK)
         goto cleanup;
-    (void)public_url;   /* OAuth moved to the server; nothing here needs it. */
+    (void)public_url; /* OAuth moved to the server; nothing here needs it. */
     if (metalbear_account_store_open(account_path, password ? password : "",
                                      &ctx->account) != WF_OK)
         goto cleanup;
     if (sequencer) {
-        ctx->sequencer = sequencer;      /* borrowed: the PDS-wide log */
+        ctx->sequencer = sequencer; /* borrowed: the PDS-wide log */
         ctx->owns_sequencer = false;
     } else if (metalbear_sequencer_open(seq_path, &ctx->sequencer) == WF_OK) {
         ctx->owns_sequencer = true;
@@ -110,9 +107,8 @@ wf_status metalbear_account_context_open_shared(
      * not federating. Doing it where both halves are constructed makes it
      * impossible to add an account context that silently does not publish.
      */
-    metalbear_repo_store_set_event_callback(ctx->repo,
-                                            metalbear_sequencer_repo_event,
-                                            ctx->sequencer);
+    metalbear_repo_store_set_event_callback(
+        ctx->repo, metalbear_sequencer_repo_event, ctx->sequencer);
     /* No per-account OAuth store: OAuth is a server concern, and one store
      * per account meant each held its own signing key and its own idea of who
      * tokens belong to. The host's store lives on the server. */
@@ -124,8 +120,13 @@ wf_status metalbear_account_context_open_shared(
     *out = ctx;
 
 cleanup:
-    free(repo_path); free(blob_path); free(auth_path); free(account_path);
-    free(seq_path); free(oauth_path); free(key_path);
+    free(repo_path);
+    free(blob_path);
+    free(auth_path);
+    free(account_path);
+    free(seq_path);
+    free(oauth_path);
+    free(key_path);
     if (status != WF_OK) metalbear_account_context_close(ctx);
     return status;
 }

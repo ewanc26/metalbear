@@ -20,8 +20,7 @@ typedef struct metalbear_sequencer metalbear_sequencer;
  * account's #identity/#account into a fresh log, which is now emitted by
  * createAccount for every account alike.
  */
-wf_status metalbear_sequencer_open(const char *path,
-                                   metalbear_sequencer **out);
+wf_status metalbear_sequencer_open(const char *path, metalbear_sequencer **out);
 void metalbear_sequencer_free(metalbear_sequencer *sequencer);
 
 /* Keepalive interval for idle firehose connections. Must stay well under the
@@ -29,7 +28,8 @@ void metalbear_sequencer_free(metalbear_sequencer *sequencer);
  * are disconnected every minute and never stay attached. */
 void metalbear_sequencer_set_ping_seconds(int64_t seconds);
 
-/* Callback installed on metalbear_repo_store; persists a framed firehose event. */
+/* Callback installed on metalbear_repo_store; persists a framed firehose event.
+ */
 void metalbear_sequencer_repo_event(const metalbear_repo_store_event *event,
                                     void *context);
 
@@ -40,14 +40,15 @@ int64_t metalbear_sequencer_current(metalbear_sequencer *sequencer);
 /* Heal a missing tail event after a crash or when adopting an existing repo. */
 wf_status metalbear_sequencer_reconcile_repo(metalbear_sequencer *sequencer,
                                              metalbear_repo_store *repo);
-wf_status metalbear_sequencer_reconcile_account(
-    metalbear_sequencer *sequencer, const char *did, int active);
+wf_status metalbear_sequencer_reconcile_account(metalbear_sequencer *sequencer,
+                                                const char *did, int active);
 wf_status metalbear_sequencer_account_status(metalbear_sequencer *sequencer,
                                              const char *did, int active,
                                              const char *status);
-wf_status metalbear_sequencer_account_activation(
-    metalbear_sequencer *sequencer, const char *did, const char *handle,
-    metalbear_repo_store *repo);
+wf_status metalbear_sequencer_account_activation(metalbear_sequencer *sequencer,
+                                                 const char *did,
+                                                 const char *handle,
+                                                 metalbear_repo_store *repo);
 
 /*
  * Announce that an account's identity changed — in practice, a new handle.

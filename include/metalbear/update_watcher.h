@@ -20,9 +20,9 @@ typedef struct metalbear_update_watcher_config {
     const char *current_wolfram_version;
 } metalbear_update_watcher_config;
 
-wf_status metalbear_update_watcher_open(
-    const metalbear_update_watcher_config *config,
-    metalbear_update_watcher **out);
+wf_status
+metalbear_update_watcher_open(const metalbear_update_watcher_config *config,
+                              metalbear_update_watcher **out);
 
 void metalbear_update_watcher_free(metalbear_update_watcher *watcher);
 
