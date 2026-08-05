@@ -273,13 +273,9 @@
 		</p>
 		<div class="mt-6 space-y-1 text-xs text-slate-600">
 			<p>
-				MetalBear © Ewan Croft, licensed under the
+				MetalBear and Wolfram © Ewan Croft, licensed under the
 				<a class="hover:text-slate-400" href="https://www.gnu.org/licenses/agpl-3.0.html"
 					>GNU AGPL v3.0</a
-				>.
-				Wolfram © Ewan Croft, licensed under the
-				<a class="hover:text-slate-400" href="https://opensource.org/licenses/MIT"
-					>MIT License</a
 				>.
 			</p>
 			<p>AT Protocol is a trademark of Bluesky Social PBC.</p>
