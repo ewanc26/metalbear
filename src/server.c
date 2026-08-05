@@ -132,6 +132,8 @@ struct metalbear_server {
     char *crawlers;           /* comma-separated relay hosts, may be NULL */
     bool invite_required;
     int64_t blob_upload_limit; /* 0 => unlimited */
+    bool accepting_imports;    /* gates com.atproto.repo.importRepo */
+    int64_t max_import_size;   /* 0 => unlimited; caps importRepo's CAR body */
     char *plc_url;            /* PLC directory URL or NULL */
     char *appview_url;        /* Upstream AppView URL or NULL */
     char *appview_did;        /* Upstream AppView DID for service-auth or NULL */
@@ -516,7 +518,16 @@ static bool inactive_route_allowed(const char *nsid) {
 static bool full_access_route(const char *nsid) {
     return strcmp(nsid, "com.atproto.server.createAppPassword") == 0 ||
            strcmp(nsid, "com.atproto.server.activateAccount") == 0 ||
-           strcmp(nsid, "com.atproto.server.deactivateAccount") == 0;
+           strcmp(nsid, "com.atproto.server.deactivateAccount") == 0 ||
+           /* The reference requires ACCESS_FULL plus an explicit
+            * repo:manage permission assertion for importRepo -- a
+            * bulk-replace of the whole repository is not something an
+            * app-password-scoped session should be able to trigger.
+            * MetalBear has no separate "manage" permission tier, so
+            * requiring full (non-app-password) access is the closest
+            * faithful match with the scope categories this codebase
+            * actually has. */
+           strcmp(nsid, "com.atproto.repo.importRepo") == 0;
 }
 
 /* Defined below alongside the other account-status helpers. */
@@ -6540,6 +6551,8 @@ static bool copy_config(metalbear_server *server,
         server->crawlers = strdup(config->crawlers);
     server->invite_required = config->invite_required;
     server->blob_upload_limit = config->blob_upload_limit;
+    server->accepting_imports = config->accepting_imports;
+    server->max_import_size = config->max_import_size;
     if (config->plc_url && config->plc_url[0])
         server->plc_url = strdup(config->plc_url);
     if (config->appview_url && config->appview_url[0])
@@ -7825,7 +7838,8 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             metalbear_repo_resolver, server,
             server->service_did, server->public_url,
             resolve_did_doc_json, server, server->lexicons,
-            repo_access_guard, server) != WF_OK ||
+            repo_access_guard, server,
+            server->accepting_imports, server->max_import_size) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
             "com.atproto.repo.uploadBlob", upload_blob, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,

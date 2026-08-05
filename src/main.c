@@ -192,6 +192,13 @@ int main(int argc, char **argv) {
          * lever on a server whose operator never thought about it; an
          * operator who wants no cap can still set 0 explicitly. */
         .blob_upload_limit = 5 * 1024 * 1024,
+        /* The reference PDS accepts repo imports by default
+         * (config.ts: `acceptingImports: env.acceptingImports ?? true`); an
+         * operator who wants the bulk-replace path closed can disable it. */
+        .accepting_imports = true,
+        /* Unset (0 = unlimited) matches the reference, which only applies a
+         * cap when PDS_MAX_REPO_IMPORT_SIZE is explicitly configured. */
+        .max_import_size = 0,
     };
 
     if (config_path) {
@@ -247,6 +254,7 @@ int main(int argc, char **argv) {
     ENV_I64("METALBEAR_RATE_LIMIT",              rate_limit);
     ENV_I64("METALBEAR_RATE_LIMIT_WINDOW",       rate_limit_window);
     ENV_I64("METALBEAR_BLOB_UPLOAD_LIMIT",       blob_upload_limit);
+    ENV_I64("METALBEAR_MAX_IMPORT_SIZE",         max_import_size);
     ENV_I64("METALBEAR_DID_CACHE_TTL",           did_cache_ttl_seconds);
     ENV_I64("METALBEAR_DID_CACHE_ENTRIES",       did_cache_entries);
     ENV_I64("METALBEAR_CRAWL_NOTIFY_SECONDS",    crawl_notify_seconds);
@@ -297,6 +305,10 @@ int main(int argc, char **argv) {
     if (invite_required_text && (strcmp(invite_required_text, "0") == 0 ||
                           strcmp(invite_required_text, "false") == 0))
         config.invite_required = false;
+    const char *accepting_imports_text = getenv("METALBEAR_ACCEPTING_IMPORTS");
+    if (accepting_imports_text && (strcmp(accepting_imports_text, "0") == 0 ||
+                          strcmp(accepting_imports_text, "false") == 0))
+        config.accepting_imports = false;
     const char *rate_text = getenv("METALBEAR_RATE_LIMIT");
     if (rate_text && rate_text[0]) {
         char *end = NULL;

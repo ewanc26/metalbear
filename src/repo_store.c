@@ -1596,6 +1596,11 @@ typedef struct metalbear_pds_repo_bundle {
     const wf_lexicon_registry *lexicons; /* borrowed */
     metalbear_xrpc_repo_access_guard guard;
     void *guard_ctx;
+    /* importRepo gate (refpds PDS_ACCEPTING_REPO_IMPORTS /
+     * PDS_MAX_REPO_IMPORT_SIZE): accepting_imports defaults true in both
+     * constructors below; max_import_size 0 means unlimited. */
+    bool accepting_imports;
+    int64_t max_import_size;
 } metalbear_pds_repo_bundle;
 
 /* Run the access guard, if one is installed. False means the guard has
@@ -3078,15 +3083,50 @@ static wf_status h_get_latest_commit(void *ctx, const wf_xrpc_request *req,
  * Accept a CAR POST body, verify it as a full repo with the store's
  * signing key (wf_repo_import reuses the SDK commit/MST verification),
  * merge its blocks into the store, make its root the new head, and
- * rebuild the records index. */
+ * rebuild the records index.
+ *
+ * Gated on the accepting_imports config flag and a size cap
+ * (max_import_size), and the route itself requires full access (see
+ * full_access_route in server.c) rather than any valid session -- matching
+ * the reference's acceptingImports config check, maxImportSize blobLimit,
+ * and repo:manage scope requirement.
+ *
+ * NOTE on rev: unlike the reference (which mints a fresh TID via
+ * `store.repo.storage.applyCommit(diff.commit, ...)` after `verifyDiff`),
+ * this handler adopts the imported commit's own rev verbatim, as it did
+ * before this fix. Re-signing the commit with a fresh rev requires deciding
+ * what `prev` should point at for a wholesale repo replacement -- chaining
+ * onto this host's prior local head would be wrong unless the imported MST
+ * is genuinely a diff on top of it (which wf_repo_import does not compute;
+ * it verifies the imported CAR as a self-contained repo, not as a diff
+ * against the current one). Getting `prev`/`rev` chaining wrong is exactly
+ * the class of mistake that breaks federation silently -- a relay accepts
+ * or rejects prevData chains long before any local test would notice -- so
+ * this is deliberately left as future work rather than guessed at here. */
 
 static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
                                 wf_xrpc_response *resp) {
-    metalbear_repo_store *s = resolve_repo((metalbear_pds_repo_bundle *)ctx, req, resp);
+    metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)ctx;
+    /* Manage-scope auth (repo:manage-equivalent) is enforced in server.c's
+     * full_access_route gate before this handler ever runs -- see
+     * authenticate_request. */
+    if (!b->accepting_imports) {
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
+                                    "Service is not accepting repo imports");
+        return WF_OK;
+    }
+
+    metalbear_repo_store *s = resolve_repo(b, req, resp);
     if (!s) return WF_OK;
     if (!req->body || req->body_len == 0) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
                                     "CAR body required");
+        return WF_OK;
+    }
+    if (b->max_import_size > 0 &&
+        (int64_t)req->body_len > b->max_import_size) {
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
+                                    "CAR body exceeds maximum import size");
         return WF_OK;
     }
 
@@ -3100,6 +3140,16 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
          * the existing repo (atproto returns InvalidCAR). */
         wf_xrpc_response_set_error(resp, 400, "InvalidCAR",
                                     "imported CAR failed verification");
+        return WF_OK;
+    }
+    if (imported.root_count != 1) {
+        /* Matches the reference's exact message
+         * (importRepo.ts: `throw new InvalidRequestError('expected one
+         * root')`); a CAR naming zero or multiple roots doesn't name a
+         * single repo snapshot to adopt. */
+        wf_car_free(&imported);
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
+                                    "expected one root");
         return WF_OK;
     }
 
@@ -3167,6 +3217,7 @@ wf_status metalbear_xrpc_server_register_pds_repo(wf_xrpc_server *server,
     if (!b) return WF_ERR_ALLOC;
     *b = (metalbear_pds_repo_bundle){0};
     b->fallback_repo = store;
+    b->accepting_imports = true;
     if (service_did) b->service_did = strdup(service_did);
     if (public_url) b->public_url = strdup(public_url);
     wf_xrpc_server_own_ctx(server, b, free_pds_repo_bundle);
@@ -3217,7 +3268,7 @@ wf_status metalbear_xrpc_server_register_pds_repo_resolver(
     const char *service_did, const char *public_url) {
     return metalbear_xrpc_server_register_pds_repo_resolver_ex(
         server, resolver, ctx, service_did, public_url, NULL, NULL, NULL,
-        NULL, NULL);
+        NULL, NULL, true, 0);
 }
 
 wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
@@ -3225,7 +3276,8 @@ wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
     const char *service_did, const char *public_url,
     metalbear_xrpc_did_doc_provider did_doc_provider, void *did_doc_ctx,
     const wf_lexicon_registry *lexicons,
-    metalbear_xrpc_repo_access_guard guard, void *guard_ctx) {
+    metalbear_xrpc_repo_access_guard guard, void *guard_ctx,
+    bool accepting_imports, int64_t max_import_size) {
     if (!server) return WF_ERR_INVALID_ARG;
     metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)malloc(sizeof(*b));
     if (!b) return WF_ERR_ALLOC;
@@ -3237,6 +3289,8 @@ wf_status metalbear_xrpc_server_register_pds_repo_resolver_ex(
     b->lexicons = lexicons;
     b->guard = guard;
     b->guard_ctx = guard_ctx;
+    b->accepting_imports = accepting_imports;
+    b->max_import_size = max_import_size;
     if (service_did) b->service_did = strdup(service_did);
     if (public_url) b->public_url = strdup(public_url);
     wf_xrpc_server_own_ctx(server, b, free);
