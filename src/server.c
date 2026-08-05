@@ -195,6 +195,7 @@ static bool is_public_route(const char *nsid) {
         "com.atproto.server.createSession",
         "com.atproto.server.createAccount",
         "com.atproto.server.requestPasswordReset",
+        "com.atproto.server.resetPassword",
         "com.atproto.server.reserveSigningKey",
         "com.atproto.identity.resolveHandle",
         "com.atproto.identity.resolveDid",
