@@ -44,7 +44,9 @@ add_library(metalbear_core src/metrics.c src/handle_dns.c src/handle_dns_rfc2136
 target_include_directories(metalbear_core PUBLIC include
     PUBLIC "${METALBEAR_CJSON_SOURCE_DIR}")
 target_link_libraries(metalbear_core PUBLIC wolfram cjson PRIVATE SQLite3::SQLite3 Threads::Threads)
-target_compile_definitions(metalbear_core PRIVATE
+# PUBLIC so consumers — and the test targets, which assert what the running
+# server reports against what it was built as — see the version they link.
+target_compile_definitions(metalbear_core PUBLIC
     METALBEAR_VERSION="${PROJECT_VERSION}")
 
 # nftw() and its FTW_* flags are XSI extensions. Wolfram exports
@@ -63,10 +65,6 @@ target_compile_options(metalbear_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(metalbear src/main.c)
 target_link_libraries(metalbear PRIVATE metalbear_core)
-# metalbear_core keeps the define PRIVATE, so the executable needs its own copy
-# for `--version`.
-target_compile_definitions(metalbear PRIVATE
-    METALBEAR_VERSION="${PROJECT_VERSION}")
 if(UNIX AND NOT APPLE)
     # metalbear_core links C++ translation units (account.cpp and friends),
     # so this binary depends on libstdc++/libgcc_s even though main.c is C.

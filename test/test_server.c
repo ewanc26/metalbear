@@ -378,7 +378,95 @@ int main(void) {
     /* A created account (bob) must also appear once it is hosted. */
     CHECK(body_contains(&response, "bob.example.com"));
     CHECK(body_contains(&response, "did:plc:bob"));
+    /* The heading must announce the Wolfram SDK version it is built on,
+     * not just MetalBear's own. */
+    CHECK(body_contains(&response, "Wolfram " WOLFRAM_VERSION_STRING));
     wf_response_free(&response);
+
+    /* === GET /_debug/health (admin-gated) ===
+     * Like /metrics: no/wrong Basic auth -> 401, correct -> a JSON dump of
+     * build versions, uptime, identity/config, accounts, the firehose cursor,
+     * capabilities and the request counters. */
+    {
+        char debug_url[160];
+        snprintf(debug_url, sizeof(debug_url), "%s/_debug/health", base);
+        /* No Authorization header -> 401 */
+        CHECK(wf_http_get_with_headers(client, debug_url, NULL, 0,
+                                  &response) == WF_ERR_HTTP);
+        CHECK(response.status == 401);
+        wf_response_free(&response);
+        /* Wrong Basic credential -> 401 */
+        {
+            char wrong[64];
+            int wn = snprintf(wrong, sizeof(wrong), "admin:%s", "wrong");
+            char wrong_b64[128];
+            int wlen = EVP_EncodeBlock((unsigned char *)wrong_b64,
+                                        (const unsigned char *)wrong, wn);
+            wrong_b64[wlen] = '\0';
+            char wrong_hdr[160];
+            snprintf(wrong_hdr, sizeof(wrong_hdr), "Basic %s", wrong_b64);
+            wf_http_header hdr = {"Authorization", wrong_hdr};
+            CHECK(wf_http_get_with_headers(client, debug_url, &hdr, 1,
+                                      &response) == WF_ERR_HTTP);
+            CHECK(response.status == 401);
+            wf_response_free(&response);
+        }
+        /* Correct Basic credential -> 200 with the debug JSON. */
+        {
+            char right[64];
+            int rn = snprintf(right, sizeof(right), "admin:%s", "secret-admin");
+            char right_b64[128];
+            int rlen = EVP_EncodeBlock((unsigned char *)right_b64,
+                                        (const unsigned char *)right, rn);
+            right_b64[rlen] = '\0';
+            char right_hdr[160];
+            snprintf(right_hdr, sizeof(right_hdr), "Basic %s", right_b64);
+            wf_http_header hdr = {"Authorization", right_hdr};
+            CHECK(wf_http_get_with_headers(client, debug_url, &hdr, 1,
+                                      &response) == WF_OK);
+            CHECK(response.status == 200);
+            cJSON *dbg = json_response(&response);
+            CHECK(dbg != NULL);
+            cJSON *build = cJSON_GetObjectItemCaseSensitive(dbg, "build");
+            CHECK(cJSON_IsObject(build));
+            CHECK(cJSON_GetObjectItemCaseSensitive(build,
+                "metalbearVersion") &&
+                strcmp(cJSON_GetObjectItemCaseSensitive(build,
+                    "metalbearVersion")->valuestring, METALBEAR_VERSION) == 0);
+            CHECK(cJSON_GetObjectItemCaseSensitive(build,
+                "wolframVersion") &&
+                strcmp(cJSON_GetObjectItemCaseSensitive(build,
+                    "wolframVersion")->valuestring, WOLFRAM_VERSION_STRING) == 0);
+            cJSON *proc = cJSON_GetObjectItemCaseSensitive(dbg, "process");
+            CHECK(cJSON_IsObject(proc));
+            CHECK(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(proc,
+                    "uptimeSeconds")));
+            cJSON *ident = cJSON_GetObjectItemCaseSensitive(dbg, "identity");
+            CHECK(cJSON_IsObject(ident));
+            CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(ident,
+                    "serviceDid")->valuestring, "did:web:pds.example.com") == 0);
+            CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(ident,
+                    "adminConfigured")));
+            cJSON *accts = cJSON_GetObjectItemCaseSensitive(dbg, "accounts");
+            CHECK(cJSON_IsObject(accts));
+            CHECK((int)cJSON_GetObjectItemCaseSensitive(accts,
+                "total")->valuedouble == 3);
+            cJSON *fire = cJSON_GetObjectItemCaseSensitive(dbg, "firehose");
+            CHECK(cJSON_IsObject(fire));
+            CHECK(cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(fire,
+                    "sequence")));
+            CHECK(cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(dbg,
+                    "capabilities")));
+            CHECK(cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(dbg,
+                    "metrics")));
+            cJSON *rl = cJSON_GetObjectItemCaseSensitive(dbg, "rateLimits");
+            CHECK(cJSON_IsObject(rl));
+            CHECK(cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(rl,
+                    "createSessionDay")));
+            cJSON_Delete(dbg);
+            wf_response_free(&response);
+        }
+    }
 
     char well_known_url[160];
     snprintf(well_known_url, sizeof(well_known_url),
