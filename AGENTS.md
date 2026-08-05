@@ -57,6 +57,10 @@ the same way.
   single release unit. Bump each on its own history and let their versions
   drift; there is no requirement that they share a version string or release
   together.
+- **No version jumps**: bump from the immediately previous released version.
+  Never skip a patch, minor, or major number. If a gap already exists in the
+  history (as in Wolfram's v0.2.6 → v0.10.0), it is history — do not backfill
+  it with phantom tags or releases.
 
 ## Reuse and safety
 
