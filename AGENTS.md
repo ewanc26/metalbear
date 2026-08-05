@@ -61,9 +61,10 @@ the same way.
 ## Reuse and safety
 
 - Reuse Wolfram primitives and server infrastructure. Do not copy Wolfram code into this repository or hand-roll cryptography.
+- **Libraries first, hand-rolling last**: before writing any algorithm, encoding, hash, or cryptographic operation from scratch, prefer an established, maintained library — reuse Wolfram primitives first, then third-party libraries (SQLite, OpenSSL, libcurl, libmicrohttpd, cJSON). This is a strict policy: hand-rolling is the last resort, used only where no suitable library exists, and then isolated behind a single wrapper with a comment recording what was considered and why. Never hand-roll cryptography, hashing, base64url, canonical DAG-CBOR, JWT, or TLS. Verify a candidate library actually exists and links on the target (pkg-config, CMake `find_package`) before designing around it; never assume a library is available.
+- **Prefer C++ where it is beneficial**: RAII-based resource management (e.g. sqlite3, OpenSSL), performance-critical code, and third-party library integrations with no C equivalent. Use C++ rather than error-prone manual-cleanup C where it is clearly safer; default to C otherwise. Always use `extern "C"` for any wrapper so the rest of the codebase can consume it without C++ headers or types. Where a C library equivalent exists, prefer the C one.
 - Keep authentication, repository ownership, persistence, and protocol errors explicit. Never return fabricated success for an unfinished endpoint.
 - Never commit secrets, live credentials, signing keys, or PDS data.
-- C++ is permitted for complex or sensitive components where C is insufficient — RAII-based resource management, performance-critical code, and third-party library integrations with no C equivalent. Default to C; introduce C++ only when justified. Always use `extern "C"` for any wrapper so the rest of the codebase can consume it without C++ headers or types. Where a C library equivalent exists, prefer the C one.
 
 ## Endpoint correctness
 

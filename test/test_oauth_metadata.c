@@ -3,18 +3,16 @@
  * endpoints (.well-known/oauth-authorization-server and
  * .well-known/oauth-protected-resource).
  *
- * Locks in a real bug found by comparing these endpoints field-by-field
- * against the reference PDS's oauth-provider (build-metadata.ts,
- * auth-routes.ts): `token_endpoint_auth_methods_supported` used to
- * advertise "private_key_jwt" even though nothing in this codebase parses
- * or verifies a client_assertion JWT. A confidential client reading this
- * metadata and attempting assertion-based auth would find no verifier on
- * the other end. Also locks in `dpop_signing_alg_values_supported` being
- * ES256-only, matching wf_oauth_verify_dpop's hardcoded `alg == "ES256"`
- * check — advertising an algorithm this server cannot actually verify a
- * DPoP proof with would be the same class of bug — and that
- * `resource_documentation` (present in the reference, previously absent
- * here) is now included on the protected-resource endpoint.
+ * Locks in the reference PDS's advertised token endpoint auth methods
+ * (build-metadata.ts): both "none" and "private_key_jwt" must be
+ * advertised, and the token endpoint must actually verify a client
+ * assertion (see test_oauth_token_assertion.c). Also locks in
+ * `dpop_signing_alg_values_supported` being ES256-only, matching
+ * wf_oauth_verify_dpop's hardcoded `alg == "ES256"` check — advertising
+ * an algorithm this server cannot actually verify a DPoP proof with would
+ * be the same class of bug — and that `resource_documentation` (present in
+ * the reference, previously absent here) is now included on the
+ * protected-resource endpoint.
  *
  * Requires WOLFRAM_BUILD_SERVER.
  */
@@ -159,7 +157,13 @@ static int run(void) {
             root, "token_endpoint_auth_methods_supported");
         WF_CHECK(cJSON_IsArray(methods));
         WF_CHECK(array_contains_string(methods, "none"));
-        WF_CHECK(!array_contains_string(methods, "private_key_jwt"));
+        WF_CHECK(array_contains_string(methods, "private_key_jwt"));
+
+        cJSON *token_algs = cJSON_GetObjectItemCaseSensitive(
+            root, "token_endpoint_auth_signing_alg_values_supported");
+        WF_CHECK(cJSON_IsArray(token_algs));
+        WF_CHECK(cJSON_GetArraySize(token_algs) == 1);
+        WF_CHECK(array_contains_string(token_algs, "ES256"));
 
         cJSON *dpop_algs = cJSON_GetObjectItemCaseSensitive(
             root, "dpop_signing_alg_values_supported");
