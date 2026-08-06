@@ -207,6 +207,110 @@ int main(void) {
                                            rec_params, 3, &response) == WF_OK);
                 CHECK(response.status == 200);
                 wf_response_free(&response);
+
+                /* Incremental import onto a repo that has since diverged: add
+                 * a second record so the live repo (first + second) no
+                 * longer matches the earlier CAR_A snapshot (first only),
+                 * then re-import CAR_A. importRepo must diff CAR_A against
+                 * the CURRENT repo and reapply the delta as one fresh-rev
+                 * commit -- not adopt CAR_A's own (now stale) commit
+                 * verbatim -- so "second" is deleted, "first" survives
+                 * untouched, and the head's rev advances past both the
+                 * pre-import head and CAR_A's own rev. */
+                CHECK(wf_xrpc_procedure(
+                          client, "com.atproto.repo.createRecord",
+                          "{\"repo\":\"did:plc:metalbeartest\","
+                          "\"collection\":\"app.bsky.feed.post\","
+                          "\"rkey\":\"second\","
+                          "\"record\":{\"$type\":\"app.bsky.feed.post\","
+                          "\"text\":\"a second post, post-export\","
+                          "\"createdAt\":\"2026-07-19T00:01:00.000Z\"}}",
+                          &response) == WF_OK);
+                CHECK(response.status == 200);
+                wf_response_free(&response);
+
+                CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getLatestCommit",
+                                           repo_params, 1, &response) == WF_OK);
+                cJSON *before = json_response(&response);
+                char *rev_before = strdup(cJSON_GetObjectItemCaseSensitive(
+                                              before, "rev")
+                                              ->valuestring);
+                cJSON_Delete(before);
+                wf_response_free(&response);
+
+                CHECK(wf_xrpc_upload_blob(client, "com.atproto.repo.importRepo",
+                                          car_bytes, car_len,
+                                          "application/vnd.ipld.car",
+                                          &response) == WF_OK);
+                CHECK(response.status == 200);
+                wf_response_free(&response);
+
+                /* "first" (unchanged between the two snapshots) survives. */
+                CHECK(wf_xrpc_query_params(client, "com.atproto.repo.getRecord",
+                                           rec_params, 3, &response) == WF_OK);
+                CHECK(response.status == 200);
+                wf_response_free(&response);
+
+                /* "second" (absent from the re-imported CAR_A) is gone. */
+                wf_xrpc_param second_params[] = {
+                    {"repo", "did:plc:metalbeartest"},
+                    {"collection", "app.bsky.feed.post"},
+                    {"rkey", "second"},
+                };
+                CHECK(wf_xrpc_query_params(client, "com.atproto.repo.getRecord",
+                                           second_params, 3, &response) ==
+                     WF_ERR_HTTP);
+                CHECK(response.status == 404);
+                cJSON *notfound = json_response(&response);
+                CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(notfound, "error")
+                                 ->valuestring,
+                             "RecordNotFound") == 0);
+                cJSON_Delete(notfound);
+                wf_response_free(&response);
+
+                /* A genuinely new commit was minted (fresh rev), not a
+                 * silent no-op and not CAR_A's own stale rev adopted as-is. */
+                CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getLatestCommit",
+                                           repo_params, 1, &response) == WF_OK);
+                cJSON *after = json_response(&response);
+                char *rev_after = strdup(cJSON_GetObjectItemCaseSensitive(
+                                             after, "rev")
+                                             ->valuestring);
+                CHECK(rev_before && rev_after &&
+                     strcmp(rev_before, rev_after) != 0);
+                cJSON_Delete(after);
+                free(rev_before);
+                wf_response_free(&response);
+
+                /* Re-importing the exact same (now-current) snapshot again is
+                 * a genuine no-op: no new commit, nothing to delete. */
+                wf_response response2 = {0};
+                CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getRepo",
+                                           repo_params, 1, &response2) == WF_OK);
+                CHECK(response2.status == 200 && response2.body_len > 0);
+                size_t car_len2 = response2.body_len;
+                unsigned char *car_bytes2 = malloc(car_len2);
+                CHECK(car_bytes2 != NULL);
+                if (car_bytes2) memcpy(car_bytes2, response2.body, car_len2);
+                wf_response_free(&response2);
+
+                CHECK(wf_xrpc_upload_blob(client, "com.atproto.repo.importRepo",
+                                          car_bytes2, car_len2,
+                                          "application/vnd.ipld.car",
+                                          &response) == WF_OK);
+                CHECK(response.status == 200);
+                wf_response_free(&response);
+
+                CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getLatestCommit",
+                                           repo_params, 1, &response) == WF_OK);
+                cJSON *after2 = json_response(&response);
+                CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(after2, "rev")
+                                 ->valuestring,
+                             rev_after) == 0);
+                cJSON_Delete(after2);
+                wf_response_free(&response);
+                free(car_bytes2);
+                free(rev_after);
             }
 
             free(car_bytes);
