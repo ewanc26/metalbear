@@ -180,6 +180,28 @@ stays stale or a daemon rebuilds the same state twice.
    localhost: `curl https://bear1.croft.click/xrpc/_health` for the version,
    `/_debug/health` (admin-gated) for the debug dump.
 
+## Public updates on ewan.bear1.croft.click
+
+The account `ewan.bear1.croft.click` (DID `did:plc:74wjsq6fb6xx62lauj3fma2w`)
+on the bear1 dev PDS is this project's public test, documentation, and update
+channel: test posts and records, federation checks, and release/development
+updates are published from it so they are visible to the network and serve as
+the project's public devlog. Credentials live in
+`/Volumes/Storage/Server/bear/.env` — `METALBEAR_PASSWORD` is the account
+password, `METALBEAR_APP_PASSWORD` is the `dev-tooling` app password the
+tooling uses. Never commit them or paste them into logs.
+
+Post an update with the Wolfram CLI from a shell that has sourced that `.env`:
+
+    wolfram post https://bear1.croft.click ewan.bear1.croft.click "$METALBEAR_APP_PASSWORD" <text>
+
+Verify the post with `com.atproto.repo.getRecord` on the published URI. When
+the release flow deploys a new version, post the update in the same pass — a
+shipped feature is not finished until the network can see it. `bear1.croft.click`
+routes through a Cloudflare tunnel; if it does not resolve from the build host,
+curl `https://bear1.croft.click/xrpc/_health` after DNS recovers before
+assuming the host is down.
+
 ## The landing page is two pages
 
 `GET /` on the PDS port serves `landing_handler`'s static HTML and is almost
