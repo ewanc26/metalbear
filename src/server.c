@@ -430,6 +430,29 @@ static bool inactive_route_allowed(const char *nsid) {
            strcmp(nsid, "com.atproto.server.deleteSession") == 0;
 }
 
+/*
+ * Routes the reference refuses to OAuth/DPoP credentials entirely --
+ * `authorize: () => { throw new ForbiddenError('OAuth credentials are not
+ * supported for this endpoint') }` in createAppPassword.ts, activateAccount.ts,
+ * deactivateAccount.ts, requestAccountDelete.ts, getAccountInviteCodes.ts, and
+ * (with a different message, same effect) requestEmailUpdate.ts. This is
+ * independent of scope breadth: even an OAuth grant scoped for full access
+ * ("atproto" alone) must never reach these, only a session JWT can. The other
+ * three full_access_route entries (importRepo, requestPlcOperationSignature,
+ * signPlcOperation) are different -- the reference allows OAuth there given a
+ * matching account/identity scope, which MetalBear's scope model does not yet
+ * enforce narrowly, so they fall through to the full-access-or-nothing check
+ * below instead of being forbidden outright.
+ */
+static bool oauth_forbidden_route(const char *nsid) {
+    return strcmp(nsid, "com.atproto.server.createAppPassword") == 0 ||
+           strcmp(nsid, "com.atproto.server.activateAccount") == 0 ||
+           strcmp(nsid, "com.atproto.server.deactivateAccount") == 0 ||
+           strcmp(nsid, "com.atproto.server.requestAccountDelete") == 0 ||
+           strcmp(nsid, "com.atproto.server.requestEmailUpdate") == 0 ||
+           strcmp(nsid, "com.atproto.server.getAccountInviteCodes") == 0;
+}
+
 static bool full_access_route(const char *nsid) {
     return strcmp(nsid, "com.atproto.server.createAppPassword") == 0 ||
            strcmp(nsid, "com.atproto.server.activateAccount") == 0 ||
@@ -620,6 +643,18 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
         wf_status oauth_status =
             authenticate_oauth(server, req, &sub, &oauth_scope_str);
         if (oauth_status != WF_OK) return oauth_status;
+
+        /* Unconditional, regardless of scope: see oauth_forbidden_route. A
+         * full-access ("atproto") OAuth grant must not silently inherit the
+         * privileges a session JWT has here. */
+        if (oauth_forbidden_route(req->nsid)) {
+            LOG_WARN("authenticate: OAuth credentials refused for nsid=%s "
+                     "did=%s",
+                     req->nsid ? req->nsid : "-", sub);
+            free(oauth_scope_str);
+            free(sub);
+            return WF_ERR_PERMISSION;
+        }
 
         /* Parse the OAuth scope and enforce granular permissions.
          *
