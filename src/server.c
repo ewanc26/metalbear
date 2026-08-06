@@ -1322,6 +1322,20 @@ static wf_status get_service_auth(void *ctx, const wf_xrpc_request *request,
                                    "Invalid access token");
         return WF_OK;
     }
+    /*
+     * A takendown-scoped session is let through the takendown gate for
+     * getServiceAuth specifically so its holder can migrate away -- minting
+     * a service-auth token to call createAccount on another PDS. It has no
+     * business minting one for anything else, matching the reference's
+     * explicit `isTakendown(scope) && lxm !== createAccount.lxm` refusal
+     * (server/getServiceAuth.ts).
+     */
+    if (scope == METALBEAR_ACCESS_TAKENDOWN &&
+        (!lxm || strcmp(lxm, "com.atproto.server.createAccount") != 0)) {
+        wf_xrpc_response_set_error(response, 400, "InvalidToken",
+                                   "Bad token scope");
+        return WF_OK;
+    }
     if (scope == METALBEAR_ACCESS_APP_PASSWORD &&
         privileged_service_method(lxm)) {
         wf_xrpc_response_set_error(
