@@ -1317,6 +1317,19 @@ int main(void) {
                                &response) == WF_ERR_HTTP);
     CHECK(response.status == 400);
     wf_response_free(&response);
+    /* requestPlcOperationSignature/signPlcOperation require ACCESS_FULL in
+     * the reference (identity.ts) -- an app password, privileged or not,
+     * must never reach a PLC identity operation. */
+    CHECK(wf_xrpc_procedure(client,
+                            "com.atproto.identity.requestPlcOperationSignature",
+                            "{}", &response) == WF_ERR_HTTP);
+    CHECK(response.status == 401);
+    wf_response_free(&response);
+    CHECK(wf_xrpc_procedure(client, "com.atproto.identity.signPlcOperation",
+                            "{\"token\":\"whatever\"}",
+                            &response) == WF_ERR_HTTP);
+    CHECK(response.status == 401);
+    wf_response_free(&response);
 
     wf_xrpc_client_set_auth(client, access_token);
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAppPassword",
