@@ -1073,6 +1073,168 @@ void emit_sync_event(metalbear_repo_store *s) {
 }
 
 /* ------------------------------------------------------------------ */
+/* createRecord backlink-conflict dedup                                */
+/*                                                                       */
+/* Matches the reference's getBacklinks/getBacklinkConflicts (actor-store/
+ * record/reader.ts): only these four collections get automatic dedup, and
+ * only createRecord calls it -- neither putRecord nor applyWrites do. "Ensures
+ * that we don't end up with duplicate likes, reposts, and follows from race
+ * conditions" (the reference's own comment). The reference backs this with a
+ * dedicated indexed `backlink` SQL table; the `records` table already carries
+ * each record's JSON in `value`, so the equivalent lookup here is a plain
+ * json_extract() query scoped by collection instead of a second index.       */
+/* ------------------------------------------------------------------ */
+
+static const char *backlink_path_for_collection(const char *collection) {
+    if (strcmp(collection, "app.bsky.graph.follow") == 0 ||
+        strcmp(collection, "app.bsky.graph.block") == 0)
+        return "$.subject";
+    if (strcmp(collection, "app.bsky.feed.like") == 0 ||
+        strcmp(collection, "app.bsky.feed.repost") == 0)
+        return "$.subject.uri";
+    return NULL;
+}
+
+/* The new record's own backlink target at `path` (a DID for follow/block, an
+ * AT-URI for like/repost) -- what an existing record's target must equal to
+ * conflict. NULL when absent or the wrong shape; caller frees. */
+static char *backlink_target(const char *record_json, const char *path) {
+    cJSON *root = cJSON_Parse(record_json);
+    if (!root) return NULL;
+    cJSON *subject = cJSON_GetObjectItemCaseSensitive(root, "subject");
+    char *out = NULL;
+    if (strcmp(path, "$.subject") == 0) {
+        if (cJSON_IsString(subject) && subject->valuestring[0])
+            out = strdup(subject->valuestring);
+    } else {
+        cJSON *uri = cJSON_IsObject(subject)
+                         ? cJSON_GetObjectItemCaseSensitive(subject, "uri")
+                         : NULL;
+        if (cJSON_IsString(uri) && uri->valuestring[0])
+            out = strdup(uri->valuestring);
+    }
+    cJSON_Delete(root);
+    return out;
+}
+
+/* Existing records in `collection` whose own backlink target (at `path`)
+ * equals `target`. Returns a caller-owned array of caller-owned rkey
+ * strings (NULL if none or on allocation failure); *out_count is the
+ * element count either way. */
+static char **find_backlink_conflicts(metalbear_repo_store *s,
+                                      const char *collection, const char *path,
+                                      const char *target, size_t *out_count) {
+    *out_count = 0;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db,
+                           "SELECT rkey FROM records WHERE collection=? AND "
+                           "json_extract(value, ?)=?;",
+                           -1, &stmt, NULL) != SQLITE_OK)
+        return NULL;
+    sqlite3_bind_text(stmt, 1, collection, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, target, -1, SQLITE_TRANSIENT);
+    char **rkeys = NULL;
+    size_t count = 0, cap = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *rk = (const char *)sqlite3_column_text(stmt, 0);
+        if (!rk) continue;
+        if (count == cap) {
+            size_t ncap = cap ? cap * 2 : 4;
+            char **tmp = realloc(rkeys, ncap * sizeof(*rkeys));
+            if (!tmp) break;
+            rkeys = tmp;
+            cap = ncap;
+        }
+        char *copy = strdup(rk);
+        if (!copy) break;
+        rkeys[count++] = copy;
+    }
+    sqlite3_finalize(stmt);
+    *out_count = count;
+    return rkeys;
+}
+
+static void free_backlink_conflicts(char **rkeys, size_t count) {
+    if (!rkeys) return;
+    for (size_t i = 0; i < count; i++) free(rkeys[i]);
+    free(rkeys);
+}
+
+/* Delete every conflicting record and create the new one as a single atomic
+ * commit (routed through apply_writes, the same batch primitive applyWrites
+ * itself uses) rather than a separate delete-then-create -- so a relay never
+ * observes an inconsistent intermediate state, and the deletion can't land
+ * without the create if either half fails. Mirrors
+ * metalbear_repo_store_create_record's own out_uri/out_cid contract. */
+static wf_status create_record_with_backlink_cleanup(
+    metalbear_repo_store *s, const char *collection, const char *rkey,
+    const char *record_json, char *const *conflict_rkeys, size_t conflict_count,
+    char **out_uri, char **out_cid) {
+    cJSON *writes = cJSON_CreateArray();
+    if (!writes) return WF_ERR_ALLOC;
+    for (size_t i = 0; i < conflict_count; i++) {
+        cJSON *del = cJSON_CreateObject();
+        if (!del ||
+            !cJSON_AddStringToObject(del, "$type",
+                                     "com.atproto.repo.applyWrites#delete") ||
+            !cJSON_AddStringToObject(del, "collection", collection) ||
+            !cJSON_AddStringToObject(del, "rkey", conflict_rkeys[i])) {
+            cJSON_Delete(del);
+            cJSON_Delete(writes);
+            return WF_ERR_ALLOC;
+        }
+        cJSON_AddItemToArray(writes, del);
+    }
+    cJSON *value = cJSON_Parse(record_json);
+    cJSON *create = cJSON_CreateObject();
+    if (!value || !create ||
+        !cJSON_AddStringToObject(create, "$type",
+                                 "com.atproto.repo.applyWrites#create") ||
+        !cJSON_AddStringToObject(create, "collection", collection) ||
+        !cJSON_AddStringToObject(create, "rkey", rkey) ||
+        !cJSON_AddItemToObject(create, "value", value)) {
+        cJSON_Delete(value);
+        cJSON_Delete(create);
+        cJSON_Delete(writes);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddItemToArray(writes, create);
+
+    char *writes_json = cJSON_PrintUnformatted(writes);
+    cJSON_Delete(writes);
+    if (!writes_json) return WF_ERR_ALLOC;
+
+    char *commit_cid = NULL, *commit_rev = NULL, *results_json = NULL;
+    wf_status st = metalbear_repo_store_apply_writes(
+        s, writes_json, NULL, &commit_cid, &commit_rev, &results_json);
+    free(writes_json);
+    free(commit_cid);
+    free(commit_rev);
+    if (st != WF_OK) {
+        free(results_json);
+        return st;
+    }
+
+    /* The create result is always last: deletes were staged first. */
+    cJSON *results = cJSON_Parse(results_json);
+    free(results_json);
+    cJSON *last =
+        results ? cJSON_GetArrayItem(results, cJSON_GetArraySize(results) - 1)
+                : NULL;
+    cJSON *uri = last ? cJSON_GetObjectItemCaseSensitive(last, "uri") : NULL;
+    cJSON *cid = last ? cJSON_GetObjectItemCaseSensitive(last, "cid") : NULL;
+    wf_status result = WF_ERR_INTERNAL;
+    if (cJSON_IsString(uri) && cJSON_IsString(cid)) {
+        *out_uri = strdup(uri->valuestring);
+        *out_cid = strdup(cid->valuestring);
+        result = (*out_uri && *out_cid) ? WF_OK : WF_ERR_ALLOC;
+    }
+    cJSON_Delete(results);
+    return result;
+}
+
+/* ------------------------------------------------------------------ */
 /* Write / read operations                                             */
 /* ------------------------------------------------------------------ */
 
@@ -1109,6 +1271,39 @@ wf_status metalbear_repo_store_create_record(metalbear_repo_store *s,
     wf_status st = check_swap(swap_commit_or_null, head);
     free(head);
     if (st != WF_OK) return st;
+
+    /* Backlink-conflict dedup (follow/block/like/repost only): replace, not
+     * accumulate, a duplicate from a race condition. See the block comment
+     * above create_record_with_backlink_cleanup. */
+    const char *backlink_path = backlink_path_for_collection(collection);
+    if (backlink_path) {
+        char *target = backlink_target(record_json, backlink_path);
+        if (target) {
+            size_t conflict_count = 0;
+            char **conflicts = find_backlink_conflicts(
+                s, collection, backlink_path, target, &conflict_count);
+            free(target);
+            /* An explicit rkey that happens to match an existing record is
+             * the ordinary overwrite path, not a backlink conflict -- leave
+             * it to whatever "already exists" error wf_repo_create_record
+             * gives below. */
+            for (size_t i = 0; i < conflict_count; i++) {
+                if (strcmp(conflicts[i], rkey) == 0) {
+                    free(conflicts[i]);
+                    conflicts[i] = conflicts[--conflict_count];
+                    break;
+                }
+            }
+            if (conflict_count > 0) {
+                wf_status result = create_record_with_backlink_cleanup(
+                    s, collection, rkey, record_json, conflicts, conflict_count,
+                    out_uri, out_cid);
+                free_backlink_conflicts(conflicts, conflict_count);
+                return result;
+            }
+            free_backlink_conflicts(conflicts, conflict_count);
+        }
+    }
 
     unsigned char *cbor = NULL;
     size_t cbor_len = 0;
