@@ -41,6 +41,12 @@ wf_status get_head(void *ctx, const wf_xrpc_request *request,
                    wf_xrpc_response *response);
 wf_status get_checkout(void *ctx, const wf_xrpc_request *request,
                        wf_xrpc_response *response);
+wf_status get_blob(void *ctx, const wf_xrpc_request *request,
+                   wf_xrpc_response *response);
+wf_status list_repos_by_collection(void *ctx, const wf_xrpc_request *request,
+                                   wf_xrpc_response *response);
+wf_status list_repos(void *ctx, const wf_xrpc_request *request,
+                     wf_xrpc_response *response);
 
 #ifdef __cplusplus
 }
