@@ -235,25 +235,27 @@ static void test_scope_normalization(void) {
     PASS();
 
     TEST("normalize identity scope");
-    normalized = mb_scope_normalize("atproto identity:update");
+    normalized = mb_scope_normalize("atproto identity:handle");
     ASSERT(normalized != NULL, "should normalize");
-    ASSERT(strstr(normalized, "identity:update") != NULL,
+    ASSERT(strstr(normalized, "identity:handle") != NULL,
            "identity scope should be preserved: got '%s'", normalized);
     free(normalized);
     PASS();
 
     TEST("normalize account scope");
-    normalized = mb_scope_normalize("atproto account:delete");
+    normalized = mb_scope_normalize("atproto account:email?action=manage");
     ASSERT(normalized != NULL, "should normalize");
-    ASSERT(strstr(normalized, "account:delete") != NULL,
+    ASSERT(strstr(normalized, "account:email?action=manage") != NULL,
            "account scope should be preserved: got '%s'", normalized);
     free(normalized);
     PASS();
 
     TEST("normalize rpc scope");
-    normalized = mb_scope_normalize("atproto rpc:com.atproto.repo.*");
+    normalized = mb_scope_normalize(
+        "atproto rpc:com.atproto.repo.getRecord?aud=did:web:x");
     ASSERT(normalized != NULL, "should normalize");
-    ASSERT(strstr(normalized, "rpc:com.atproto.repo.*") != NULL,
+    ASSERT(strstr(normalized, "rpc:com.atproto.repo.getRecord?aud=did:web:x") !=
+               NULL,
            "rpc scope should be preserved: got '%s'", normalized);
     free(normalized);
     PASS();
@@ -323,14 +325,18 @@ static void test_read_scope_denial(void) {
     PASS();
 }
 
-/* Test dynamic scope types beyond repo and blob */
+/* Test dynamic scope types beyond repo and blob. These grammars mirror
+ * bluesky-social/atproto's packages/oauth/oauth-scopes/src/scopes/ exactly
+ * (identity-permission.ts, etc.) -- see the reproduction cases in issue
+ * #24, which is what this
+ * whole block regression-tests. */
 static void test_dynamic_scopes(void) {
-    TEST("identity scope parse");
-    mb_scope_permission *perm = mb_scope_permission_parse("identity:update");
+    TEST("identity scope parse (real client grant: identity:handle)");
+    mb_scope_permission *perm = mb_scope_permission_parse("identity:handle");
     ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_IDENTITY,
-           "should parse identity:update");
-    ASSERT(strcmp(perm->u.identity.action, "update") == 0,
-           "action should be 'update'");
+           "should parse identity:handle");
+    ASSERT(strcmp(perm->u.identity.attr, "handle") == 0,
+           "attr should be 'handle'");
     mb_scope_permission_free(perm);
     PASS();
 
@@ -338,26 +344,87 @@ static void test_dynamic_scopes(void) {
     perm = mb_scope_permission_parse("identity:*");
     ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_IDENTITY,
            "should parse identity:*");
-    ASSERT(strcmp(perm->u.identity.action, "*") == 0, "action should be '*'");
+    ASSERT(strcmp(perm->u.identity.attr, "*") == 0, "attr should be '*'");
     mb_scope_permission_free(perm);
     PASS();
 
-    TEST("account scope parse");
-    perm = mb_scope_permission_parse("account:delete");
+    TEST("account scope parse (real client grant: "
+         "account:email?action=manage)");
+    perm = mb_scope_permission_parse("account:email?action=manage");
     ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_ACCOUNT,
-           "should parse account:delete");
-    ASSERT(strcmp(perm->u.account.action, "delete") == 0,
-           "action should be 'delete'");
+           "should parse account:email?action=manage");
+    ASSERT(strcmp(perm->u.account.attr, "email") == 0,
+           "attr should be 'email'");
+    ASSERT(perm->u.account.actions == MB_ACCOUNT_ACTION_MANAGE,
+           "actions should be MANAGE only");
     mb_scope_permission_free(perm);
     PASS();
 
-    TEST("rpc scope parse");
-    perm = mb_scope_permission_parse("rpc:com.atproto.repo.*");
-    ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_RPC,
-           "should parse rpc:com.atproto.repo.*");
-    ASSERT(strcmp(perm->u.rpc.nsid, "com.atproto.repo.*") == 0,
-           "nsid should match");
+    TEST("account scope with default action (read)");
+    perm = mb_scope_permission_parse("account:repo");
+    ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_ACCOUNT,
+           "should parse account:repo");
+    ASSERT(strcmp(perm->u.account.attr, "repo") == 0, "attr should be 'repo'");
+    ASSERT(perm->u.account.actions == MB_ACCOUNT_ACTION_READ,
+           "default action should be READ");
     mb_scope_permission_free(perm);
+    PASS();
+
+    TEST("rpc scope parse (real client grant: "
+         "rpc:<lxm>?aud=<aud>)");
+    perm = mb_scope_permission_parse(
+        "rpc:com.atproto.moderation.createReport?aud=did:web:mod.example.com");
+    ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_RPC,
+           "should parse rpc:...?aud=...");
+    ASSERT(perm->u.rpc.lxm_count == 1 &&
+               strcmp(perm->u.rpc.lxm[0],
+                      "com.atproto.moderation.createReport") == 0,
+           "lxm should match");
+    ASSERT(strcmp(perm->u.rpc.aud, "did:web:mod.example.com") == 0,
+           "aud should match");
+    mb_scope_permission_free(perm);
+    PASS();
+
+    TEST("rpc scope with wildcard lxm");
+    perm = mb_scope_permission_parse("rpc:*?aud=did:web:mod.example.com");
+    ASSERT(perm != NULL && perm->u.rpc.lxm_wildcard,
+           "should parse rpc:*?aud=... as a wildcard lxm grant");
+    mb_scope_permission_free(perm);
+    PASS();
+
+    TEST("rpc:*?aud=* is rejected as an unbounded blanket grant");
+    perm = mb_scope_permission_parse("rpc:*?aud=*");
+    ASSERT(perm == NULL, "rpc:*?aud=* must not parse");
+    PASS();
+
+    TEST("rpc scope without aud is rejected (aud is required)");
+    perm = mb_scope_permission_parse("rpc:com.example.query");
+    ASSERT(perm == NULL, "rpc: without ?aud= must not parse");
+    PASS();
+
+    TEST("blob scope parse (real client grant: blob:image/*)");
+    perm = mb_scope_permission_parse("blob:image/*");
+    ASSERT(perm != NULL && perm->type == MB_SCOPE_TYPE_BLOB,
+           "should parse blob:image/*");
+    ASSERT(perm->u.blob.accept_count == 1 &&
+               strcmp(perm->u.blob.accept[0], "image/*") == 0,
+           "accept should match");
+    mb_scope_permission_free(perm);
+    PASS();
+
+    TEST("blob scope with exact MIME type");
+    perm = mb_scope_permission_parse("blob:image/png");
+    ASSERT(perm != NULL && perm->u.blob.accept_count == 1 &&
+               strcmp(perm->u.blob.accept[0], "image/png") == 0,
+           "should parse blob:image/png");
+    mb_scope_permission_free(perm);
+    PASS();
+
+    TEST("blob scope rejects an NSID (wrong domain for blob:)");
+    perm = mb_scope_permission_parse("blob:com.example.foo");
+    ASSERT(perm == NULL,
+           "blob: must reject collection NSIDs -- it's a MIME pattern, not a "
+           "collection");
     PASS();
 
     TEST("include scope parse");
@@ -372,9 +439,139 @@ static void test_dynamic_scopes(void) {
     ASSERT(perm == NULL, "identity:invalid should not parse");
     PASS();
 
-    TEST("invalid account scope rejected");
+    TEST("invalid account attr rejected");
     perm = mb_scope_permission_parse("account:invalid");
     ASSERT(perm == NULL, "account:invalid should not parse");
+    PASS();
+
+    TEST("invalid account action rejected");
+    perm = mb_scope_permission_parse("account:email?action=delete");
+    ASSERT(perm == NULL, "account:email?action=delete should not parse -- "
+                         "'delete' is not a valid account action");
+    PASS();
+
+    TEST("old grammar identity:update no longer parses");
+    perm = mb_scope_permission_parse("identity:update");
+    ASSERT(perm == NULL,
+           "the pre-fix invented grammar must not silently keep working");
+    PASS();
+
+    TEST("old grammar account:delete no longer parses");
+    perm = mb_scope_permission_parse("account:delete");
+    ASSERT(perm == NULL,
+           "the pre-fix invented grammar must not silently keep working");
+    PASS();
+}
+
+/* Enforcement functions: mb_scope_set_allows_identity/_account/_blob/_rpc.
+ * These are what server.c's authenticate_request actually calls. */
+static void test_dynamic_scope_enforcement(void) {
+    TEST("identity:* satisfies any attr check");
+    mb_scope_set set;
+    mb_scope_set_parse("identity:*", &set);
+    ASSERT(mb_scope_set_allows_identity(&set, "handle"),
+           "identity:* should satisfy a handle check");
+    ASSERT(mb_scope_set_allows_identity(&set, "*"),
+           "identity:* should satisfy a wildcard check");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("identity:handle does not satisfy a wildcard check");
+    mb_scope_set_parse("identity:handle", &set);
+    ASSERT(mb_scope_set_allows_identity(&set, "handle"),
+           "identity:handle should satisfy a handle check");
+    ASSERT(!mb_scope_set_allows_identity(&set, "*"),
+           "identity:handle must not satisfy the broader '*' check "
+           "requestPlcOperationSignature/signPlcOperation make");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("account:email?action=manage satisfies both read and manage");
+    mb_scope_set_parse("account:email?action=manage", &set);
+    ASSERT(mb_scope_set_allows_account(&set, "email", MB_ACCOUNT_ACTION_READ),
+           "manage implies read");
+    ASSERT(mb_scope_set_allows_account(&set, "email", MB_ACCOUNT_ACTION_MANAGE),
+           "manage satisfies manage");
+    ASSERT(!mb_scope_set_allows_account(&set, "repo", MB_ACCOUNT_ACTION_READ),
+           "must not satisfy a different attr");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("account:repo (default read) does not satisfy manage");
+    mb_scope_set_parse("account:repo", &set);
+    ASSERT(mb_scope_set_allows_account(&set, "repo", MB_ACCOUNT_ACTION_READ),
+           "default read satisfies read");
+    ASSERT(!mb_scope_set_allows_account(&set, "repo", MB_ACCOUNT_ACTION_MANAGE),
+           "read alone must not satisfy manage -- importRepo needs manage");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("blob:image/* matches any image subtype, not other types");
+    mb_scope_set_parse("blob:image/*", &set);
+    ASSERT(mb_scope_set_allows_blob(&set, "image/png"),
+           "image/* should match image/png");
+    ASSERT(mb_scope_set_allows_blob(&set, "image/jpeg"),
+           "image/* should match image/jpeg");
+    ASSERT(!mb_scope_set_allows_blob(&set, "text/plain"),
+           "image/* must not match text/plain");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("blob:image/png matches only that exact type");
+    mb_scope_set_parse("blob:image/png", &set);
+    ASSERT(mb_scope_set_allows_blob(&set, "image/png"), "exact match");
+    ASSERT(!mb_scope_set_allows_blob(&set, "image/jpeg"),
+           "must not match a sibling subtype");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("rpc: matches lxm+aud together, not separately");
+    mb_scope_set_parse(
+        "rpc:com.atproto.moderation.createReport?aud=did:web:mod.example.com",
+        &set);
+    ASSERT(mb_scope_set_allows_rpc(&set, "com.atproto.moderation.createReport",
+                                   "did:web:mod.example.com"),
+           "exact lxm+aud match");
+    ASSERT(!mb_scope_set_allows_rpc(&set, "com.atproto.moderation.createReport",
+                                    "did:web:other.example.com"),
+           "must not match a different aud");
+    ASSERT(!mb_scope_set_allows_rpc(&set, "com.atproto.server.getServiceAuth",
+                                    "did:web:mod.example.com"),
+           "must not match a different lxm");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("rpc:*?aud=<aud> matches any lxm against that one audience");
+    mb_scope_set_parse("rpc:*?aud=did:web:mod.example.com", &set);
+    ASSERT(mb_scope_set_allows_rpc(&set, "com.atproto.server.getServiceAuth",
+                                   "did:web:mod.example.com"),
+           "wildcard lxm covers any method");
+    ASSERT(!mb_scope_set_allows_rpc(&set, "com.atproto.server.getServiceAuth",
+                                    "did:web:other.example.com"),
+           "aud is still exact");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("empty scope set denies every dynamic-scope check");
+    mb_scope_set_parse("", &set);
+    ASSERT(!mb_scope_set_allows_identity(&set, "handle"), "identity denied");
+    ASSERT(!mb_scope_set_allows_account(&set, "email", MB_ACCOUNT_ACTION_READ),
+           "account denied");
+    ASSERT(!mb_scope_set_allows_blob(&set, "image/png"), "blob denied");
+    ASSERT(!mb_scope_set_allows_rpc(&set, "com.example.query", "did:web:x"),
+           "rpc denied");
+    mb_scope_set_free(&set);
+    PASS();
+
+    TEST("full access (atproto) satisfies every dynamic-scope check");
+    mb_scope_set_parse("atproto", &set);
+    ASSERT(mb_scope_set_allows_identity(&set, "handle"), "identity allowed");
+    ASSERT(mb_scope_set_allows_account(&set, "email", MB_ACCOUNT_ACTION_MANAGE),
+           "account allowed");
+    ASSERT(mb_scope_set_allows_blob(&set, "image/png"), "blob allowed");
+    ASSERT(mb_scope_set_allows_rpc(&set, "com.example.query", "did:web:x"),
+           "rpc allowed");
+    mb_scope_set_free(&set);
     PASS();
 }
 
@@ -388,6 +585,7 @@ int main(void) {
     test_scope_matching();
     test_scope_normalization();
     test_dynamic_scopes();
+    test_dynamic_scope_enforcement();
     test_read_scope_denial();
 
     printf("\n");
