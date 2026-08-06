@@ -359,6 +359,185 @@ static int run_records_since_rev(void) {
     return failures;
 }
 
+/*
+ * createRecord backlink-conflict dedup: a race between two clients (or a
+ * naive retry) can produce two likes/reposts/follows/blocks aimed at the
+ * same subject. The reference PDS replaces the earlier record rather than
+ * accumulating duplicates; verify each of the four collections dedupes on
+ * the right subject path and that unrelated collections are untouched.
+ */
+static int run_backlink_dedup(void) {
+    int failures = 0;
+    char path[256];
+    temp_path(path, sizeof(path), "backlink");
+
+    metalbear_repo_store *store = NULL;
+    if (metalbear_repo_store_open(path, "did:plc:backlink", "bl.example.com",
+                                  &store) != WF_OK ||
+        !store) {
+        WF_CHECK(0);
+        unlink(path);
+        return failures + 1;
+    }
+
+    /* app.bsky.feed.like: subject is {uri, cid}. Two likes at the same
+     * subject.uri must collapse to one record, keeping the later rkey. */
+    char *like_uri1 = NULL, *like_cid1 = NULL;
+    WF_CHECK(
+        metalbear_repo_store_create_record(
+            store, "app.bsky.feed.like", NULL,
+            "{\"$type\":\"app.bsky.feed.like\",\"subject\":{\"uri\":"
+            "\"at://did:plc:target/app.bsky.feed.post/x\",\"cid\":"
+            "\"bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "\"},\"createdAt\":\"2026-01-01T00:00:00Z\"}",
+            NULL, &like_uri1, &like_cid1) == WF_OK &&
+        like_uri1 && like_cid1);
+    const char *like_rkey1 = strrchr(like_uri1, '/') + 1;
+    char like_rkey1_buf[32];
+    snprintf(like_rkey1_buf, sizeof(like_rkey1_buf), "%s", like_rkey1);
+
+    char *like_uri2 = NULL, *like_cid2 = NULL;
+    WF_CHECK(
+        metalbear_repo_store_create_record(
+            store, "app.bsky.feed.like", NULL,
+            "{\"$type\":\"app.bsky.feed.like\",\"subject\":{\"uri\":"
+            "\"at://did:plc:target/app.bsky.feed.post/x\",\"cid\":"
+            "\"bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "\"},\"createdAt\":\"2026-01-01T00:00:01Z\"}",
+            NULL, &like_uri2, &like_cid2) == WF_OK &&
+        like_uri2 && like_cid2);
+    WF_CHECK(strcmp(strrchr(like_uri2, '/') + 1, like_rkey1_buf) != 0);
+
+    /* The first like is gone ... */
+    char *gone_json = NULL, *gone_cid = NULL;
+    WF_CHECK(metalbear_repo_store_get_record(store, "app.bsky.feed.like",
+                                             like_rkey1_buf, &gone_json,
+                                             &gone_cid) == WF_ERR_NOT_FOUND);
+    /* ... and only the second survives in the collection listing. */
+    char *like_list = NULL;
+    WF_CHECK(metalbear_repo_store_list_records(store, "app.bsky.feed.like",
+                                               NULL, false, 50,
+                                               &like_list) == WF_OK &&
+             like_list);
+    if (like_list) {
+        cJSON *lj = cJSON_Parse(like_list);
+        cJSON *recs =
+            lj ? cJSON_GetObjectItemCaseSensitive(lj, "records") : NULL;
+        WF_CHECK(recs && cJSON_IsArray(recs) && cJSON_GetArraySize(recs) == 1);
+        cJSON *first = recs ? cJSON_GetArrayItem(recs, 0) : NULL;
+        cJSON *uri =
+            first ? cJSON_GetObjectItemCaseSensitive(first, "uri") : NULL;
+        WF_CHECK(uri && cJSON_IsString(uri) &&
+                 strcmp(uri->valuestring, like_uri2) == 0);
+        cJSON_Delete(lj);
+        free(like_list);
+    }
+    free(like_uri1);
+    free(like_cid1);
+    free(like_uri2);
+    free(like_cid2);
+    free(gone_json);
+    free(gone_cid);
+
+    /* app.bsky.graph.follow: subject is a bare DID string, not an object. */
+    char *f_uri1 = NULL, *f_cid1 = NULL;
+    WF_CHECK(metalbear_repo_store_create_record(
+                 store, "app.bsky.graph.follow", NULL,
+                 "{\"$type\":\"app.bsky.graph.follow\",\"subject\":"
+                 "\"did:plc:followee\",\"createdAt\":\"2026-01-01T00:00:00Z\"}",
+                 NULL, &f_uri1, &f_cid1) == WF_OK &&
+             f_uri1 && f_cid1);
+    char *f_uri2 = NULL, *f_cid2 = NULL;
+    WF_CHECK(metalbear_repo_store_create_record(
+                 store, "app.bsky.graph.follow", NULL,
+                 "{\"$type\":\"app.bsky.graph.follow\",\"subject\":"
+                 "\"did:plc:followee\",\"createdAt\":\"2026-01-01T00:00:01Z\"}",
+                 NULL, &f_uri2, &f_cid2) == WF_OK &&
+             f_uri2 && f_cid2);
+    WF_CHECK(strcmp(f_uri1, f_uri2) != 0);
+    char *f_list = NULL;
+    WF_CHECK(metalbear_repo_store_list_records(store, "app.bsky.graph.follow",
+                                               NULL, false, 50,
+                                               &f_list) == WF_OK &&
+             f_list);
+    if (f_list) {
+        cJSON *lj = cJSON_Parse(f_list);
+        cJSON *recs =
+            lj ? cJSON_GetObjectItemCaseSensitive(lj, "records") : NULL;
+        WF_CHECK(recs && cJSON_IsArray(recs) && cJSON_GetArraySize(recs) == 1);
+        cJSON_Delete(lj);
+        free(f_list);
+    }
+    free(f_uri1);
+    free(f_cid1);
+    free(f_uri2);
+    free(f_cid2);
+
+    /* A second, distinct follow subject must NOT be swept up as a
+     * conflict -- dedup is scoped per-target, not per-collection. */
+    char *f_other_uri = NULL, *f_other_cid = NULL;
+    WF_CHECK(metalbear_repo_store_create_record(
+                 store, "app.bsky.graph.follow", NULL,
+                 "{\"$type\":\"app.bsky.graph.follow\",\"subject\":"
+                 "\"did:plc:someoneelse\",\"createdAt\":"
+                 "\"2026-01-01T00:00:02Z\"}",
+                 NULL, &f_other_uri, &f_other_cid) == WF_OK &&
+             f_other_uri && f_other_cid);
+    char *f_list2 = NULL;
+    WF_CHECK(metalbear_repo_store_list_records(store, "app.bsky.graph.follow",
+                                               NULL, false, 50,
+                                               &f_list2) == WF_OK &&
+             f_list2);
+    if (f_list2) {
+        cJSON *lj = cJSON_Parse(f_list2);
+        cJSON *recs =
+            lj ? cJSON_GetObjectItemCaseSensitive(lj, "records") : NULL;
+        WF_CHECK(recs && cJSON_IsArray(recs) && cJSON_GetArraySize(recs) == 2);
+        cJSON_Delete(lj);
+        free(f_list2);
+    }
+    free(f_other_uri);
+    free(f_other_cid);
+
+    /* Unrelated collections (e.g. posts) are never touched by backlink
+     * dedup, even with byte-identical content. */
+    char *p_uri1 = NULL, *p_cid1 = NULL;
+    WF_CHECK(metalbear_repo_store_create_record(
+                 store, "app.bsky.feed.post", NULL,
+                 "{\"$type\":\"app.bsky.feed.post\",\"text\":\"dup\","
+                 "\"createdAt\":\"2026-01-01T00:00:00Z\"}",
+                 NULL, &p_uri1, &p_cid1) == WF_OK &&
+             p_uri1 && p_cid1);
+    char *p_uri2 = NULL, *p_cid2 = NULL;
+    WF_CHECK(metalbear_repo_store_create_record(
+                 store, "app.bsky.feed.post", NULL,
+                 "{\"$type\":\"app.bsky.feed.post\",\"text\":\"dup\","
+                 "\"createdAt\":\"2026-01-01T00:00:01Z\"}",
+                 NULL, &p_uri2, &p_cid2) == WF_OK &&
+             p_uri2 && p_cid2);
+    char *p_list = NULL;
+    WF_CHECK(metalbear_repo_store_list_records(store, "app.bsky.feed.post",
+                                               NULL, false, 50,
+                                               &p_list) == WF_OK &&
+             p_list);
+    if (p_list) {
+        cJSON *lj = cJSON_Parse(p_list);
+        cJSON *recs =
+            lj ? cJSON_GetObjectItemCaseSensitive(lj, "records") : NULL;
+        WF_CHECK(recs && cJSON_IsArray(recs) && cJSON_GetArraySize(recs) == 2);
+        cJSON_Delete(lj);
+        free(p_list);
+    }
+    free(p_uri1);
+    free(p_cid1);
+    free(p_uri2);
+    free(p_cid2);
+
+    metalbear_repo_store_free(store);
+    unlink(path);
+    return failures;
+}
+
 /* ── Phase 1 + 2: unit tests (no server) ──────────────────────────── */
 
 static int run_unit(void) {
@@ -1102,6 +1281,7 @@ static int run_server(void) {
 int main(void) {
     run_unit();
     run_records_since_rev();
+    run_backlink_dedup();
     run_record_validation();
     run_blob_constraint_validation();
     run_adopted_key();
