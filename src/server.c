@@ -445,6 +445,31 @@ static bool full_access_route(const char *nsid) {
            strcmp(nsid, "com.atproto.repo.importRepo") == 0;
 }
 
+/*
+ * Routes a METALBEAR_ACCESS_TAKENDOWN session may reach despite the
+ * account_is_taken_down gate below rejecting every other route -- the exact
+ * set the reference lists via `additional: [AuthScope.Takendown]` on
+ * deactivateAccount.ts, getRepo.ts, getBlob.ts, listBlobs.ts,
+ * createReport.ts, getServiceAuth.ts, requestPlcOperationSignature.ts,
+ * signPlcOperation.ts, and app/bsky/actor/getPreferences.ts, restricted to
+ * the NSIDs MetalBear actually implements. Lets a taken-down holder export
+ * their repo/blobs, sign a PLC op to migrate away, mint a service-auth
+ * token, appeal via a report, or finalize deactivation -- nothing that
+ * reads or writes through the normal repo-record surface.
+ */
+static bool takendown_route_allowed(const char *nsid) {
+    return strcmp(nsid, "com.atproto.server.deactivateAccount") == 0 ||
+           strcmp(nsid, "com.atproto.sync.getRepo") == 0 ||
+           strcmp(nsid, "com.atproto.sync.getBlob") == 0 ||
+           strcmp(nsid, "com.atproto.sync.listBlobs") == 0 ||
+           strcmp(nsid, "com.atproto.moderation.createReport") == 0 ||
+           strcmp(nsid, "com.atproto.server.getServiceAuth") == 0 ||
+           strcmp(nsid, "com.atproto.identity.requestPlcOperationSignature") ==
+               0 ||
+           strcmp(nsid, "com.atproto.identity.signPlcOperation") == 0 ||
+           strcmp(nsid, "app.bsky.actor.getPreferences") == 0;
+}
+
 static wf_status authenticate_request(wf_xrpc_request *req, void *ctx);
 
 /*
@@ -502,6 +527,40 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
                 if (acct && !metalbear_account_is_active(acct->account) &&
                     !account_is_taken_down(server, acct->did))
                     return WF_ERR_CONFLICT;
+            }
+        }
+        /*
+         * getRepo/getBlob/listBlobs are public so any relay can sync any
+         * repo, but that leaves the taken-down account's own holder unable
+         * to export their own data through the bearer-token path below,
+         * which this NSID never reaches. Verify an offered token against
+         * the *named* account's own store (never the caller's) and, only
+         * when it is genuinely that account's METALBEAR_ACCESS_TAKENDOWN
+         * session, set authed_subject so assert_repo_available's
+         * self-access exception applies. Anyone else -- no token, someone
+         * else's token, a token for a different scope -- falls through to
+         * the anonymous path and the handler's ordinary RepoTakendown.
+         */
+        if (strcmp(req->nsid, "com.atproto.sync.getRepo") == 0 ||
+            strcmp(req->nsid, "com.atproto.sync.getBlob") == 0 ||
+            strcmp(req->nsid, "com.atproto.sync.listBlobs") == 0) {
+            const cJSON *did =
+                req->params
+                    ? cJSON_GetObjectItemCaseSensitive(req->params, "did")
+                    : NULL;
+            const char *provided = bearer_token(req->auth_header);
+            if (cJSON_IsString(did) && provided) {
+                metalbear_account_context *acct =
+                    context_for_did(server, did->valuestring);
+                if (acct && account_is_taken_down(server, acct->did)) {
+                    metalbear_access_scope tk_scope = METALBEAR_ACCESS_FULL;
+                    if (metalbear_auth_verify_access_scope(
+                            acct->auth, provided, &tk_scope) == WF_OK &&
+                        tk_scope == METALBEAR_ACCESS_TAKENDOWN) {
+                        req->authed_subject = strdup(acct->did);
+                        req->authed_principal_kind = WF_XRPC_PRINCIPAL_USER;
+                    }
+                }
             }
         }
         return WF_OK;
@@ -683,7 +742,11 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
             return verify_status;
         }
         if (!refresh_route && full_access_route(req->nsid) &&
-            scope != METALBEAR_ACCESS_FULL) {
+            scope != METALBEAR_ACCESS_FULL &&
+            /* deactivateAccount alone also takes a takendown-scoped
+             * session -- see takendown_route_allowed. */
+            !(scope == METALBEAR_ACCESS_TAKENDOWN &&
+              strcmp(req->nsid, "com.atproto.server.deactivateAccount") == 0)) {
             LOG_WARN(
                 "authenticate: insufficient scope for did=%s nsid=%s scope=%d",
                 sub, req->nsid ? req->nsid : "-", scope);
@@ -702,17 +765,23 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
     }
 
     /*
-     * A takedown admits none of the exceptions a deactivation does: the
+     * A takedown admits far fewer exceptions than a deactivation: most
      * routes a deactivated account may still reach exist so its holder can
-     * reactivate or export, and a taken-down account reactivating itself
-     * would undo the moderation action. Sessions are revoked when the
-     * takedown is applied, but a token minted before it must not outlive it.
+     * reactivate, but a taken-down account reactivating itself would undo
+     * the moderation action. Sessions are revoked when the takedown is
+     * applied, but a token minted before it must not outlive it -- unless
+     * it already carries the narrow METALBEAR_ACCESS_TAKENDOWN scope
+     * createSession's `allowTakendown` issues, in which case
+     * takendown_route_allowed decides route by route (export, migrate-away,
+     * appeal; never normal repo access).
      *
      * The refresh pair is left to its handlers, which answer with the
      * lexicon's `AccountTakedown` rather than a bare authentication failure —
      * the difference a client needs to stop retrying and tell its user why.
      */
-    if (account_is_taken_down(server, sub)) {
+    if (account_is_taken_down(server, sub) &&
+        (scope != METALBEAR_ACCESS_TAKENDOWN ||
+         !takendown_route_allowed(req->nsid))) {
         LOG_WARN("authenticate: taken-down account did=%s nsid=%s", sub,
                  req->nsid ? req->nsid : "-");
         free(sub);

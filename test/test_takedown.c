@@ -475,6 +475,60 @@ int main(void) {
         wf_response_free(&response);
     }
 
+    /* `allowTakendown` opts into a session instead of the outright refusal --
+     * narrowly scoped (METALBEAR_ACCESS_TAKENDOWN), not a normal login. */
+    char *mallory_takendown_access = NULL;
+    char *mallory_takendown_refresh = NULL;
+    {
+        const char *body = "{\"identifier\":\"mallory.example.com\","
+                           "\"password\":\"mallorysecret\","
+                           "\"allowTakendown\":true}";
+        wf_xrpc_procedure(client, "com.atproto.server.createSession", body,
+                          &response);
+        CHECK(response.status == 200);
+        cJSON *json = json_response(&response);
+        cJSON *status = cJSON_GetObjectItemCaseSensitive(json, "status");
+        CHECK(cJSON_IsString(status) &&
+              strcmp(status->valuestring, "takendown") == 0);
+        cJSON *access = cJSON_GetObjectItemCaseSensitive(json, "accessJwt");
+        cJSON *refresh = cJSON_GetObjectItemCaseSensitive(json, "refreshJwt");
+        if (cJSON_IsString(access))
+            mallory_takendown_access = strdup(access->valuestring);
+        if (cJSON_IsString(refresh))
+            mallory_takendown_refresh = strdup(refresh->valuestring);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+    CHECK(mallory_takendown_access != NULL);
+    CHECK(mallory_takendown_refresh != NULL);
+
+    /* The takendown session may export its own repo (data portability)... */
+    wf_xrpc_client_set_auth(client, mallory_takendown_access);
+    {
+        wf_xrpc_param params[] = {{"did", mallory_did}};
+        wf_xrpc_query_params(client, "com.atproto.sync.getRepo", params, 1,
+                             &response);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+    }
+    /* ...but nothing else: getRecord isn't in the takendown allowlist, so it
+     * falls back to the same anonymous RepoTakendown every other caller
+     * gets, and getSession stays refused outright. */
+    CHECK(get_record(client, mallory_did, "keep") == 400);
+    wf_xrpc_query(client, "com.atproto.server.getSession", NULL, &response);
+    CHECK(response.status == 401);
+    wf_response_free(&response);
+    /* Its refresh token is minted but never persisted, so refreshing it fails
+     * closed exactly like any other route this scope cannot reach. */
+    wf_xrpc_client_set_auth(client, mallory_takendown_refresh);
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.refreshSession", "{}",
+                            &response) == WF_ERR_HTTP);
+    CHECK(response.status == 401);
+    wf_response_free(&response);
+    wf_xrpc_client_set_auth(client, NULL);
+    free(mallory_takendown_access);
+    free(mallory_takendown_refresh);
+
     /* The untouched account is entirely unaffected. */
     {
         wf_xrpc_param params[] = {{"did", victim_did}};

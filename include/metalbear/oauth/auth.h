@@ -15,6 +15,12 @@ typedef enum metalbear_access_scope {
     METALBEAR_ACCESS_FULL = 0,
     METALBEAR_ACCESS_APP_PASSWORD,
     METALBEAR_ACCESS_APP_PASSWORD_PRIVILEGED,
+    /* Issued by createSession's `allowTakendown` instead of refusing a
+     * taken-down account outright. Narrower than every other tier: gates
+     * only the handful of routes a taken-down holder needs to appeal or
+     * migrate away (see takendown_route_allowed in server.c), matching the
+     * reference's AuthScope.Takendown. */
+    METALBEAR_ACCESS_TAKENDOWN,
 } metalbear_access_scope;
 
 typedef struct metalbear_session_tokens {
