@@ -669,88 +669,224 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
             mb_scope_set scope_set;
             if (mb_scope_set_parse(oauth_scope_str, &scope_set) == WF_OK) {
                 if (!mb_scope_set_is_full_access(&scope_set)) {
-                    /* Determine the collection and action from the request */
                     const char *nsid = req->nsid ? req->nsid : "";
-                    mb_repo_action action = MB_REPO_ACTION_NONE;
-                    const char *collection = NULL;
-                    cJSON *coll_param = NULL;
 
-                    if (strcmp(nsid, "com.atproto.repo.createRecord") == 0) {
-                        action = MB_REPO_ACTION_CREATE;
-                        coll_param = req->params
-                                         ? cJSON_GetObjectItemCaseSensitive(
-                                               req->params, "collection")
-                                         : NULL;
-                    } else if (strcmp(nsid, "com.atproto.repo.putRecord") ==
-                               0) {
-                        action = MB_REPO_ACTION_UPDATE;
-                        coll_param = req->params
-                                         ? cJSON_GetObjectItemCaseSensitive(
-                                               req->params, "collection")
-                                         : NULL;
-                    } else if (strcmp(nsid, "com.atproto.repo.deleteRecord") ==
-                               0) {
-                        action = MB_REPO_ACTION_DELETE;
-                        coll_param = req->params
-                                         ? cJSON_GetObjectItemCaseSensitive(
-                                               req->params, "collection")
-                                         : NULL;
-                    }
+                    /* Non-repo dynamic scopes (blob:/account:/identity:/rpc:)
+                     * each gate exactly one XRPC method, matching the
+                     * reference's per-route `assertBlob`/`assertAccount`/
+                     * `assertIdentity`/`assertRpc` calls. A route handled
+                     * here is fully decided by this block; it must not also
+                     * fall into the repo/read fallback below (whose
+                     * collection lookup would find nothing for these NSIDs
+                     * and deny unconditionally). */
+                    bool scope_checked = false;
 
-                    collection = cJSON_IsString(coll_param)
-                                     ? coll_param->valuestring
-                                     : NULL;
-
-                    /* A collection may also arrive on a read that isn't one
-                     * of the three write NSIDs above (e.g. a future or
-                     * currently-public route reached with an OAuth token).
-                     * Recover it generically so a matching repo scope is
-                     * honored for those too, rather than only for writes. */
-                    if (action == MB_REPO_ACTION_NONE && !collection) {
-                        cJSON *generic_coll =
-                            req->params ? cJSON_GetObjectItemCaseSensitive(
-                                              req->params, "collection")
-                                        : NULL;
-                        collection = cJSON_IsString(generic_coll)
-                                         ? generic_coll->valuestring
-                                         : NULL;
-                    }
-
-                    if (action != MB_REPO_ACTION_NONE && collection) {
-                        if (!mb_scope_set_allows_repo(&scope_set, collection,
-                                                      action)) {
-                            LOG_WARN("authenticate: OAuth scope denied "
-                                     "did=%s nsid=%s collection=%s action=%d",
-                                     sub, nsid, collection, action);
+                    if (strcmp(nsid, "com.atproto.repo.uploadBlob") == 0) {
+                        scope_checked = true;
+                        const char *mime =
+                            req->content_type && req->content_type[0]
+                                ? req->content_type
+                                : "application/octet-stream";
+                        if (!mb_scope_set_allows_blob(&scope_set, mime)) {
+                            LOG_WARN("authenticate: OAuth scope denied blob "
+                                     "did=%s mime=%s",
+                                     sub, mime);
                             mb_scope_set_free(&scope_set);
                             free(oauth_scope_str);
                             free(sub);
                             return WF_ERR_PERMISSION;
                         }
-                    } else if (action == MB_REPO_ACTION_NONE) {
-                        /* Read or non-repo operation reaching this point
-                         * without full ("atproto") access. A narrowly
-                         * scoped OAuth grant must be limited to exactly the
-                         * reads its scope implies: a matching repo scope for
-                         * the request's collection, nothing broader. The AT
-                         * Protocol OAuth spec requires every authorization
-                         * request to include "atproto"
-                         * (https://atproto.com/specs/oauth), so a grant that
-                         * omits it and also carries no collection-scoped
-                         * repo permission has no basis to read anything
-                         * through this path -- deny outright rather than
-                         * falling back to an implicit allow, which is what
-                         * let any non-empty, non-full scope set reach every
-                         * authenticated read regardless of what it actually
-                         * named. */
-                        if (!mb_scope_set_allows_read(&scope_set, collection)) {
-                            LOG_WARN("authenticate: OAuth scope denied read "
-                                     "did=%s nsid=%s collection=%s",
-                                     sub, nsid, collection ? collection : "-");
+                    } else if (strcmp(nsid, "com.atproto.repo.importRepo") ==
+                               0) {
+                        scope_checked = true;
+                        if (!mb_scope_set_allows_account(
+                                &scope_set, "repo", MB_ACCOUNT_ACTION_MANAGE)) {
+                            LOG_WARN("authenticate: OAuth scope denied "
+                                     "importRepo did=%s",
+                                     sub);
                             mb_scope_set_free(&scope_set);
                             free(oauth_scope_str);
                             free(sub);
                             return WF_ERR_PERMISSION;
+                        }
+                    } else if (strcmp(nsid,
+                                      "com.atproto.identity."
+                                      "requestPlcOperationSignature") == 0 ||
+                               strcmp(nsid, "com.atproto.identity."
+                                            "signPlcOperation") == 0) {
+                        scope_checked = true;
+                        if (!mb_scope_set_allows_identity(&scope_set, "*")) {
+                            LOG_WARN("authenticate: OAuth scope denied "
+                                     "identity did=%s nsid=%s",
+                                     sub, nsid);
+                            mb_scope_set_free(&scope_set);
+                            free(oauth_scope_str);
+                            free(sub);
+                            return WF_ERR_PERMISSION;
+                        }
+                    } else if (strcmp(nsid,
+                                      "com.atproto.identity.updateHandle") ==
+                               0) {
+                        scope_checked = true;
+                        if (!mb_scope_set_allows_identity(&scope_set,
+                                                          "handle")) {
+                            LOG_WARN("authenticate: OAuth scope denied "
+                                     "updateHandle did=%s",
+                                     sub);
+                            mb_scope_set_free(&scope_set);
+                            free(oauth_scope_str);
+                            free(sub);
+                            return WF_ERR_PERMISSION;
+                        }
+                    } else if (strcmp(nsid,
+                                      "com.atproto.server.getServiceAuth") ==
+                               0) {
+                        scope_checked = true;
+                        cJSON *aud_param =
+                            req->params ? cJSON_GetObjectItemCaseSensitive(
+                                              req->params, "aud")
+                                        : NULL;
+                        cJSON *lxm_param =
+                            req->params ? cJSON_GetObjectItemCaseSensitive(
+                                              req->params, "lxm")
+                                        : NULL;
+                        const char *aud = cJSON_IsString(aud_param)
+                                              ? aud_param->valuestring
+                                              : NULL;
+                        /* Matches getServiceAuth.ts: `const { aud, lxm = '*'
+                         * } = params`. */
+                        const char *lxm = (cJSON_IsString(lxm_param) &&
+                                           lxm_param->valuestring[0])
+                                              ? lxm_param->valuestring
+                                              : "*";
+                        if (!aud ||
+                            !mb_scope_set_allows_rpc(&scope_set, lxm, aud)) {
+                            LOG_WARN("authenticate: OAuth scope denied "
+                                     "getServiceAuth did=%s lxm=%s",
+                                     sub, lxm);
+                            mb_scope_set_free(&scope_set);
+                            free(oauth_scope_str);
+                            free(sub);
+                            return WF_ERR_PERMISSION;
+                        }
+                    } else if (strcmp(nsid,
+                                      "com.atproto.moderation.createReport") ==
+                               0) {
+                        scope_checked = true;
+                        /* MetalBear handles createReport itself rather than
+                         * proxying to a configured external moderation
+                         * service (no such config exists), so the audience
+                         * is this server's own PDS service id -- the same
+                         * self-referential shape a proxied deployment's
+                         * `did#serviceId` audience takes, just naming this
+                         * server instead of a separate labeler. */
+                        char aud_buf[320];
+                        snprintf(aud_buf, sizeof(aud_buf), "%s#atproto_pds",
+                                 server->service_did ? server->service_did
+                                                     : "");
+                        if (!mb_scope_set_allows_rpc(&scope_set, nsid,
+                                                     aud_buf)) {
+                            LOG_WARN("authenticate: OAuth scope denied "
+                                     "createReport did=%s",
+                                     sub);
+                            mb_scope_set_free(&scope_set);
+                            free(oauth_scope_str);
+                            free(sub);
+                            return WF_ERR_PERMISSION;
+                        }
+                    }
+
+                    if (!scope_checked) {
+                        /* Determine the collection and action from the
+                         * request */
+                        mb_repo_action action = MB_REPO_ACTION_NONE;
+                        const char *collection = NULL;
+                        cJSON *coll_param = NULL;
+
+                        if (strcmp(nsid, "com.atproto.repo.createRecord") ==
+                            0) {
+                            action = MB_REPO_ACTION_CREATE;
+                            coll_param = req->params
+                                             ? cJSON_GetObjectItemCaseSensitive(
+                                                   req->params, "collection")
+                                             : NULL;
+                        } else if (strcmp(nsid, "com.atproto.repo.putRecord") ==
+                                   0) {
+                            action = MB_REPO_ACTION_UPDATE;
+                            coll_param = req->params
+                                             ? cJSON_GetObjectItemCaseSensitive(
+                                                   req->params, "collection")
+                                             : NULL;
+                        } else if (strcmp(nsid,
+                                          "com.atproto.repo.deleteRecord") ==
+                                   0) {
+                            action = MB_REPO_ACTION_DELETE;
+                            coll_param = req->params
+                                             ? cJSON_GetObjectItemCaseSensitive(
+                                                   req->params, "collection")
+                                             : NULL;
+                        }
+
+                        collection = cJSON_IsString(coll_param)
+                                         ? coll_param->valuestring
+                                         : NULL;
+
+                        /* A collection may also arrive on a read that isn't
+                         * one of the three write NSIDs above (e.g. a future
+                         * or currently-public route reached with an OAuth
+                         * token). Recover it generically so a matching repo
+                         * scope is honored for those too, rather than only
+                         * for writes. */
+                        if (action == MB_REPO_ACTION_NONE && !collection) {
+                            cJSON *generic_coll =
+                                req->params ? cJSON_GetObjectItemCaseSensitive(
+                                                  req->params, "collection")
+                                            : NULL;
+                            collection = cJSON_IsString(generic_coll)
+                                             ? generic_coll->valuestring
+                                             : NULL;
+                        }
+
+                        if (action != MB_REPO_ACTION_NONE && collection) {
+                            if (!mb_scope_set_allows_repo(&scope_set,
+                                                          collection, action)) {
+                                LOG_WARN(
+                                    "authenticate: OAuth scope denied "
+                                    "did=%s nsid=%s collection=%s action=%d",
+                                    sub, nsid, collection, action);
+                                mb_scope_set_free(&scope_set);
+                                free(oauth_scope_str);
+                                free(sub);
+                                return WF_ERR_PERMISSION;
+                            }
+                        } else if (action == MB_REPO_ACTION_NONE) {
+                            /* Read or non-repo operation reaching this point
+                             * without full ("atproto") access. A narrowly
+                             * scoped OAuth grant must be limited to exactly
+                             * the reads its scope implies: a matching repo
+                             * scope for the request's collection, nothing
+                             * broader. The AT Protocol OAuth spec requires
+                             * every authorization request to include
+                             * "atproto" (https://atproto.com/specs/oauth),
+                             * so a grant that omits it and also carries no
+                             * collection-scoped repo permission has no basis
+                             * to read anything through this path -- deny
+                             * outright rather than falling back to an
+                             * implicit allow, which is what let any
+                             * non-empty, non-full scope set reach every
+                             * authenticated read regardless of what it
+                             * actually named. */
+                            if (!mb_scope_set_allows_read(&scope_set,
+                                                          collection)) {
+                                LOG_WARN(
+                                    "authenticate: OAuth scope denied read "
+                                    "did=%s nsid=%s collection=%s",
+                                    sub, nsid, collection ? collection : "-");
+                                mb_scope_set_free(&scope_set);
+                                free(oauth_scope_str);
+                                free(sub);
+                                return WF_ERR_PERMISSION;
+                            }
                         }
                     }
                 }
