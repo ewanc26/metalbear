@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "metalbear/sequencer.h"
-#include "metalbear/metrics.h"
+#include "metalbear/ops/metrics.h"
 
 #include "wolfram/sync_publish.h"
 

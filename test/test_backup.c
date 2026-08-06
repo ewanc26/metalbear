@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "metalbear/backup.h"
+#include "metalbear/repo/backup.h"
 #include "metalbear/email.h"
 #include "metalbear/sequencer.h"
 

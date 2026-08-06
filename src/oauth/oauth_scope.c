@@ -4,7 +4,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 
-#include "metalbear/oauth_scope.h"
+#include "metalbear/oauth/oauth_scope.h"
 #include "metalbear/log.h"
 #include "wolfram/xrpc.h"
 

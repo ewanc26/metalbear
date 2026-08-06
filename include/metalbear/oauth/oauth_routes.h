@@ -1,7 +1,7 @@
 #ifndef METALBEAR_OAUTH_ROUTES_H
 #define METALBEAR_OAUTH_ROUTES_H
 
-#include "metalbear/oauth.h"
+#include "metalbear/oauth/oauth.h"
 #include "wolfram/xrpc_server.h"
 
 #ifdef __cplusplus

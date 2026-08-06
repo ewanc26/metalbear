@@ -25,8 +25,8 @@
 
 #define _POSIX_C_SOURCE 200809L
 
-#include "metalbear/repo_store.h"
-#include "metalbear/blob_store.h"
+#include "metalbear/repo/repo_store.h"
+#include "metalbear/repo/blob_store.h"
 #include "wolfram/xrpc.h"
 #include "wolfram/xrpc_server.h"
 #include "wolfram/repo/cid.h"

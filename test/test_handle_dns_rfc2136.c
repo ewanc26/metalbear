@@ -13,8 +13,8 @@
  * that makes every update fail against a real server while the suite is green.
  */
 
-#include "metalbear/handle_dns.h"
-#include "metalbear/handle_dns_rfc2136.h"
+#include "metalbear/dns/handle_dns.h"
+#include "metalbear/dns/handle_dns_rfc2136.h"
 
 #include <openssl/hmac.h>
 #include <netinet/in.h>
