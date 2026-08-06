@@ -256,6 +256,48 @@ export async function createSession(
 	});
 }
 
+/*
+ * Establish an OAuth device session: a browser-held cookie proving this
+ * browser has presented this account's password, separate from (and not a
+ * side effect of) the regular createSession JWT above. `GET /oauth/authorize`
+ * checks this cookie, not the JWT, before it will mint an authorization code
+ * -- a plain top-level page navigation with no Authorization header to carry
+ * a bearer token, which is exactly what a bearer token is everywhere else.
+ * Any page that signs a user in as part of approving an OAuth request must
+ * call this too, or the "Approve" step has nothing to check and the flow
+ * cannot complete.
+ */
+export async function signInDevice(identifier: string, password: string): Promise<{ did: string }> {
+	const res = await fetch(new URL('/oauth/signin', window.location.origin), {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', accept: 'application/json' },
+		body: JSON.stringify({ identifier, password })
+	});
+	if (!res.ok) {
+		const body = (await res.json().catch(() => null)) as { message?: string } | null;
+		throw new Error(body?.message ?? `oauth/signin: ${res.status}`);
+	}
+	return res.json() as Promise<{ did: string }>;
+}
+
+/*
+ * Whether this browser currently holds a valid OAuth device session (see
+ * signInDevice) -- read-only, no side effects. The consent page uses this to
+ * send a user to sign in *before* rendering a consent screen it cannot
+ * actually finish, rather than after: a regular JWT session (the `auth`
+ * store) is not proof of a device session on its own.
+ */
+export async function hasDeviceSession(): Promise<boolean> {
+	try {
+		const res = await fetch(new URL('/oauth/session', window.location.origin), {
+			headers: { accept: 'application/json' }
+		});
+		return res.ok;
+	} catch {
+		return false;
+	}
+}
+
 export async function getSession(): Promise<SessionResponse> {
 	const session = currentSession();
 	if (!session) throw new Error('Not authenticated');
