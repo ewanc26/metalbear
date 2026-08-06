@@ -442,7 +442,17 @@ static bool full_access_route(const char *nsid) {
             * requiring full (non-app-password) access is the closest
             * faithful match with the scope categories this codebase
             * actually has. */
-           strcmp(nsid, "com.atproto.repo.importRepo") == 0;
+           strcmp(nsid, "com.atproto.repo.importRepo") == 0 ||
+           /* requestPlcOperationSignature/signPlcOperation both register
+            * with `scopes: ACCESS_FULL` in the reference (identity.ts) --
+            * an app password, privileged or not, must never be able to
+            * trigger a PLC identity operation (rotating signing/recovery
+            * keys, alsoKnownAs, services). Both also separately admit
+            * METALBEAR_ACCESS_TAKENDOWN via the exception below, matching
+            * their `additional: [AuthScope.Takendown]`. */
+           strcmp(nsid, "com.atproto.identity.requestPlcOperationSignature") ==
+               0 ||
+           strcmp(nsid, "com.atproto.identity.signPlcOperation") == 0;
 }
 
 /*
@@ -743,10 +753,12 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
         }
         if (!refresh_route && full_access_route(req->nsid) &&
             scope != METALBEAR_ACCESS_FULL &&
-            /* deactivateAccount alone also takes a takendown-scoped
-             * session -- see takendown_route_allowed. */
+            /* deactivateAccount, requestPlcOperationSignature, and
+             * signPlcOperation each also take a takendown-scoped session --
+             * see takendown_route_allowed, which lists exactly these plus
+             * the routes that aren't full_access_route entries at all. */
             !(scope == METALBEAR_ACCESS_TAKENDOWN &&
-              strcmp(req->nsid, "com.atproto.server.deactivateAccount") == 0)) {
+              takendown_route_allowed(req->nsid))) {
             LOG_WARN(
                 "authenticate: insufficient scope for did=%s nsid=%s scope=%d",
                 sub, req->nsid ? req->nsid : "-", scope);
