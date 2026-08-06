@@ -43,26 +43,26 @@ target_compile_options(cjson PRIVATE -Wno-keyword-macro)
 
 add_library(
   metalbear_core
-  src/metrics.c
-  src/handle_dns.c
-  src/handle_dns_rfc2136.c
+  src/ops/metrics.c
+  src/dns/handle_dns.c
+  src/dns/handle_dns_rfc2136.c
   cpp/metalbear/account_registry.cpp
-  src/account_context.c
-  src/account_cache.c
-  src/auth.c
-  src/backup.c
+  src/account/account_context.c
+  src/account/account_cache.c
+  src/oauth/auth.c
+  src/repo/backup.c
   src/email.c
-  src/oauth.c
-  src/oauth_routes.c
-  src/oauth_scope.c
+  src/oauth/oauth.c
+  src/oauth/oauth_routes.c
+  src/oauth/oauth_scope.c
   cpp/metalbear/key_rotation.cpp
-  src/repo_store.c
+  src/repo/repo_store.c
   src/sequencer.c
   src/server.c
-  src/report.c
-  src/blob_store.c
-  src/blob_store_server.c
-  src/update_watcher.c
+  src/moderation/report.c
+  src/repo/blob_store.c
+  src/repo/blob_store_server.c
+  src/ops/update_watcher.c
   cpp/metalbear/config_file.cpp
   cpp/metalbear/log.cpp
   cpp/metalbear/account.cpp)
