@@ -578,6 +578,26 @@ int main(void) {
     CHECK(response.status == 401);
     wf_response_free(&response);
 
+    /* Matches the reference's OLD_PASSWORD_MAX_LENGTH (512) check: an
+     * implausibly long password is rejected before it is ever hashed. */
+    {
+        char long_password_body[700];
+        char *p = long_password_body;
+        p +=
+            sprintf(p, "{\"identifier\":\"alice.example.com\",\"password\":\"");
+        for (int i = 0; i < 513; i++) *p++ = 'a';
+        strcpy(p, "\"}");
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.createSession",
+                                long_password_body, &response) == WF_ERR_HTTP);
+        CHECK(response.status == 401);
+        cJSON *long_pw_json = json_response(&response);
+        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(long_pw_json, "error")
+                         ->valuestring,
+                     "AuthenticationRequired") == 0);
+        cJSON_Delete(long_pw_json);
+        wf_response_free(&response);
+    }
+
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createSession",
                             "{\"identifier\":\"alice.example.com\","
                             "\"password\":\"correct horse battery staple\"}",
