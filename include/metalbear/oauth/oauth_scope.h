@@ -4,16 +4,34 @@
  * Supports both static and dynamic scopes:
  *   - Static: "atproto", "transition:email", "transition:generic",
  * "transition:chat.bsky"
- *   - Dynamic: "repo:<collection>?action=<action>", "blob:*", etc.
+ *   - Dynamic: "repo:<collection>?action=<action>", "blob:<mime>",
+ *     "identity:<attr>", "account:<attr>?action=<action>",
+ * "rpc:<lxm>?aud=<aud>"
  *
- * Scope format (repo):
- *   repo:com.example.foo                    — all actions on specific
- * collection repo:com.example.foo?action=create      — only create on specific
- * collection repo:*?action=create&action=update      — create/update on all
- * collections
+ * Grammar mirrors bluesky-social/atproto's
+ * packages/oauth/oauth-scopes/src/scopes/ (identity-permission.ts, etc.)
+ * exactly (positional param before '?', named params after):
  *
- * Actions: create, update, delete
- * Default actions: all three if not specified
+ *   repo:com.example.foo                    — all actions on one collection
+ *   repo:com.example.foo?action=create      — only create on one collection
+ *   repo:*?action=create&action=update      — create/update on all collections
+ *   blob:image/png                          — one exact MIME type
+ *   blob:image/<wildcard>                    — MIME wildcard by top-level type
+ *   blob:<wildcard>/<wildcard>               — any MIME type
+ *   identity:handle                         — only the handle attribute
+ *   identity:*                              — any identity attribute
+ *   account:email?action=manage             — manage the email attribute
+ *   account:repo                            — read (default action) the repo
+ *                                              attribute
+ *   rpc:com.example.query?aud=did:web:x     — one lxm against one audience
+ *   rpc:*?aud=did:web:x                     — any lxm against one audience
+ *
+ * repo actions: create, update, delete (default: all three)
+ * account attrs: email, repo, status; actions: read, manage (default: read;
+ *   manage implies read)
+ * identity attrs: handle, * (default: none — always explicit)
+ * rpc: "*" for lxm or aud alone is allowed, but "rpc:*?aud=*" (both wildcard)
+ *   is rejected as an unbounded blanket grant, matching the reference.
  */
 
 #ifndef METALBEAR_OAUTH_SCOPE_H
@@ -53,6 +71,15 @@ typedef enum mb_repo_action {
         MB_REPO_ACTION_CREATE | MB_REPO_ACTION_UPDATE | MB_REPO_ACTION_DELETE,
 } mb_repo_action;
 
+/* account: action flags. MANAGE implies READ (mb_scope_set_allows_account
+ * treats a grant carrying MANAGE as satisfying a READ check too), matching
+ * the reference's `action.includes('manage') || action.includes(action)`. */
+typedef enum mb_account_action {
+    MB_ACCOUNT_ACTION_NONE = 0,
+    MB_ACCOUNT_ACTION_READ = 1 << 0,
+    MB_ACCOUNT_ACTION_MANAGE = 1 << 1,
+} mb_account_action;
+
 /* Parsed scope permission */
 typedef struct mb_scope_permission {
     mb_scope_type type;
@@ -65,16 +92,22 @@ typedef struct mb_scope_permission {
             mb_repo_action actions;
         } repo;
         struct {
-            char *collection; /* NSID or "*" for blob permissions */
+            char **accept; /* MIME patterns: "image/png", "image/wildcard",
+                             "wildcard/wildcard" */
+            size_t accept_count;
         } blob;
         struct {
-            char *action; /* "update" or "*" */
+            char *attr; /* "handle" or "*" */
         } identity;
         struct {
-            char *action; /* "delete" or "*" */
+            char *attr;                /* "email", "repo", or "status" */
+            mb_account_action actions; /* bitmask, default READ */
         } account;
         struct {
-            char *nsid; /* NSID pattern */
+            char **lxm; /* one or more NSIDs, or ["*"] */
+            size_t lxm_count;
+            bool lxm_wildcard; /* true if lxm includes "*" */
+            char *aud;         /* DID (optionally "did...#service"), or "*" */
         } rpc;
     } u;
 } mb_scope_permission;
@@ -120,6 +153,41 @@ bool mb_scope_set_allows_repo(const mb_scope_set *set, const char *collection,
  * (since repo permissions grant both read and write).
  */
 bool mb_scope_set_allows_read(const mb_scope_set *set, const char *collection);
+
+/**
+ * Check if a scope set allows the given identity attribute
+ * (`assertIdentity({attr})` in the reference: requestPlcOperationSignature /
+ * signPlcOperation / submitPlcOperation check "*"; updateHandle checks
+ * "handle"). A grant of "identity:*" satisfies any attr.
+ */
+bool mb_scope_set_allows_identity(const mb_scope_set *set, const char *attr);
+
+/**
+ * Check if a scope set allows the given account attribute + action
+ * (`assertAccount({attr, action})` in the reference). A grant whose actions
+ * include MANAGE satisfies either a READ or a MANAGE check for that attr.
+ */
+bool mb_scope_set_allows_account(const mb_scope_set *set, const char *attr,
+                                 mb_account_action action);
+
+/**
+ * Check if a scope set allows uploading a blob of the given MIME type
+ * (`assertBlob({mime})` in the reference, checked against uploadBlob's
+ * Content-Type). `mime` must be a concrete type ("image/png"), not a
+ * pattern; matching against a wildcard grant (any-type or type-wildcard) is
+ * handled internally.
+ */
+bool mb_scope_set_allows_blob(const mb_scope_set *set, const char *mime);
+
+/**
+ * Check if a scope set allows a proxied/service-authed call to the given
+ * lxm against the given audience (`assertRpc({lxm, aud})` in the
+ * reference — createReport, getServiceAuth, proxied app.bsky.* reads).
+ * `aud` is the target service's DID, optionally with a `#serviceId`
+ * fragment; `lxm` is the NSID of the method being called.
+ */
+bool mb_scope_set_allows_rpc(const mb_scope_set *set, const char *lxm,
+                             const char *aud);
 
 /**
  * Normalize a scope string (deduplicate, sort, validate).
