@@ -1330,6 +1330,20 @@ int main(void) {
                             &response) == WF_ERR_HTTP);
     CHECK(response.status == 401);
     wf_response_free(&response);
+    /* requestAccountDelete, requestEmailUpdate, getAccountInviteCodes: also
+     * ACCESS_FULL-only in the reference, no takendown exception. */
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestAccountDelete",
+                            "{}", &response) == WF_ERR_HTTP);
+    CHECK(response.status == 401);
+    wf_response_free(&response);
+    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestEmailUpdate",
+                            "{}", &response) == WF_ERR_HTTP);
+    CHECK(response.status == 401);
+    wf_response_free(&response);
+    CHECK(wf_xrpc_query(client, "com.atproto.server.getAccountInviteCodes",
+                        NULL, &response) == WF_ERR_HTTP);
+    CHECK(response.status == 401);
+    wf_response_free(&response);
 
     wf_xrpc_client_set_auth(client, access_token);
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAppPassword",
