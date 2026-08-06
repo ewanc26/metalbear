@@ -3460,9 +3460,9 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
             }
             for (size_t i = 0; i < diff.operation_count; i++) {
                 events[i].action =
-                    writes[i].action == WF_REPO_WRITE_CREATE     ? "create"
-                    : writes[i].action == WF_REPO_WRITE_UPDATE   ? "update"
-                                                                  : "delete";
+                    writes[i].action == WF_REPO_WRITE_CREATE   ? "create"
+                    : writes[i].action == WF_REPO_WRITE_UPDATE ? "update"
+                                                               : "delete";
                 events[i].collection = writes[i].collection;
                 events[i].rkey = writes[i].rkey;
                 events[i].cid = writes[i].out_record;

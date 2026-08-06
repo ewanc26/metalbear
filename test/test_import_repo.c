@@ -229,12 +229,13 @@ int main(void) {
                 CHECK(response.status == 200);
                 wf_response_free(&response);
 
-                CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getLatestCommit",
+                CHECK(wf_xrpc_query_params(client,
+                                           "com.atproto.sync.getLatestCommit",
                                            repo_params, 1, &response) == WF_OK);
                 cJSON *before = json_response(&response);
-                char *rev_before = strdup(cJSON_GetObjectItemCaseSensitive(
-                                              before, "rev")
-                                              ->valuestring);
+                char *rev_before =
+                    strdup(cJSON_GetObjectItemCaseSensitive(before, "rev")
+                               ->valuestring);
                 cJSON_Delete(before);
                 wf_response_free(&response);
 
@@ -258,8 +259,8 @@ int main(void) {
                     {"rkey", "second"},
                 };
                 CHECK(wf_xrpc_query_params(client, "com.atproto.repo.getRecord",
-                                           second_params, 3, &response) ==
-                     WF_ERR_HTTP);
+                                           second_params, 3,
+                                           &response) == WF_ERR_HTTP);
                 CHECK(response.status == 404);
                 cJSON *notfound = json_response(&response);
                 CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(notfound, "error")
@@ -270,14 +271,15 @@ int main(void) {
 
                 /* A genuinely new commit was minted (fresh rev), not a
                  * silent no-op and not CAR_A's own stale rev adopted as-is. */
-                CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getLatestCommit",
+                CHECK(wf_xrpc_query_params(client,
+                                           "com.atproto.sync.getLatestCommit",
                                            repo_params, 1, &response) == WF_OK);
                 cJSON *after = json_response(&response);
-                char *rev_after = strdup(cJSON_GetObjectItemCaseSensitive(
-                                             after, "rev")
-                                             ->valuestring);
+                char *rev_after =
+                    strdup(cJSON_GetObjectItemCaseSensitive(after, "rev")
+                               ->valuestring);
                 CHECK(rev_before && rev_after &&
-                     strcmp(rev_before, rev_after) != 0);
+                      strcmp(rev_before, rev_after) != 0);
                 cJSON_Delete(after);
                 free(rev_before);
                 wf_response_free(&response);
@@ -286,7 +288,8 @@ int main(void) {
                  * a genuine no-op: no new commit, nothing to delete. */
                 wf_response response2 = {0};
                 CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getRepo",
-                                           repo_params, 1, &response2) == WF_OK);
+                                           repo_params, 1,
+                                           &response2) == WF_OK);
                 CHECK(response2.status == 200 && response2.body_len > 0);
                 size_t car_len2 = response2.body_len;
                 unsigned char *car_bytes2 = malloc(car_len2);
@@ -301,7 +304,8 @@ int main(void) {
                 CHECK(response.status == 200);
                 wf_response_free(&response);
 
-                CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getLatestCommit",
+                CHECK(wf_xrpc_query_params(client,
+                                           "com.atproto.sync.getLatestCommit",
                                            repo_params, 1, &response) == WF_OK);
                 cJSON *after2 = json_response(&response);
                 CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(after2, "rev")
