@@ -1212,6 +1212,28 @@ wf_status metalbear_repo_store_put_record(
     st = encode_record_json(record_json, &cbor, &cbor_len);
     if (st != WF_OK) return st;
 
+    /* Matches the reference (putRecord.ts): putting a record whose new
+     * content is byte-identical to what's already there is a genuine no-op,
+     * not a content-free commit -- skip the write entirely rather than
+     * minting a new rev/firehose event for nothing. */
+    if (exists) {
+        wf_cid new_cid;
+        if (wf_cid_of_block(cbor, cbor_len, &new_cid) == WF_OK &&
+            cid_equal(&new_cid, &ex_cid)) {
+            free(cbor);
+            *out_uri = make_uri(s->did, collection, rkey);
+            *out_cid = wf_cid_to_string(&ex_cid);
+            if (!*out_uri || !*out_cid) {
+                free(*out_uri);
+                free(*out_cid);
+                *out_uri = NULL;
+                *out_cid = NULL;
+                return WF_ERR_ALLOC;
+            }
+            return WF_OK;
+        }
+    }
+
     if (exists) {
         st = wf_repo_update_record(&s->car, &s->head, s->did, collection, rkey,
                                    cbor, cbor_len, &s->key, &out_commit,
