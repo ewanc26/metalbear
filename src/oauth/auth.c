@@ -143,6 +143,8 @@ static const char *access_scope_name(metalbear_access_scope scope) {
             return "com.atproto.appPass";
         case METALBEAR_ACCESS_APP_PASSWORD_PRIVILEGED:
             return "com.atproto.appPassPrivileged";
+        case METALBEAR_ACCESS_TAKENDOWN:
+            return "com.atproto.takendown";
         default:
             return "com.atproto.access";
     }
@@ -151,7 +153,8 @@ static const char *access_scope_name(metalbear_access_scope scope) {
 static bool valid_access_scope(metalbear_access_scope scope) {
     return scope == METALBEAR_ACCESS_FULL ||
            scope == METALBEAR_ACCESS_APP_PASSWORD ||
-           scope == METALBEAR_ACCESS_APP_PASSWORD_PRIVILEGED;
+           scope == METALBEAR_ACCESS_APP_PASSWORD_PRIVILEGED ||
+           scope == METALBEAR_ACCESS_TAKENDOWN;
 }
 
 static bool parse_access_scope(const char *value, metalbear_access_scope *out) {
@@ -166,6 +169,10 @@ static bool parse_access_scope(const char *value, metalbear_access_scope *out) {
     }
     if (strcmp(value, "com.atproto.appPassPrivileged") == 0) {
         if (out) *out = METALBEAR_ACCESS_APP_PASSWORD_PRIVILEGED;
+        return true;
+    }
+    if (strcmp(value, "com.atproto.takendown") == 0) {
+        if (out) *out = METALBEAR_ACCESS_TAKENDOWN;
         return true;
     }
     return false;
@@ -485,6 +492,7 @@ wf_status metalbear_auth_create_scoped_session(metalbear_auth_store *store,
     if (!store || !out) return WF_ERR_INVALID_ARG;
     if (!valid_access_scope(scope) ||
         (scope != METALBEAR_ACCESS_FULL &&
+         scope != METALBEAR_ACCESS_TAKENDOWN &&
          (!app_password_name || !app_password_name[0])))
         return WF_ERR_INVALID_ARG;
     char jti[33];
@@ -492,7 +500,13 @@ wf_status metalbear_auth_create_scoped_session(metalbear_auth_store *store,
     int64_t expiry = now + REFRESH_LIFETIME_SECONDS;
     prune_expired_refreshes(store, now);
     wf_status status = random_jti(jti);
-    if (status == WF_OK)
+    /* A takendown-scoped refresh JWT is minted below (createSession's
+     * response schema requires one) but deliberately never persisted here,
+     * matching the reference's "refresh token also isn't persisted" note.
+     * With no refresh_token row for its jti, a later refreshSession/
+     * revoke lookup fails closed on its own -- the takendown session simply
+     * cannot outlive its access token by rotating. */
+    if (status == WF_OK && scope != METALBEAR_ACCESS_TAKENDOWN)
         status = persist_refresh(store, jti, expiry, scope, app_password_name);
     if (status == WF_OK) status = issue_pair(store, jti, expiry, scope, out);
     return status;
