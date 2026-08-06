@@ -476,6 +476,10 @@ int main(void) {
                   strcmp(cJSON_GetObjectItemCaseSensitive(build, "builtAt")
                              ->valuestring,
                          METALBEAR_BUILD_TIME) == 0);
+            CHECK(cJSON_GetObjectItemCaseSensitive(build, "releaseStage") &&
+                  strcmp(cJSON_GetObjectItemCaseSensitive(build, "releaseStage")
+                             ->valuestring,
+                         METALBEAR_RELEASE_STAGE) == 0);
             cJSON *proc = cJSON_GetObjectItemCaseSensitive(dbg, "process");
             CHECK(cJSON_IsObject(proc));
             CHECK(cJSON_IsNumber(
@@ -534,6 +538,10 @@ int main(void) {
         cJSON *built_at = cJSON_GetObjectItemCaseSensitive(software, "builtAt");
         CHECK(cJSON_IsString(built_at) &&
               strcmp(built_at->valuestring, METALBEAR_BUILD_TIME) == 0);
+        cJSON *stage =
+            cJSON_GetObjectItemCaseSensitive(software, "releaseStage");
+        CHECK(cJSON_IsString(stage) &&
+              strcmp(stage->valuestring, METALBEAR_RELEASE_STAGE) == 0);
         cJSON_Delete(op);
         wf_response_free(&response);
     }
