@@ -65,6 +65,8 @@ add_library(
   src/session/session_routes.c
   src/account/account_routes.c
   src/sync/sync_routes.c
+  src/appview/appview_routes.c
+  src/moderation/moderation_routes.c
   src/moderation/report.c
   src/repo/blob_store.c
   src/repo/blob_store_server.c
