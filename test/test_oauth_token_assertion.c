@@ -47,11 +47,19 @@ static const char ISSUER[] = "https://pds.example.com";
 static const char CLIENT_JKT[] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 static const char CLIENT_KID[] = "client-key-1";
 
-/* ------------------------------------------------------------------ */
-/* ES256 assertion signing (OpenSSL, low-S normalized)                */
-/* ------------------------------------------------------------------ */
+/* OpenSSL 3.0 deprecated the EC_KEY/ECDSA API in favor of EVP_PKEY. wolfram's
+ * src/crypto/crypto.c and src/session/oauth/dpop.c already suppress this same
+ * warning with a scoped pragma and a comment tracking full EVP migration as
+ * separate future work; this file (EC_KEY threaded through every helper and
+ * through run() itself) follows the identical, already-established pattern. */
+_Pragma("GCC diagnostic push")
+    _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
 
-static char *b64url(const unsigned char *in, size_t len) {
+    /* ------------------------------------------------------------------ */
+    /* ES256 assertion signing (OpenSSL, low-S normalized)                */
+    /* ------------------------------------------------------------------ */
+
+    static char *b64url(const unsigned char *in, size_t len) {
     size_t plen = ((len + 2) / 3) * 4;
     char *p = malloc(plen + 1), *out = malloc(plen + 1);
     size_t i, n = 0;
@@ -735,3 +743,5 @@ int main(void) {
     run();
     WF_TEST_SUMMARY();
 }
+
+_Pragma("GCC diagnostic pop")
