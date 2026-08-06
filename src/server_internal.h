@@ -201,6 +201,15 @@ bool check_endpoint_rate_limit(wf_rate_limiter *tier_a, wf_rate_limiter *tier_b,
  * header is absent or uses a different scheme. */
 const char *bearer_token(const char *header);
 
+/* The reference PDS's assertRepoAvailability, which every sync read runs
+ * before touching the repository. A taken-down repository reports a
+ * different error from a deactivated one. Returns false with the response
+ * already filled in. */
+bool assert_repo_available(metalbear_server *server,
+                           metalbear_account_context *acct,
+                           const wf_xrpc_request *request,
+                           wf_xrpc_response *response);
+
 #ifdef __cplusplus
 }
 #endif
