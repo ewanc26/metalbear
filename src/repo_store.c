@@ -3303,65 +3303,177 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
-    wf_repo_verify_options opts = {s->did, s->signing_key_didkey, NULL};
-    wf_car imported;
-    wf_commit commit;
-    wf_status st =
-        wf_repo_import(req->body, req->body_len, &opts, &imported, &commit);
-    if (st != WF_OK) {
-        /* A bad/unverifiable CAR fails the import rather than corrupting
-         * the existing repo (atproto returns InvalidCAR). */
+    wf_car imported = {0};
+    if (wf_car_parse(req->body, req->body_len, &imported) != WF_OK) {
         wf_xrpc_response_set_error(resp, 400, "InvalidCAR",
-                                   "imported CAR failed verification");
+                                   "imported CAR failed to parse");
         return WF_OK;
     }
     if (imported.root_count != 1) {
         /* Matches the reference's exact message
          * (importRepo.ts: `throw new InvalidRequestError('expected one
          * root')`); a CAR naming zero or multiple roots doesn't name a
-         * single repo snapshot to adopt. */
+         * single repo snapshot to adopt. Checked ahead of signature
+         * verification so it is actually reachable -- wf_repo_verify itself
+         * rejects a non-single-root CAR as a parse failure, which would
+         * otherwise always report the generic InvalidCAR first. */
         wf_car_free(&imported);
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
                                    "expected one root");
         return WF_OK;
     }
 
-    /* Merge blocks that aren't already present into the store's CAR. */
-    for (size_t i = 0; i < imported.block_count; i++) {
-        if (wf_car_find_block(&s->car, &imported.blocks[i].cid)) continue;
-        wf_car_block *nb =
-            realloc(s->car.blocks, (s->car.block_count + 1) * sizeof(*nb));
-        if (!nb) {
-            wf_car_free(&imported);
-            return WF_ERR_ALLOC;
-        }
-        s->car.blocks = nb;
-        wf_car_block *blk = &s->car.blocks[s->car.block_count];
-        blk->cid = imported.blocks[i].cid;
-        blk->data_len = imported.blocks[i].data_len;
-        blk->data = blk->data_len ? malloc(blk->data_len) : NULL;
-        if (blk->data_len && !blk->data) {
-            wf_car_free(&imported);
-            return WF_ERR_ALLOC;
-        }
-        if (blk->data_len)
-            memcpy(blk->data, imported.blocks[i].data, blk->data_len);
-        s->car.block_count++;
-    }
-    wf_cid new_head = imported.roots[0];
-    wf_car_free(&imported);
+    wf_repo_verify_options opts = {s->did, s->signing_key_didkey, NULL};
+    wf_cid old_head = s->head;
+    wf_status st;
 
-    st = commit_persist(s, &new_head);
-    if (st != WF_OK) {
-        wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                   "failed to persist imported repo");
-        return WF_OK;
+    if (s->head.len == 0) {
+        /* No existing commit to diff against (e.g. a freshly created
+         * account that has not written anything on this host yet): there is
+         * no chain to preserve, so the imported commit is adopted as-is,
+         * verified against this account's own signing key. Every
+         * subsequent import instead goes through the diff-and-reapply path
+         * below, which never adopts a foreign commit verbatim. */
+        wf_commit commit;
+        st = wf_repo_verify(&imported, &opts, &commit);
+        if (st != WF_OK) {
+            wf_car_free(&imported);
+            wf_xrpc_response_set_error(resp, 400, "InvalidCAR",
+                                       "imported CAR failed verification");
+            return WF_OK;
+        }
+        for (size_t i = 0; i < imported.block_count; i++) {
+            if (wf_car_find_block(&s->car, &imported.blocks[i].cid)) continue;
+            wf_car_block *nb =
+                realloc(s->car.blocks, (s->car.block_count + 1) * sizeof(*nb));
+            if (!nb) {
+                wf_car_free(&imported);
+                return WF_ERR_ALLOC;
+            }
+            s->car.blocks = nb;
+            wf_car_block *blk = &s->car.blocks[s->car.block_count];
+            blk->cid = imported.blocks[i].cid;
+            blk->data_len = imported.blocks[i].data_len;
+            blk->data = blk->data_len ? malloc(blk->data_len) : NULL;
+            if (blk->data_len && !blk->data) {
+                wf_car_free(&imported);
+                return WF_ERR_ALLOC;
+            }
+            if (blk->data_len)
+                memcpy(blk->data, imported.blocks[i].data, blk->data_len);
+            s->car.block_count++;
+        }
+        wf_cid new_head = imported.roots[0];
+        wf_car_free(&imported);
+
+        st = commit_persist(s, &new_head);
+        if (st != WF_OK) {
+            wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                       "failed to persist imported repo");
+            return WF_OK;
+        }
+        reindex_all(s);
+        emit_sync_event(s);
+    } else {
+        /* An existing base commit: diff the imported snapshot against it
+         * (wf_repo_diff_verify mirrors the reference's verifyDiff, and
+         * confirms the imported commit is validly signed by this account's
+         * own key) and reapply the resulting record-level operations as ONE
+         * new commit with a fresh rev, chained onto the current head via
+         * wf_repo_apply_writes -- the same primitive applyWrites uses. This
+         * is deliberately NOT wf_repo_diff_apply: that adopts the imported
+         * commit's own rev/prev/sig verbatim, which would splice a foreign
+         * commit into this repo's chain instead of extending it. */
+        wf_repo_diff diff = {0};
+        st = wf_repo_diff_verify(&s->car, &s->head, &imported, &opts, &diff);
+        wf_car_free(&imported);
+        if (st != WF_OK) {
+            wf_xrpc_response_set_error(resp, 400, "InvalidCAR",
+                                       "imported CAR failed verification");
+            return WF_OK;
+        }
+
+        if (diff.operation_count == 0) {
+            /* Identical snapshot re-imported: a genuine no-op rather than a
+             * content-free commit that just advances rev. */
+            wf_repo_diff_free(&diff);
+        } else {
+            wf_repo_write *writes =
+                calloc(diff.operation_count, sizeof(*writes));
+            if (!writes) {
+                wf_repo_diff_free(&diff);
+                return WF_ERR_ALLOC;
+            }
+            for (size_t i = 0; i < diff.operation_count; i++) {
+                wf_repo_operation *op = &diff.operations[i];
+                writes[i].collection = op->collection;
+                writes[i].rkey = op->rkey;
+                if (op->action == WF_REPO_DELETE) {
+                    writes[i].action = WF_REPO_WRITE_DELETE;
+                    continue;
+                }
+                wf_car_block *leaf =
+                    wf_car_find_block(&diff.new_blocks, &op->cid);
+                if (!leaf) {
+                    free(writes);
+                    wf_repo_diff_free(&diff);
+                    wf_xrpc_response_set_error(
+                        resp, 400, "InvalidCAR",
+                        "imported CAR is missing a referenced record block");
+                    return WF_OK;
+                }
+                writes[i].action = op->action == WF_REPO_CREATE
+                                       ? WF_REPO_WRITE_CREATE
+                                       : WF_REPO_WRITE_UPDATE;
+                writes[i].record_cbor = leaf->data;
+                writes[i].record_cbor_len = leaf->data_len;
+            }
+
+            wf_cid new_commit = {{0}, 0};
+            st = wf_repo_apply_writes(&s->car, &s->head, s->did, writes,
+                                      diff.operation_count, &s->key,
+                                      &new_commit);
+            if (st != WF_OK) {
+                free(writes);
+                wf_repo_diff_free(&diff);
+                wf_xrpc_response_set_error(
+                    resp, 400, "InvalidRequest",
+                    "imported repo diverges from the current repo");
+                return WF_OK;
+            }
+            st = commit_persist(s, &new_commit);
+            if (st != WF_OK) {
+                free(writes);
+                wf_repo_diff_free(&diff);
+                wf_xrpc_response_set_error(resp, 500, "InternalError",
+                                           "failed to persist imported repo");
+                return WF_OK;
+            }
+            reindex_all(s);
+
+            metalbear_repo_store_op *events =
+                calloc(diff.operation_count, sizeof(*events));
+            if (!events) {
+                free(writes);
+                wf_repo_diff_free(&diff);
+                return WF_ERR_ALLOC;
+            }
+            for (size_t i = 0; i < diff.operation_count; i++) {
+                events[i].action =
+                    writes[i].action == WF_REPO_WRITE_CREATE     ? "create"
+                    : writes[i].action == WF_REPO_WRITE_UPDATE   ? "update"
+                                                                  : "delete";
+                events[i].collection = writes[i].collection;
+                events[i].rkey = writes[i].rkey;
+                events[i].cid = writes[i].out_record;
+                events[i].has_cid = writes[i].action != WF_REPO_WRITE_DELETE;
+            }
+            emit_commit_event_ops(s, &old_head, events, diff.operation_count);
+            free(events);
+            free(writes);
+            wf_repo_diff_free(&diff);
+        }
     }
-    /* Rebuild the records index so listRecords reflects the imported repo.
-     * Index rebuild failures are best-effort: persistence already
-     * succeeded, but callers should re-list to recover. */
-    reindex_all(s);
-    emit_sync_event(s);
 
     cJSON *out = cJSON_CreateObject();
     char *js = cJSON_PrintUnformatted(out);
