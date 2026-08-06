@@ -3254,10 +3254,8 @@ static wf_status h_get_latest_commit(void *ctx, const wf_xrpc_request *req,
 }
 
 /* ── importRepo (com.atproto.repo.importRepo) ──────────────────────
- * Accept a CAR POST body, verify it as a full repo with the store's
- * signing key (wf_repo_import reuses the SDK commit/MST verification),
- * merge its blocks into the store, make its root the new head, and
- * rebuild the records index.
+ * Accept a CAR POST body, verify its commit against the store's own
+ * signing key, and adopt its content as the account's repo state.
  *
  * Gated on the accepting_imports config flag and a size cap
  * (max_import_size), and the route itself requires full access (see
@@ -3265,18 +3263,31 @@ static wf_status h_get_latest_commit(void *ctx, const wf_xrpc_request *req,
  * the reference's acceptingImports config check, maxImportSize blobLimit,
  * and repo:manage scope requirement.
  *
- * NOTE on rev: unlike the reference (which mints a fresh TID via
- * `store.repo.storage.applyCommit(diff.commit, ...)` after `verifyDiff`),
- * this handler adopts the imported commit's own rev verbatim, as it did
- * before this fix. Re-signing the commit with a fresh rev requires deciding
- * what `prev` should point at for a wholesale repo replacement -- chaining
- * onto this host's prior local head would be wrong unless the imported MST
- * is genuinely a diff on top of it (which wf_repo_import does not compute;
- * it verifies the imported CAR as a self-contained repo, not as a diff
- * against the current one). Getting `prev`/`rev` chaining wrong is exactly
- * the class of mistake that breaks federation silently -- a relay accepts
- * or rejects prevData chains long before any local test would notice -- so
- * this is deliberately left as future work rather than guessed at here. */
+ * Onto an existing repo (s->head already set): wf_repo_diff_verify diffs the
+ * imported snapshot against the live repo (mirroring the reference's
+ * verifyDiff) and the resulting create/update/delete operations are
+ * reapplied via wf_repo_apply_writes -- the same primitive applyWrites
+ * uses -- producing ONE new commit with a fresh rev, chained onto the
+ * current head and signed with this account's own key. A #commit event is
+ * emitted describing the ops.
+ *
+ * Onto a still-empty repo (no commits yet -- e.g. immediately post-
+ * createAccount, before any writes): there is no base to diff against, so
+ * the imported commit is adopted as-is (still signature-verified) and a
+ * #sync event is emitted.
+ *
+ * NOTE on parity: this deliberately does NOT replicate the reference's
+ * exact mechanism. Per `packages/pds/src/api/com/atproto/repo/importRepo.ts`
+ * and `packages/repo/src/sync/consumer.ts` (verifyDiff) in the
+ * bluesky-social/atproto reference source, the reference's "fresh rev" is a
+ * local SQL bookkeeping column (`repo_root.rev`) that is allowed to diverge
+ * from the rev embedded in the actual served commit CBOR -- it never
+ * re-signs anything, and it never sequences a firehose event for an import
+ * at all (no other repo-mutating endpoint skips that). This handler instead
+ * keeps rev-in-the-database and rev-in-the-signed-commit consistent (this
+ * codebase has no decoupled-rev concept -- rev is always parsed from the
+ * head commit itself, see parse_commit_at) and always tells relays what
+ * changed. See issue #22 for the full investigation. */
 
 static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
                                wf_xrpc_response *resp) {
