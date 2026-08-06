@@ -1091,6 +1091,12 @@ static wf_status operator_info(void *ctx, const wf_xrpc_request *request,
         /* The SDK version, so the frontend landing page can name the pair it
          * is running without a second admin-gated call. */
         cJSON_AddStringToObject(sw, "wolframVersion", WOLFRAM_VERSION_STRING);
+        /* Build provenance: not a secret (unlike admin-gated
+         * /_debug/health's identity/config fields) -- an operator's users
+         * and the landing page both benefit from knowing exactly which
+         * commit is live. */
+        cJSON_AddStringToObject(sw, "commit", METALBEAR_BUILD_COMMIT);
+        cJSON_AddStringToObject(sw, "builtAt", METALBEAR_BUILD_TIME);
         cJSON_AddStringToObject(sw, "repository",
                                 "https://github.com/ewanc26/metalbear");
         cJSON_AddStringToObject(sw, "license", "AGPL-3.0-only");
@@ -1995,6 +2001,8 @@ static wf_status landing_handler(void *ctx, const wf_xrpc_request *req,
                    "<body>\n"
                    "<h1>MetalBear " METALBEAR_VERSION
                    " — built on Wolfram " WOLFRAM_VERSION_STRING "</h1>\n"
+                   "<p><small>commit " METALBEAR_BUILD_COMMIT
+                   " · built " METALBEAR_BUILD_TIME "</small></p>\n"
                    "<p>An AT Protocol Personal Data Server built on Wolfram. "
                    "The XRPC API lives under <code>/xrpc/</code>. Identity "
                    "documents are published at "
@@ -2103,6 +2111,8 @@ static wf_status debug_health_handler(void *ctx, const wf_xrpc_request *req,
         cJSON_AddStringToObject(build, "metalbearVersion", METALBEAR_VERSION);
         cJSON_AddStringToObject(build, "wolframVersion",
                                 WOLFRAM_VERSION_STRING);
+        cJSON_AddStringToObject(build, "commit", METALBEAR_BUILD_COMMIT);
+        cJSON_AddStringToObject(build, "builtAt", METALBEAR_BUILD_TIME);
         cJSON_AddItemToObject(root, "build", build);
     }
 

@@ -33,6 +33,10 @@ export interface OperatorInfo {
 		version?: string;
 		/** The SDK version this build is linked against. */
 		wolframVersion?: string;
+		/** Short git commit this build was compiled from. */
+		commit?: string;
+		/** UTC build timestamp, ISO 8601. */
+		builtAt?: string;
 		repository?: string;
 		license?: string;
 	};
@@ -208,7 +212,10 @@ export async function relayStatus(hostname: string): Promise<RelayStatus[]> {
 
 /* ---- Auth / Session ---- */
 
-export async function createSession(identifier: string, password: string): Promise<SessionResponse> {
+export async function createSession(
+	identifier: string,
+	password: string
+): Promise<SessionResponse> {
 	return xrpcPostPlain<SessionResponse>('com.atproto.server.createSession', {
 		identifier,
 		password
@@ -259,7 +266,10 @@ export async function deleteSession(): Promise<void> {
 
 /* ---- App Passwords ---- */
 
-export async function createAppPassword(name: string, privileged?: boolean): Promise<CreateAppPasswordResponse> {
+export async function createAppPassword(
+	name: string,
+	privileged?: boolean
+): Promise<CreateAppPasswordResponse> {
 	return xrpcPost<CreateAppPasswordResponse>('com.atproto.server.createAppPassword', {
 		name,
 		privileged: privileged ?? false
@@ -267,7 +277,10 @@ export async function createAppPassword(name: string, privileged?: boolean): Pro
 }
 
 export async function listAppPasswords(): Promise<AppPassword[]> {
-	const { passwords } = await xrpcPost<ListAppPasswordsResponse>('com.atproto.server.listAppPasswords', {});
+	const { passwords } = await xrpcPost<ListAppPasswordsResponse>(
+		'com.atproto.server.listAppPasswords',
+		{}
+	);
 	return passwords;
 }
 
