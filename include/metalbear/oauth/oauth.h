@@ -49,6 +49,20 @@ wf_status metalbear_oauth_create_par(metalbear_oauth_store *store,
                                      char **out_request_uri,
                                      int64_t *out_expires_in);
 
+/*
+ * Look up a pending PAR without consuming it -- for the consent screen to
+ * show what is actually being requested (scope) before the user decides.
+ * Fails the same way metalbear_oauth_authorize does on a client_id mismatch
+ * (WF_ERR_PERMISSION) or an unknown/expired request_uri (WF_ERR_NOT_FOUND),
+ * but never deletes the PAR row: the user can reload the consent page (or
+ * the frontend can retry) without invalidating the request they are still
+ * deciding on.
+ */
+wf_status metalbear_oauth_par_peek(metalbear_oauth_store *store,
+                                   const char *request_uri,
+                                   const char *client_id, char **out_scope,
+                                   char **out_redirect_uri);
+
 /* Consume a PAR and issue a five-minute, one-time authorization code. */
 /* `subject` is the account DID the issued code (and every token minted from
  * it) speaks for. */
