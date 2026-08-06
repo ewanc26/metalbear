@@ -60,6 +60,39 @@ int main(void) {
           strstr(request_uri, "urn:ietf:params:oauth:request_uri:"));
     CHECK(expires_in == 300);
 
+    /* The consent screen peeks at a pending PAR to show what is actually
+     * being requested, without consuming it -- unlike authorize below,
+     * which is one-time-use. */
+    char *peeked_scope = NULL, *peeked_redirect = NULL;
+    CHECK(metalbear_oauth_par_peek(store, request_uri, request.client_id,
+                                   &peeked_scope, &peeked_redirect) == WF_OK);
+    CHECK(peeked_scope && strcmp(peeked_scope, request.scope) == 0);
+    CHECK(peeked_redirect &&
+          strcmp(peeked_redirect, request.redirect_uri) == 0);
+    free(peeked_scope);
+    free(peeked_redirect);
+    /* A second peek must still succeed: peeking does not consume the PAR. */
+    peeked_scope = NULL;
+    peeked_redirect = NULL;
+    CHECK(metalbear_oauth_par_peek(store, request_uri, request.client_id,
+                                   &peeked_scope, &peeked_redirect) == WF_OK);
+    free(peeked_scope);
+    free(peeked_redirect);
+    /* A client_id that does not match the PAR's own must be refused, same as
+     * authorize's own mismatch check. */
+    peeked_scope = NULL;
+    peeked_redirect = NULL;
+    CHECK(metalbear_oauth_par_peek(
+              store, request_uri, "https://impostor.example/metadata.json",
+              &peeked_scope, &peeked_redirect) == WF_ERR_PERMISSION);
+    CHECK(!peeked_scope && !peeked_redirect);
+    /* An unknown request_uri is WF_ERR_NOT_FOUND, not a crash or a match. */
+    CHECK(metalbear_oauth_par_peek(store,
+                                   "urn:ietf:params:oauth:request_uri:"
+                                   "does-not-exist",
+                                   request.client_id, &peeked_scope,
+                                   &peeked_redirect) == WF_ERR_NOT_FOUND);
+
     char *code = NULL;
     char *redirect_uri = NULL;
     char *state = NULL;
@@ -67,6 +100,14 @@ int main(void) {
     CHECK(metalbear_oauth_authorize(store, request_uri, request.client_id,
                                     "did:plc:alice", &code, &redirect_uri,
                                     &state) == WF_OK);
+
+    /* authorize() consumed the PAR: peeking the same request_uri afterward
+     * must fail, not return stale data. */
+    peeked_scope = NULL;
+    peeked_redirect = NULL;
+    CHECK(metalbear_oauth_par_peek(store, request_uri, request.client_id,
+                                   &peeked_scope,
+                                   &peeked_redirect) == WF_ERR_NOT_FOUND);
     CHECK(code && redirect_uri && state);
     CHECK(redirect_uri && strcmp(redirect_uri, request.redirect_uri) == 0);
     CHECK(state && strcmp(state, request.state) == 0);

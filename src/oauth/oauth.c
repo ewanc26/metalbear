@@ -357,6 +357,58 @@ static char *column_copy(sqlite3_stmt *stmt, int column) {
     return value ? strdup(value) : NULL;
 }
 
+wf_status metalbear_oauth_par_peek(metalbear_oauth_store *store,
+                                   const char *request_uri,
+                                   const char *client_id, char **out_scope,
+                                   char **out_redirect_uri) {
+    if (!store || !request_uri || !client_id || !out_scope || !out_redirect_uri)
+        return WF_ERR_INVALID_ARG;
+    *out_scope = NULL;
+    *out_redirect_uri = NULL;
+
+    int64_t now = (int64_t)time(NULL);
+    pthread_mutex_lock(&store->mutex);
+    /* No prune() here: this is a read, and pruning under a shared lock for
+     * every consent-page load would serialize reads behind writes for no
+     * benefit -- expired rows are still excluded by the WHERE clause below,
+     * and metalbear_oauth_create_par/metalbear_oauth_authorize already prune
+     * on every write. */
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_OK;
+    char *stored_client = NULL, *scope = NULL, *redirect = NULL;
+    if (sqlite3_prepare_v2(
+            store->db,
+            "SELECT client_id,scope,redirect_uri FROM oauth_par WHERE "
+            "request_uri=? AND expires_at>?;",
+            -1, &stmt, NULL) != SQLITE_OK)
+        status = WF_ERR_INTERNAL;
+    if (status == WF_OK) {
+        sqlite3_bind_text(stmt, 1, request_uri, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, now);
+        if (sqlite3_step(stmt) != SQLITE_ROW) status = WF_ERR_NOT_FOUND;
+    }
+    if (status == WF_OK) {
+        stored_client = column_copy(stmt, 0);
+        scope = column_copy(stmt, 1);
+        redirect = column_copy(stmt, 2);
+        if (!stored_client || !scope || !redirect)
+            status = WF_ERR_ALLOC;
+        else if (strcmp(stored_client, client_id) != 0)
+            status = WF_ERR_PERMISSION;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    free(stored_client);
+    if (status != WF_OK) {
+        free(scope);
+        free(redirect);
+        return status;
+    }
+    *out_scope = scope;
+    *out_redirect_uri = redirect;
+    return WF_OK;
+}
+
 wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
                                     const char *request_uri,
                                     const char *client_id, const char *subject,
