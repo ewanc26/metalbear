@@ -1667,6 +1667,28 @@ int main(void) {
     wf_car_free(&repo_car);
     wf_response_free(&response);
 
+    /* `repo` is an at-identifier (DID or handle) in every com.atproto.repo.*
+     * lexicon, not a DID specifically -- authenticate_request's own "is this
+     * a known account" pre-check must accept a handle here exactly as
+     * readily as the DID case exercised above, not just the routes' own
+     * account resolution further in. Regression test for a bug where a
+     * handle was silently rejected with a misleading 401
+     * AuthenticationRequired instead of being resolved like every other
+     * identifier param in the protocol. Placed after the since-commit_rev
+     * incremental sync checks above (not before): an earlier write here
+     * would add an extra block those exact-count assertions don't expect. */
+    wf_xrpc_client_set_auth(client, access_token);
+    const char *create_body_by_handle =
+        "{\"repo\":\"alice.example.com\","
+        "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"by-handle\","
+        "\"record\":{\"$type\":\"app.bsky.feed.post\","
+        "\"text\":\"hello via handle\","
+        "\"createdAt\":\"2026-07-19T00:00:01.000Z\"}}";
+    CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                            create_body_by_handle, &response) == WF_OK);
+    CHECK(response.status == 200);
+    wf_response_free(&response);
+
     /* === confirmEmail success path === */
     wf_xrpc_client_set_auth(client, access_token);
     CHECK(wf_xrpc_procedure(client,
