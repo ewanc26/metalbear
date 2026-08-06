@@ -448,6 +448,49 @@ static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
     return json_response(resp, root, "no-store");
 }
 
+/* Redirects the browser to the consent page, carrying whatever of
+ * request_uri/client_id/login_hint it already has -- `login_hint` may be
+ * NULL (asking the consent page to prompt for an identifier itself) or
+ * empty. Returns WF_ERR_ALLOC only on allocation failure; the redirect
+ * itself is always a successful response (302), never an XRPC error, since
+ * the browser still has somewhere useful to go either way. */
+static wf_status redirect_to_consent(wf_xrpc_response *resp,
+                                     const char *request_uri,
+                                     const char *client_id,
+                                     const char *login_hint) {
+    char *enc_ru = url_escape(request_uri);
+    char *enc_cid = url_escape(client_id);
+    char *enc_hint =
+        login_hint && login_hint[0] ? url_escape(login_hint) : NULL;
+    if (!enc_ru || !enc_cid || (login_hint && login_hint[0] && !enc_hint)) {
+        curl_free(enc_ru);
+        curl_free(enc_cid);
+        curl_free(enc_hint);
+        return WF_ERR_ALLOC;
+    }
+    char redirect[1024];
+    int n = enc_hint
+                ? snprintf(redirect, sizeof(redirect),
+                           "/oauth/consent?request_uri=%s&client_id=%s&login_"
+                           "hint=%s",
+                           enc_ru, enc_cid, enc_hint)
+                : snprintf(redirect, sizeof(redirect),
+                           "/oauth/consent?request_uri=%s&client_id=%s", enc_ru,
+                           enc_cid);
+    curl_free(enc_ru);
+    curl_free(enc_cid);
+    curl_free(enc_hint);
+    if (n < 0 || (size_t)n >= sizeof(redirect)) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Request too large to continue");
+        return WF_OK;
+    }
+    wf_xrpc_response_set_content_type(resp, "text/html");
+    wf_xrpc_response_add_header(resp, "Location", redirect);
+    resp->http_status = 302;
+    return WF_OK;
+}
+
 static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
                                  wf_xrpc_response *resp) {
     oauth_route_ctx *rctx = ctx;
@@ -473,19 +516,23 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
      * token this endpoint issued spoke for that one account no matter who
      * asked — on a multi-account host that hands the client the wrong
      * session entirely.
+     *
+     * A client that omits login_hint (some do, expecting the provider itself
+     * to ask "who are you?") is not an error: send the browser to the
+     * consent page without one, and let it collect an identifier there
+     * before coming back here with login_hint filled in. Only a login_hint
+     * that fails to resolve to a real account is a hard failure — the
+     * consent page has already done what it can at that point.
      */
     const char *hint = NULL;
     if (req->params && cJSON_IsObject(req->params)) {
         cJSON *lh = cJSON_GetObjectItemCaseSensitive(req->params, "login_hint");
         if (cJSON_IsString(lh)) hint = lh->valuestring;
     }
-    char subject[256];
     if (!hint || !hint[0]) {
-        wf_xrpc_response_set_error(resp, 400, "invalid_request",
-                                   "login_hint is required to identify the "
-                                   "account being authorized");
-        return WF_OK;
+        return redirect_to_consent(resp, request_uri, client_id, NULL);
     }
+    char subject[256];
     if (!rctx->resolve_subject ||
         !rctx->resolve_subject(rctx->resolver_ctx, hint, subject,
                                sizeof(subject))) {
@@ -1172,10 +1219,9 @@ static wf_status oauth_session(void *ctx, const wf_xrpc_request *req,
     oauth_route_ctx *rctx = ctx;
     char *token = find_cookie(req->cookie_header, MB_DEVICE_COOKIE);
     char subject[256];
-    wf_status status =
-        token ? metalbear_oauth_device_session_verify(rctx->store, token,
-                                                       subject, sizeof(subject))
-              : WF_ERR_NOT_FOUND;
+    wf_status status = token ? metalbear_oauth_device_session_verify(
+                                   rctx->store, token, subject, sizeof(subject))
+                             : WF_ERR_NOT_FOUND;
     free(token);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(resp, 401, "invalid_grant",
