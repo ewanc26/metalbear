@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { auth } from '$lib/stores/auth';
 	import type { Session } from '$lib/stores/auth';
-	import { authorizeInfo } from '$lib/pds';
+	import { authorizeInfo, hasDeviceSession } from '$lib/pds';
 	import type { AuthorizeInfo } from '$lib/pds';
 	import { humanizeScopes } from '$lib/oauthScopes';
 	import { goto } from '$app/navigation';
@@ -29,7 +29,16 @@
 			return;
 		}
 
-		if (!session) {
+		/*
+		 * A regular JWT session (the `auth` store) proves nothing about the
+		 * OAuth device session "Approve" actually needs -- nothing else
+		 * establishes one but /oauth/signin, which /login only calls when it
+		 * knows it's on an OAuth path. A returning user who already has a
+		 * JWT session from an earlier, unrelated visit must still be sent
+		 * through /login here, or "Approve" would have nothing to check and
+		 * loop back to this same page having done nothing.
+		 */
+		if (!session || !(await hasDeviceSession())) {
 			loading = false;
 			goto(`/login?redirect=${encodeURIComponent($page.url.pathname + $page.url.search)}`);
 			return;

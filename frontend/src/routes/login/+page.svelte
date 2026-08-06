@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { auth } from '$lib/stores/auth';
-	import { createSession } from '$lib/pds';
+	import { createSession, signInDevice } from '$lib/pds';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
@@ -22,12 +22,28 @@
 		return unsub;
 	});
 
+	/*
+	 * The consent screen's "Approve" step needs an OAuth device-session
+	 * cookie (see signInDevice's doc comment), which this regular JWT login
+	 * never establishes on its own -- so when this sign-in exists to get
+	 * back to /oauth/consent, sign in for a device session too, with the
+	 * same credentials, before leaving this page. Skipping this silently
+	 * would work right up until the user clicks Approve, where it would
+	 * loop back to the consent page with nothing having actually happened.
+	 */
+	function isOauthRedirect(target: string): boolean {
+		return target.startsWith('/oauth/consent');
+	}
+
 	async function handleSubmit(e: Event) {
 		e.preventDefault();
 		error = '';
 		loading = true;
 		try {
-			const session = await createSession(identifier, password);
+			const [session] = await Promise.all([
+				createSession(identifier, password),
+				isOauthRedirect(redirectTo) ? signInDevice(identifier, password) : Promise.resolve()
+			]);
 			auth.login({
 				accessJwt: session.accessJwt,
 				refreshJwt: session.refreshJwt,
@@ -76,9 +92,7 @@
 		</div>
 
 		<div>
-			<label for="password" class="mb-1.5 block text-sm font-medium text-slate-300"
-				>Password</label
-			>
+			<label for="password" class="mb-1.5 block text-sm font-medium text-slate-300">Password</label>
 			<div class="relative">
 				<input
 					id="password"
@@ -92,7 +106,7 @@
 				<button
 					type="button"
 					onclick={() => (showPassword = !showPassword)}
-					class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-300"
+					class="absolute top-1/2 right-3 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-300"
 				>
 					{showPassword ? 'Hide' : 'Show'}
 				</button>
