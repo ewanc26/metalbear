@@ -17,8 +17,8 @@
  * restarts.
  */
 
-#include "metalbear/repo_store.h"
-#include "metalbear/blob_store.h"
+#include "metalbear/repo/repo_store.h"
+#include "metalbear/repo/blob_store.h"
 
 #include "wolfram/repo/cbor.h"
 #include "wolfram/repo/cid.h"

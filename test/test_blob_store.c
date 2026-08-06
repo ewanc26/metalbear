@@ -17,7 +17,7 @@
  * Requires WOLFRAM_BUILD_SERVER (raw HTTP helper + server registration).
  */
 
-#include "metalbear/blob_store.h"
+#include "metalbear/repo/blob_store.h"
 #include "wolfram/xrpc_server.h"
 #include "wolfram/repo/cid.h"
 

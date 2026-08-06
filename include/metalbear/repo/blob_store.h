@@ -29,7 +29,7 @@
 #define METALBEAR_BLOB_STORE_H
 
 #include "wolfram/util.h"
-#include "metalbear/repo_store.h"
+#include "metalbear/repo/repo_store.h"
 #include <cJSON.h>
 
 #ifdef __cplusplus

@@ -16,7 +16,7 @@
  * RRset, TXT content is quoted, and absence is a 404.
  */
 
-#include "metalbear/handle_dns.h"
+#include "metalbear/dns/handle_dns.h"
 
 #include <cJSON.h>
 #include <microhttpd.h>

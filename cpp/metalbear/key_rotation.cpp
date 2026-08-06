@@ -1,4 +1,4 @@
-#include "metalbear/key_rotation.h"
+#include "metalbear/repo/key_rotation.h"
 
 #include "wolfram/crypto.h"
 

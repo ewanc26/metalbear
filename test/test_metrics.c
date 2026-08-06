@@ -1,6 +1,6 @@
 /*
  * test_metrics.c — offline unit tests for the process-wide counters and the
- * per-route request table (metalbear/metrics.h).
+ * per-route request table (metalbear/ops/metrics.h).
  *
  * The route table grows on demand up to METALBEAR_METRICS_MAX_ROUTES and
  * spills the excess under `other`, so these tests pin the accounting (counts,
@@ -8,7 +8,7 @@
  * Prometheus formatting.
  */
 
-#include "metalbear/metrics.h"
+#include "metalbear/ops/metrics.h"
 
 #include <stdint.h>
 #include <stdio.h>

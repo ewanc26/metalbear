@@ -5,7 +5,7 @@
  * PDS would. See blob_store.h for ownership and mode semantics.
  */
 
-#include "metalbear/blob_store.h"
+#include "metalbear/repo/blob_store.h"
 
 #include <stdlib.h>
 #include <string.h>
