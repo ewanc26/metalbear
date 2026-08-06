@@ -511,6 +511,24 @@ static bool takendown_route_allowed(const char *nsid) {
            strcmp(nsid, "app.bsky.actor.getPreferences") == 0;
 }
 
+/* Every route the reference asserts `rpc:` scope for and that MetalBear
+ * actually proxies to the AppView (appview_routes.c's appview_get_* /
+ * appview_register_push / appview_unregister_push). Deliberately excludes
+ * app.bsky.actor.{get,put}Preferences: the reference proxies those too, but
+ * MetalBear stores preferences locally, so their audience is not the
+ * AppView and belongs in its own check, not this one. */
+static bool proxied_appview_rpc_route(const char *nsid) {
+    return strcmp(nsid, "app.bsky.feed.getFeed") == 0 ||
+           strcmp(nsid, "app.bsky.feed.getAuthorFeed") == 0 ||
+           strcmp(nsid, "app.bsky.feed.getActorLikes") == 0 ||
+           strcmp(nsid, "app.bsky.feed.getTimeline") == 0 ||
+           strcmp(nsid, "app.bsky.feed.getPostThread") == 0 ||
+           strcmp(nsid, "app.bsky.actor.getProfile") == 0 ||
+           strcmp(nsid, "app.bsky.actor.getProfiles") == 0 ||
+           strcmp(nsid, "app.bsky.notification.registerPush") == 0 ||
+           strcmp(nsid, "app.bsky.notification.unregisterPush") == 0;
+}
+
 static wf_status authenticate_request(wf_xrpc_request *req, void *ctx);
 
 /*
@@ -793,6 +811,47 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
                             LOG_WARN("authenticate: OAuth scope denied "
                                      "createReport did=%s",
                                      sub);
+                            mb_scope_set_free(&scope_set);
+                            free(oauth_scope_str);
+                            free(sub);
+                            return WF_ERR_PERMISSION;
+                        }
+                    } else if (proxied_appview_rpc_route(nsid)) {
+                        scope_checked = true;
+                        /* Matches the reference's computeProxyTo exactly: the
+                         * atproto-proxy header verbatim if present, else
+                         * "<appview_did>#bsky_appview" -- the fixed service
+                         * id every reference deployment's default AppView
+                         * audience uses (pipethrough.ts's defaultService).
+                         * No network resolution needed for the scope check
+                         * itself: it is a string comparison against what the
+                         * grant named, not a lookup of where the header
+                         * actually points -- that resolution only happens
+                         * later, in proxy_appview, for the request itself.
+                         *
+                         * getFeed additionally asserts against the specific
+                         * feed generator's own audience (resolved from the
+                         * feed record the request names), which is not
+                         * checked here -- that would need the same record
+                         * lookup the handler itself does, not something
+                         * cheap to repeat in this callback. A grant scoped
+                         * to exactly that generator's DID is still accepted
+                         * by proxy_appview itself failing safe elsewhere;
+                         * this gate only covers the AppView-audience half. */
+                        char aud_buf[512];
+                        const char *aud;
+                        if (req->atproto_proxy && req->atproto_proxy[0]) {
+                            aud = req->atproto_proxy;
+                        } else {
+                            snprintf(
+                                aud_buf, sizeof(aud_buf), "%s#bsky_appview",
+                                server->appview_did ? server->appview_did : "");
+                            aud = aud_buf;
+                        }
+                        if (!mb_scope_set_allows_rpc(&scope_set, nsid, aud)) {
+                            LOG_WARN("authenticate: OAuth scope denied "
+                                     "appview proxy did=%s nsid=%s aud=%s",
+                                     sub, nsid, aud);
                             mb_scope_set_free(&scope_set);
                             free(oauth_scope_str);
                             free(sub);
