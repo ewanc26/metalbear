@@ -169,6 +169,26 @@ const char *account_status_string(metalbear_server *server,
 /* Serialize `root` (consumed) into `response` as the XRPC JSON body. */
 wf_status set_json(wf_xrpc_response *response, cJSON *root);
 
+/* Resolve an XRPC request's bearer token to its account context. Owned by
+ * the cache, never freed by the caller. NULL when unauthenticated or the
+ * token names an unknown account. */
+metalbear_account_context *resolve_request_context(metalbear_server *server,
+                                                   const wf_xrpc_request *req);
+
+/* Whether the account is taken down, which no bearer token may act
+ * through. */
+bool account_is_taken_down(metalbear_server *server, const char *did);
+
+/* Build this server's DID document for a local account. Caller must
+ * cJSON_Delete the result. */
+cJSON *build_did_doc(metalbear_server *server, metalbear_account_context *acct);
+
+/* Whether `acct`'s current DID document (built locally for a self-hosted
+ * did:web, fetched over the network otherwise) still names this service and
+ * this repo's signing key. */
+bool did_doc_matches_service(metalbear_server *server,
+                             metalbear_account_context *acct);
+
 #ifdef __cplusplus
 }
 #endif
