@@ -612,12 +612,16 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
         cJSON *target =
             cJSON_IsString(repo) ? repo : (cJSON_IsString(did) ? did : NULL);
         if (target) {
-            metalbear_account_entry *entry = NULL;
-            wf_status lookup = metalbear_account_registry_find_by_did(
-                server->registry, target->valuestring, &entry);
-            bool known = lookup == WF_OK && entry;
-            metalbear_account_entry_free(entry);
-            if (!known) return WF_ERR_PERMISSION;
+            /* `repo`/`did` here is an at-identifier (com.atproto.repo.*'s own
+             * lexicon type): a DID or a handle, either one, same as every
+             * other identifier param in the protocol. A DID-only lookup
+             * silently rejected any client that (reasonably) sent a handle
+             * here with a misleading AuthenticationRequired, instead of the
+             * NotFound/InvalidRequest an unknown identifier actually
+             * deserves. context_for_identifier is the same DID-then-handle
+             * resolution the rest of this file uses. */
+            if (!context_for_identifier(server, target->valuestring))
+                return WF_ERR_PERMISSION;
         }
     }
 
