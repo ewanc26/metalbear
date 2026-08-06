@@ -17,7 +17,31 @@ It provides a runnable PDS foundation, supporting multi-account hosting.
   relevant `specs/` page before any wire-format change. Where the two appear
   to disagree, the lexicons and reference implementation win for behaviour,
   but the spec is what other implementations were written against.
-- `src/server.c` is the central file: server lifecycle, XRPC route registration, auth callback, and all protocol handler functions.
+- `src/server.c` is the central file: server lifecycle
+  (`metalbear_server_create`/`_start`), XRPC route registration, and the auth
+  callback. Most protocol handlers have moved out into per-domain route
+  files it registers against — see "File organization" below;
+  `src/server_internal.h` is the private header those files and server.c
+  share.
+- `src/admin/admin_routes.c` — `com.atproto.admin.*` handlers.
+- `src/identity/identity_routes.c` — `com.atproto.identity.*` handlers, DID
+  document resolution/caching, and the PLC operation flow.
+- `src/oauth/oauth_credentials.c` — the `metalbear_oauth_subject_resolver` /
+  `metalbear_oauth_credential_verifier` callbacks `/oauth/authorize` uses to
+  resolve and verify a `login_hint` against a local account.
+- `src/session/session_routes.c` — `com.atproto.server.{create,get,refresh,delete}Session`
+  and app-password handlers.
+- `src/account/account_routes.c` — `createAccount`, email
+  confirmation/update, password reset, invite codes, `checkAccountStatus`,
+  `reserveSigningKey`.
+- `src/sync/sync_routes.c` — every `com.atproto.sync.*` handler
+  (`getRepo`, `getBlocks`, `getRepoStatus`, `listBlobs`, `getRecord`,
+  `getBlob`, `listRepos`, `listReposByCollection`, `getHead`, `getCheckout`)
+  plus `requestCrawl`.
+- `src/appview/appview_routes.c` — the `app.bsky.*`/`chat.bsky.*` AppView
+  reverse-proxy plumbing and its ~30 thin per-lexicon wrappers, plus the
+  generic fallback proxy for unmatched NSIDs.
+- `src/moderation/moderation_routes.c` — `com.atproto.moderation.createReport`.
 - `cpp/metalbear/account.cpp` manages credential storage, app passwords, email tokens, and account state (active/deactivated) in a per-account SQLite database. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
 - `src/oauth/auth.c` manages session tokens (access/refresh JWTs) with scrypt-hashed refresh tokens and scope-based access control.
 - `src/sequencer.c` handles the firehose event stream (commits, identity, account, sync events) with configurable retention.
@@ -26,13 +50,71 @@ It provides a runnable PDS foundation, supporting multi-account hosting.
 - `src/repo/backup.c` implements repository backup/restore with CRC32 checksums.
 - `src/oauth/oauth.c` handles OAuth 2.0 token endpoints.
 - `src/oauth/oauth_scope.c` implements OAuth auth scope parsing and matching for AT Protocol granular permissions. Parses static scopes (`atproto`, `transition:*`) and dynamic repo scopes (`repo:<collection>?action=<action>`). Integrated with the authentication callback in `server.c` to enforce scope-based access control on repo write operations.
-- `src/repo/repo_store.c` is the durable, writable repo storage engine (records, MST, commits) and its XRPC route handlers. `src/repo/blob_store.c` / `src/repo/blob_store_server.c` are the blob persistence layer and its routes.
+- `src/repo/repo_store.c` is the durable, writable repo storage engine
+  (CBOR<->JSON, MST/commit persistence, the `metalbear_repo_store_*` public
+  CRUD API). `src/repo/repo_routes.c` is its `com.atproto.repo.*` XRPC
+  handlers (`createRecord`, `putRecord`, `applyWrites`, `importRepo`, etc.) —
+  these reach into the engine's internals as directly as the engine itself
+  does (`h_import_repo` manipulates the CAR/head/signing key while replaying
+  an import), sharing `src/repo/repo_store_internal.h`. `src/repo/did_document.c`
+  builds W3C DID documents and is fully self-contained. `src/repo/blob_store.c`
+  / `src/repo/blob_store_server.c` are the blob persistence layer and its routes.
 - `src/account/account_context.c` / `src/account/account_cache.c` resolve and cache the per-request account context (DID, repo, auth) route handlers share.
 - `src/dns/handle_dns.c` / `src/dns/handle_dns_rfc2136.c` publish the `_atproto` handle-resolution TXT records (static zone file and RFC 2136 dynamic update, respectively).
-- `src/moderation/report.c` stores `com.atproto.moderation.createReport` submissions.
+- `src/moderation/report.c` is the SQLite-backed report store; `src/moderation/moderation_routes.c` is its `createReport` handler.
 - `src/ops/metrics.c` / `src/ops/update_watcher.c` back `GET /metrics` and the self-update checker.
 - `cpp/metalbear/key_rotation.cpp` manages P-256 signing key rotation. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
 - `include/metalbear/` contains all public headers.
+
+## File organization
+
+Every file deals with one part of a scope — one XRPC lexicon domain, one
+subsystem, one storage engine. `server.c` at 8619 lines used to hold nearly
+every protocol handler in the codebase; it and `repo_store.c` were split
+along these lines, and the same standard applies to new code and to the
+next oversized file found, not just the ones already done.
+
+- **Domain-scoped route files**: XRPC handlers for one lexicon namespace
+  (or one clearly-bounded cluster within a namespace, e.g. `sync_routes.c`
+  covering `com.atproto.sync.*`) live in their own `src/<domain>/<domain>_routes.c`,
+  declared via a matching `.h` in the same directory. `server.c` includes
+  that header and registers the handlers; it does not define them.
+- **Internal headers share what the public API must not expose.** A struct
+  that is opaque in `include/metalbear/*.h` for external consumers (e.g.
+  `metalbear_server`, `metalbear_repo_store`) sometimes has fields several
+  files within the module need directly — route handlers reading
+  `server->public_url`, `h_import_repo` manipulating the repo store's CAR
+  and head directly. The real definition and any cross-cutting helper
+  functions those files call go in a private `<module>_internal.h`
+  (`server_internal.h`, `repo_store_internal.h`) next to the files that
+  share it — never duplicated per file, never added to the public header.
+  A function only needs exposing here if something outside its own file
+  calls it; keep everything else `static`.
+- **The public header doesn't move.** Splitting an implementation file does
+  not change `include/metalbear/*.h` — every function declared there keeps
+  its existing declaration, so external callers (including cross-file calls
+  within this same repo, like `server.c` calling
+  `metalbear_xrpc_server_register_pds_repo_resolver_ex`) need no changes.
+- **A cluster carved out of a larger block stays in its own domain even
+  when its neighbors don't.** `resolve_oauth_subject`/`verify_oauth_credential`
+  sat inside what was otherwise the identity cluster in `server.c`, but they
+  are OAuth login-credential callbacks (`metalbear_oauth_subject_resolver` /
+  `_credential_verifier`), not DID/identity XRPC handlers — they moved to
+  `src/oauth/` instead of riding along with `src/identity/`. Physical
+  proximity in the original file is not a reason to keep unrelated things
+  together; check what a function's callers actually are before deciding
+  where it belongs.
+- **One extraction, one commit, verified before the next.** Each split is
+  its own `refactor:` commit: full clean rebuild, full `ctest` run,
+  `clang-format` on the touched files (re-run build + tests after
+  formatting — a reflow can shift a multi-line signature's continuation
+  indent without changing behavior, but confirm it didn't), push, and a
+  green CI run before starting the next file. Don't stack unverified splits.
+- **Size alone doesn't mandate a split.** A large file that genuinely deals
+  with one scope — one lexicon namespace with a lot of surface area, one
+  cohesive subsystem — is not automatically a violation. Look for actual
+  domain mixing (a session handler and a moderation handler in the same
+  file) before deciding a file needs dividing, not just a line count.
 
 ## Commits
 
