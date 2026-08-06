@@ -185,14 +185,28 @@ stays stale or a daemon rebuilds the same state twice.
 `GET /` on the PDS port serves `landing_handler`'s static HTML and is almost
 never seen. The public page at bear1.croft.click is the SvelteKit frontend in
 `frontend/`, prerendered to `build/` and copied to
-`/Volumes/Storage/Server/stack/nginx/bear1-site`; nginx serves only
-`index.html`, `_app/` and `robots.txt` statically and falls every other path
-through to the PDS. The page reads what it displays from the server at request
-time, so anything it shows must come from a public endpoint a browser can
-fetch — `operator.json` carries `software.version` and `software.wolframVersion`
-for exactly that reason. A version added only to `landing_handler` is invisible
-on the public site, and a rebuilt frontend is not a redeployed container: the
-server still has to be rebuilt with the matching `operator.json` change.
+`/Volumes/Storage/Server/stack/nginx/bear1-site`. Copy the *entire* `build/`
+directory, not just `index.html`/`_app/`/`robots.txt` — every prerendered
+page (`login.html`, `account.html`, `account/app-passwords.html`,
+`oauth/consent.html`, and whatever a future route adds) is a separate static
+file, and nginx needs each one on disk to serve it. The page reads what it
+displays from the server at request time, so anything it shows must come
+from a public endpoint a browser can fetch — `operator.json` carries
+`software.version` and `software.wolframVersion` for exactly that reason. A
+version added only to `landing_handler` is invisible on the public site, and
+a rebuilt frontend is not a redeployed container: the server still has to be
+rebuilt with the matching `operator.json` change.
+
+`stack/nginx/bear1.conf` needs an exact-match `location = <path>` for every
+frontend page, each pointing at that page's prerendered file (nginx always
+prefers an exact match over a prefix match, which is what lets
+`/oauth/consent` be carved safely out of the otherwise fully backend-owned
+`/oauth/` prefix in `proxy-pds-api.inc`). Everything not covered by one of
+these locations falls through to the PDS via the generic `location /`, so a
+new frontend route without a matching nginx entry doesn't 404 — it silently
+proxies to the backend and gets whatever that path means there instead
+(usually a 400). Adding a route under `frontend/src/routes/` means adding
+the matching `location =` block in the same change, not a followup.
 
 ## Reuse and safety
 
