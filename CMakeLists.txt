@@ -59,6 +59,7 @@ add_library(
   src/repo/repo_store.c
   src/sequencer.c
   src/server.c
+  src/admin/admin_routes.c
   src/moderation/report.c
   src/repo/blob_store.c
   src/repo/blob_store_server.c
