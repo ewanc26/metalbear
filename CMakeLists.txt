@@ -8,6 +8,26 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-Wno-gcc-compat)
 
+# Build provenance surfaced on the landing page and /_debug/health. Captured at
+# configure time -- accurate for the common case (a fresh cmake + build, which
+# is what both the Docker image and CI do); re-run cmake to refresh the commit
+# after reconfiguring an existing build tree from a new commit without a full
+# reconfigure in between. Falls back to "unknown" outside a git checkout (e.g. a
+# source tarball).
+find_package(Git QUIET)
+set(METALBEAR_BUILD_COMMIT "unknown")
+if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+  execute_process(
+    COMMAND ${GIT_EXECUTABLE} rev-parse --short=12 HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE METALBEAR_BUILD_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(NOT METALBEAR_BUILD_COMMIT)
+    set(METALBEAR_BUILD_COMMIT "unknown")
+  endif()
+endif()
+string(TIMESTAMP METALBEAR_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
+
 option(METALBEAR_BUILD_TESTS "Build MetalBear tests" ON)
 find_package(SQLite3 REQUIRED)
 # Some CMake/FindSQLite3 combinations (e.g. Debian bookworm's 3.25) populate
@@ -82,8 +102,11 @@ target_link_libraries(metalbear_core PUBLIC wolfram cjson
                       PRIVATE SQLite3::SQLite3 Threads::Threads)
 # PUBLIC so consumers — and the test targets, which assert what the running
 # server reports against what it was built as — see the version they link.
-target_compile_definitions(metalbear_core
-                           PUBLIC METALBEAR_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(
+  metalbear_core
+  PUBLIC METALBEAR_VERSION="${PROJECT_VERSION}"
+  PUBLIC METALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}"
+  PUBLIC METALBEAR_BUILD_TIME="${METALBEAR_BUILD_TIME}")
 
 # nftw() and its FTW_* flags are XSI extensions. Wolfram exports
 # _POSIX_C_SOURCE/_DEFAULT_SOURCE, which is enough for strdup and friends but

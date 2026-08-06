@@ -468,6 +468,14 @@ int main(void) {
                 strcmp(cJSON_GetObjectItemCaseSensitive(build, "wolframVersion")
                            ->valuestring,
                        WOLFRAM_VERSION_STRING) == 0);
+            CHECK(cJSON_GetObjectItemCaseSensitive(build, "commit") &&
+                  strcmp(cJSON_GetObjectItemCaseSensitive(build, "commit")
+                             ->valuestring,
+                         METALBEAR_BUILD_COMMIT) == 0);
+            CHECK(cJSON_GetObjectItemCaseSensitive(build, "builtAt") &&
+                  strcmp(cJSON_GetObjectItemCaseSensitive(build, "builtAt")
+                             ->valuestring,
+                         METALBEAR_BUILD_TIME) == 0);
             cJSON *proc = cJSON_GetObjectItemCaseSensitive(dbg, "process");
             CHECK(cJSON_IsObject(proc));
             CHECK(cJSON_IsNumber(
@@ -520,6 +528,12 @@ int main(void) {
             cJSON_GetObjectItemCaseSensitive(software, "wolframVersion");
         CHECK(cJSON_IsString(wver) &&
               strcmp(wver->valuestring, WOLFRAM_VERSION_STRING) == 0);
+        cJSON *commit = cJSON_GetObjectItemCaseSensitive(software, "commit");
+        CHECK(cJSON_IsString(commit) &&
+              strcmp(commit->valuestring, METALBEAR_BUILD_COMMIT) == 0);
+        cJSON *built_at = cJSON_GetObjectItemCaseSensitive(software, "builtAt");
+        CHECK(cJSON_IsString(built_at) &&
+              strcmp(built_at->valuestring, METALBEAR_BUILD_TIME) == 0);
         cJSON_Delete(op);
         wf_response_free(&response);
     }

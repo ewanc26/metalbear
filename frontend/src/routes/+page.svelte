@@ -240,6 +240,13 @@
 						>
 					{/if}
 				</h2>
+				{#if info?.software?.commit || info?.software?.builtAt}
+					<p class="mt-1 font-mono text-xs text-slate-600">
+						{#if info?.software?.commit}commit {info.software.commit}{/if}
+						{#if info?.software?.commit && info?.software?.builtAt}·{/if}
+						{#if info?.software?.builtAt}built {info.software.builtAt}{/if}
+					</p>
+				{/if}
 				<p class="mt-1.5 text-sm text-slate-400">
 					An AT Protocol Personal Data Server written from scratch in C/C++, on the
 					<a
