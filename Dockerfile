@@ -39,6 +39,15 @@ WORKDIR /src
 COPY MetalBear ./MetalBear
 COPY wolfram ./wolfram
 
+# The build context excludes .git (see the repo root's .dockerignore), so
+# CMake's own git-detection for METALBEAR_BUILD_COMMIT can never find one from
+# in here. Accept it as a build arg instead, computed on the host where .git
+# is available -- docker-compose.yaml passes it from METALBEAR_BUILD_COMMIT in
+# the shell environment at `docker compose build` time. Defaults to "unknown"
+# so a plain `docker build` with no arg still degrades the same way CMake's
+# own fallback does, rather than failing.
+ARG METALBEAR_BUILD_COMMIT=unknown
+
 # Static internal libraries: the project's own objects link into the binary, so
 # the runtime stage carries one file instead of four shared libraries that have
 # to be kept in step with it.
@@ -47,6 +56,7 @@ RUN cmake -S MetalBear -B build \
         -DBUILD_SHARED_LIBS=OFF \
         -DMETALBEAR_BUILD_TESTS=OFF \
         -DWOLFRAM_SOURCE_DIR=/src/wolfram \
+        -DMETALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}" \
     && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)"
 
 # A toolchain image with the sources and the test suite, for poking at the
