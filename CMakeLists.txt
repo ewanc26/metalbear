@@ -46,7 +46,7 @@ add_library(
   src/metrics.c
   src/handle_dns.c
   src/handle_dns_rfc2136.c
-  cpp/MetalBear/MetalBear/account_registry.cpp
+  cpp/metalbear/account_registry.cpp
   src/account_context.c
   src/account_cache.c
   src/auth.c
@@ -55,7 +55,7 @@ add_library(
   src/oauth.c
   src/oauth_routes.c
   src/oauth_scope.c
-  cpp/MetalBear/MetalBear/key_rotation.cpp
+  cpp/metalbear/key_rotation.cpp
   src/repo_store.c
   src/sequencer.c
   src/server.c
@@ -63,9 +63,9 @@ add_library(
   src/blob_store.c
   src/blob_store_server.c
   src/update_watcher.c
-  cpp/MetalBear/MetalBear/config_file.cpp
-  cpp/MetalBear/MetalBear/log.cpp
-  cpp/MetalBear/MetalBear/account.cpp)
+  cpp/metalbear/config_file.cpp
+  cpp/metalbear/log.cpp
+  cpp/metalbear/account.cpp)
 target_include_directories(metalbear_core PUBLIC include
                            PUBLIC "${METALBEAR_CJSON_SOURCE_DIR}")
 target_link_libraries(metalbear_core PUBLIC wolfram cjson
