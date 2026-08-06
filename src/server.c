@@ -452,7 +452,15 @@ static bool full_access_route(const char *nsid) {
             * their `additional: [AuthScope.Takendown]`. */
            strcmp(nsid, "com.atproto.identity.requestPlcOperationSignature") ==
                0 ||
-           strcmp(nsid, "com.atproto.identity.signPlcOperation") == 0;
+           strcmp(nsid, "com.atproto.identity.signPlcOperation") == 0 ||
+           /* Also `scopes: ACCESS_FULL` in the reference, with no
+            * takendown exception: requestAccountDelete (an account-deletion
+            * token), requestEmailUpdate (an email-change token -- a path to
+            * account takeover if an app password could request one), and
+            * getAccountInviteCodes. */
+           strcmp(nsid, "com.atproto.server.requestAccountDelete") == 0 ||
+           strcmp(nsid, "com.atproto.server.requestEmailUpdate") == 0 ||
+           strcmp(nsid, "com.atproto.server.getAccountInviteCodes") == 0;
 }
 
 /*
