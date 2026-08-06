@@ -1219,9 +1219,13 @@ static wf_status oauth_session(void *ctx, const wf_xrpc_request *req,
     oauth_route_ctx *rctx = ctx;
     char *token = find_cookie(req->cookie_header, MB_DEVICE_COOKIE);
     char subject[256];
-    wf_status status = token ? metalbear_oauth_device_session_verify(
-                                   rctx->store, token, subject, sizeof(subject))
-                             : WF_ERR_NOT_FOUND;
+    wf_status status;
+    if (token) {
+        status = metalbear_oauth_device_session_verify(
+            rctx->store, token, subject, sizeof(subject));
+    } else {
+        status = WF_ERR_NOT_FOUND;
+    }
     free(token);
     if (status != WF_OK) {
         wf_xrpc_response_set_error(resp, 401, "invalid_grant",
