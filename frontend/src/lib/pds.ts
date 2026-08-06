@@ -46,6 +46,14 @@ export interface OperatorInfo {
 		commit?: string;
 		/** UTC build timestamp, ISO 8601. */
 		builtAt?: string;
+		/**
+		 * Where this build sits on the software release life cycle
+		 * (https://en.wikipedia.org/wiki/Software_release_life_cycle):
+		 * "pre-alpha" | "alpha" | "beta" | "rc" | "stable" by convention, set
+		 * at build time via -DMETALBEAR_RELEASE_STAGE. Not validated against
+		 * that list here — display whatever the server reports.
+		 */
+		releaseStage?: string;
 		repository?: string;
 		license?: string;
 	};

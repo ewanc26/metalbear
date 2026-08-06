@@ -38,6 +38,12 @@ COPY wolfram ./wolfram
 # still degrades the same way CMake's own fallback does, rather than failing.
 ARG METALBEAR_BUILD_COMMIT=unknown
 
+# Where this image sits on the software release life cycle (see README.md's
+# "Release stage" section) -- defaults to CMakeLists.txt's own default,
+# override with --build-arg for a deployment that isn't running the project's
+# own current stage.
+ARG METALBEAR_RELEASE_STAGE=alpha
+
 # Static internal libraries, so the runtime stage carries one file rather than
 # a binary plus four shared objects that must be kept in step with it.
 RUN cmake -S MetalBear -B build \
@@ -46,6 +52,7 @@ RUN cmake -S MetalBear -B build \
         -DMETALBEAR_BUILD_TESTS=OFF \
         -DWOLFRAM_SOURCE_DIR=/src/wolfram \
         -DMETALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}" \
+        -DMETALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}" \
     && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)"
 
 FROM alpine:3.21 AS runtime

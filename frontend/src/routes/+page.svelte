@@ -239,6 +239,14 @@
 							>· Wolfram {info.software.wolframVersion}</span
 						>
 					{/if}
+					{#if info?.software?.releaseStage}
+						<span
+							class="ml-1 rounded border border-slate-700 px-1.5 py-0.5 align-middle text-[0.65rem] font-medium tracking-wide text-slate-400 uppercase"
+							title="Where this build sits on the software release life cycle"
+						>
+							{info.software.releaseStage}
+						</span>
+					{/if}
 				</h2>
 				{#if info?.software?.commit || info?.software?.builtAt}
 					<p class="mt-1 font-mono text-xs text-slate-600">
