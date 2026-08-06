@@ -429,6 +429,31 @@ static int run_unit(void) {
     free(recj2);
     free(reccid2);
 
+    /* putRecord with byte-identical content is a genuine no-op (matches the
+     * reference's putRecord.ts): same CID back, head does not advance. */
+    char *head_rev_before = NULL, *head_cid_before = NULL;
+    s = metalbear_repo_store_get_head(store, &head_rev_before,
+                                      &head_cid_before);
+    WF_CHECK(s == WF_OK && head_rev_before && head_cid_before);
+    char *uri4 = NULL, *cid4 = NULL;
+    s = metalbear_repo_store_put_record(
+        store, "com.example.likes", rkey2,
+        "{\"$type\":\"com.example.likes\",\"subject\":\"at://y\",\"extra\":5}",
+        NULL, NULL, &uri4, &cid4);
+    WF_CHECK(s == WF_OK && uri4 && cid4);
+    WF_CHECK(strcmp(cid4, cid3) == 0);
+    char *head_rev_after = NULL, *head_cid_after = NULL;
+    s = metalbear_repo_store_get_head(store, &head_rev_after, &head_cid_after);
+    WF_CHECK(s == WF_OK && head_rev_after && head_cid_after);
+    WF_CHECK(strcmp(head_rev_before, head_rev_after) == 0);
+    WF_CHECK(strcmp(head_cid_before, head_cid_after) == 0);
+    free(uri4);
+    free(cid4);
+    free(head_rev_before);
+    free(head_cid_before);
+    free(head_rev_after);
+    free(head_cid_after);
+
     /* listRecords enumerates a collection via the records index. */
     char *list_json = NULL;
     s = metalbear_repo_store_list_records(store, "com.example.posts", NULL,
