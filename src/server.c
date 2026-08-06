@@ -3233,7 +3233,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
      * its own once attached — no handler-side code needed. Ownership of each
      * limiter transfers to server->xrpc; freed on wf_xrpc_server_free. Values
      * match the reference PDS exactly (createAccount.ts, deleteAccount.ts,
-     * resetPassword.ts). */
+     * resetPassword.ts, uploadBlob.ts). */
     wf_xrpc_server_set_route_rate_limiter(
         server->xrpc, "POST", "/xrpc/com.atproto.server.createAccount",
         wf_rate_limiter_new(100, 300, 0));
@@ -3243,6 +3243,12 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     wf_xrpc_server_set_route_rate_limiter(
         server->xrpc, "POST", "/xrpc/com.atproto.server.resetPassword",
         wf_rate_limiter_new(50, 300, 0));
+    /* uploadBlob had no rate limit at all -- unbounded upload attempts are a
+     * storage/bandwidth exhaustion vector a single-tier, IP-keyed budget
+     * closes off, matching the reference exactly (1000/day). */
+    wf_xrpc_server_set_route_rate_limiter(server->xrpc, "POST",
+                                          "/xrpc/com.atproto.repo.uploadBlob",
+                                          wf_rate_limiter_new(1000, 86400, 0));
 
     /* Initialize email module if configured */
     if (config->smtp_host && config->smtp_host[0] && config->from_address &&
