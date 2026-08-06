@@ -1,4 +1,4 @@
-#include "metalbear/account_registry.h"
+#include "metalbear/account/account_registry.h"
 
 #include <pthread.h>
 #include <sqlite3.h>

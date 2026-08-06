@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "metalbear/oauth_routes.h"
+#include "metalbear/oauth/oauth_routes.h"
 
 #include <cJSON.h>
 #include <curl/curl.h>

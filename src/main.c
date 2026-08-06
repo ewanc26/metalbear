@@ -15,8 +15,8 @@
 
 #include "wolfram/plc.h"
 #include "wolfram/syntax.h"
-#include "metalbear/key_rotation.h"
-#include "metalbear/repo_store.h"
+#include "metalbear/repo/key_rotation.h"
+#include "metalbear/repo/repo_store.h"
 
 static volatile sig_atomic_t stopping;
 

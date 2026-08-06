@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "metalbear/auth.h"
+#include "metalbear/oauth/auth.h"
 
 #include <cJSON.h>
 #include <openssl/crypto.h>

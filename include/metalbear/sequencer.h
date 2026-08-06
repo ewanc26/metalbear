@@ -1,7 +1,7 @@
 #ifndef METALBEAR_SEQUENCER_H
 #define METALBEAR_SEQUENCER_H
 
-#include "metalbear/repo_store.h"
+#include "metalbear/repo/repo_store.h"
 #include "wolfram/xrpc_server.h"
 
 #include <stdint.h>

@@ -26,8 +26,8 @@
  * handle with two conflicting DIDs resolves to neither.
  */
 
-#include "metalbear/handle_dns.h"
-#include "metalbear/handle_dns_rfc2136.h"
+#include "metalbear/dns/handle_dns.h"
+#include "metalbear/dns/handle_dns_rfc2136.h"
 
 #include <cJSON.h>
 #include <curl/curl.h>

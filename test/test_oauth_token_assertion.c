@@ -18,8 +18,8 @@
  * Requires WOLFRAM_BUILD_SERVER and libmicrohttpd.
  */
 
-#include "metalbear/oauth.h"
-#include "metalbear/oauth_routes.h"
+#include "metalbear/oauth/oauth.h"
+#include "metalbear/oauth/oauth_routes.h"
 #include "wolfram/xrpc_server.h"
 
 #include "test.h"

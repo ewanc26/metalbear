@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "metalbear/update_watcher.h"
+#include "metalbear/ops/update_watcher.h"
 #include "metalbear/log.h"
 
 #ifndef METALBEAR_VERSION

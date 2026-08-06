@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "metalbear/report.h"
+#include "metalbear/moderation/report.h"
 
 #include <pthread.h>
 #include <sqlite3.h>

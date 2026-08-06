@@ -24,7 +24,7 @@
  * forge.
  */
 
-#include "metalbear/handle_dns_rfc2136.h"
+#include "metalbear/dns/handle_dns_rfc2136.h"
 
 #include <openssl/hmac.h>
 #include <openssl/evp.h>

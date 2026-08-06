@@ -2,7 +2,7 @@
 #define _DARWIN_C_SOURCE
 
 #include "metalbear/server.h"
-#include "metalbear/account_registry.h"
+#include "metalbear/account/account_registry.h"
 #include "wolfram/repo/car.h"
 #include "wolfram/sync_subscribe.h"
 #include "wolfram/xrpc.h"
