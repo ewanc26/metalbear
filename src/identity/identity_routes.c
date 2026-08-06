@@ -14,6 +14,20 @@
 #include <string.h>
 #include <time.h>
 
+/* Resolve a handle to a DID: local registry first, then DNS TXT /
+ * well-known over the network. Heap-allocated; caller frees. Defined below;
+ * forward-declared here so resolve_handle can share it with
+ * identity_info_response (resolveIdentity/refreshIdentity) rather than only
+ * ever answering for locally-hosted handles. */
+static char *resolve_handle_to_did(metalbear_server *server,
+                                   const char *handle);
+
+/* ---- com.atproto.identity.resolveHandle (query) ----
+ * Not limited to this host's own accounts: the reference falls through to
+ * real network resolution for a handle it does not host itself (proxying to
+ * an AppView, or resolving directly), and any consuming service is entitled
+ * to ask this endpoint about any handle. resolve_handle_to_did already does
+ * exactly that fallback for resolveIdentity/refreshIdentity; reuse it here. */
 wf_status resolve_handle(void *ctx, const wf_xrpc_request *request,
                          wf_xrpc_response *response) {
     metalbear_server *server = ctx;
@@ -21,19 +35,36 @@ wf_status resolve_handle(void *ctx, const wf_xrpc_request *request,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "handle")
             : NULL;
-    metalbear_account_context *acct =
-        cJSON_IsString(handle) && wf_syntax_handle_is_valid(handle->valuestring)
-            ? context_for_identifier(server, handle->valuestring)
-            : NULL;
-    if (!acct || !metalbear_account_is_active(acct->account) ||
-        account_is_taken_down(server, acct->did)) {
+    if (!cJSON_IsString(handle) ||
+        !wf_syntax_handle_is_valid(handle->valuestring)) {
+        wf_xrpc_response_set_error(response, 400, "HandleNotFound",
+                                   "Unable to resolve handle");
+        return WF_OK;
+    }
+    char *did = resolve_handle_to_did(server, handle->valuestring);
+    if (!did) {
+        wf_xrpc_response_set_error(response, 400, "HandleNotFound",
+                                   "Unable to resolve handle");
+        return WF_OK;
+    }
+    /* A locally-hosted account that is deactivated or taken down is
+     * unavailable, not resolvable -- an unavailable account is invisible,
+     * matching every other identity-facing route in this file. */
+    metalbear_account_context *acct = context_for_did(server, did);
+    if (acct && (!metalbear_account_is_active(acct->account) ||
+                 account_is_taken_down(server, did))) {
+        free(did);
         wf_xrpc_response_set_error(response, 400, "HandleNotFound",
                                    "Unable to resolve handle");
         return WF_OK;
     }
     cJSON *root = cJSON_CreateObject();
-    if (!root) return WF_ERR_ALLOC;
-    cJSON_AddStringToObject(root, "did", acct->did);
+    if (!root) {
+        free(did);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddStringToObject(root, "did", did);
+    free(did);
     return set_json(response, root);
 }
 
@@ -310,8 +341,6 @@ static char *did_doc_claimed_handle(const cJSON *did_doc) {
     return NULL;
 }
 
-/* Resolve a handle to a DID: local registry first, then DNS TXT /
- * well-known over the network. Heap-allocated; caller frees. */
 static char *resolve_handle_to_did(metalbear_server *server,
                                    const char *handle) {
     metalbear_account_entry *entry = NULL;
