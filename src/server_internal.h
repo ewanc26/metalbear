@@ -189,6 +189,18 @@ cJSON *build_did_doc(metalbear_server *server, metalbear_account_context *acct);
 bool did_doc_matches_service(metalbear_server *server,
                              metalbear_account_context *acct);
 
+/* Consume from up to two rate-limiter tiers under the same key, matching the
+ * reference PDS's MethodRateLimit[] semantics for multi-tier endpoints.
+ * `tier_b` may be NULL for a single-tier check. Always sets the RateLimit
+ * and Retry-After response headers; returns false (with the
+ * {"error":"RateLimitExceeded",...} body filled in) when any tier is empty. */
+bool check_endpoint_rate_limit(wf_rate_limiter *tier_a, wf_rate_limiter *tier_b,
+                               const char *key, wf_xrpc_response *response);
+
+/* The token after "Bearer " in an Authorization header, or NULL when the
+ * header is absent or uses a different scheme. */
+const char *bearer_token(const char *header);
+
 #ifdef __cplusplus
 }
 #endif

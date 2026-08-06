@@ -62,6 +62,7 @@ add_library(
   src/server.c
   src/admin/admin_routes.c
   src/identity/identity_routes.c
+  src/session/session_routes.c
   src/moderation/report.c
   src/repo/blob_store.c
   src/repo/blob_store_server.c
