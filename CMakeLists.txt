@@ -43,6 +43,21 @@ if(METALBEAR_BUILD_COMMIT STREQUAL "unknown")
 endif()
 string(TIMESTAMP METALBEAR_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
 
+# Single source of truth for where this build sits on the software release
+# life cycle (https://en.wikipedia.org/wiki/Software_release_life_cycle),
+# surfaced alongside the other build provenance so an operator or a client
+# doesn't have to infer it from the 0.x version number alone. One of
+# "pre-alpha", "alpha", "beta", "rc", or "stable" by convention -- nothing
+# enforces the value beyond that; see README.md's "Release stage" section.
+# Override with -DMETALBEAR_RELEASE_STAGE=... per deployment; the default
+# here is the project's own current stage, updated as it matures.
+set(METALBEAR_RELEASE_STAGE
+    "alpha"
+    CACHE
+      STRING
+      "Where this build sits on the software release life cycle (pre-alpha/alpha/beta/rc/stable)."
+)
+
 option(METALBEAR_BUILD_TESTS "Build MetalBear tests" ON)
 find_package(SQLite3 REQUIRED)
 # Some CMake/FindSQLite3 combinations (e.g. Debian bookworm's 3.25) populate
@@ -121,7 +136,8 @@ target_compile_definitions(
   metalbear_core
   PUBLIC METALBEAR_VERSION="${PROJECT_VERSION}"
   PUBLIC METALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}"
-  PUBLIC METALBEAR_BUILD_TIME="${METALBEAR_BUILD_TIME}")
+  PUBLIC METALBEAR_BUILD_TIME="${METALBEAR_BUILD_TIME}"
+  PUBLIC METALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}")
 
 # nftw() and its FTW_* flags are XSI extensions. Wolfram exports
 # _POSIX_C_SOURCE/_DEFAULT_SOURCE, which is enough for strdup and friends but

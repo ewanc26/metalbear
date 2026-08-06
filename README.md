@@ -539,6 +539,24 @@ Per-route request accounting grows on demand up to a 4096-route cap — enough
 for the protocol surface and a host proxying the whole AppView surface — with
 requests beyond the cap still counted under `other` so the totals stay honest.
 
+## Release stage
+
+MetalBear reports where a given build sits on the [software release life
+cycle](https://en.wikipedia.org/wiki/Software_release_life_cycle) —
+`pre-alpha`, `alpha`, `beta`, `rc`, or `stable` — as a single source of truth
+set at build time, not inferred from the `0.x` version number. It's exposed
+publicly on `/operator.json` (`software.releaseStage`) and the SvelteKit
+frontend's landing page, and on the admin-gated `/_debug/health`
+(`build.releaseStage`), so an operator, a client deciding how much to trust
+an instance, or anyone reading a bug report can see it without guessing.
+
+The project's own current stage is set by `METALBEAR_RELEASE_STAGE` in
+`CMakeLists.txt` (default `alpha`). Override it per build with
+`-DMETALBEAR_RELEASE_STAGE=<stage>`, or via `--build-arg
+METALBEAR_RELEASE_STAGE=<stage>` / docker-compose's `build.args` for a
+Docker build — useful for a self-hosted deployment that wants to declare a
+different stage than the upstream project's own.
+
 ## Frontend
 
 `frontend/` holds the landing page: SvelteKit, prerendered to static files, and
