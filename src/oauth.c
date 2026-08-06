@@ -106,19 +106,22 @@ wf_status metalbear_oauth_public_jwk(metalbear_oauth_store *store,
                                      char **out_jwk) {
     if (!store || !out_jwk) return WF_ERR_INVALID_ARG;
     *out_jwk = NULL;
-    EC_KEY *ec = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+    /* EC_GROUP/EC_POINT are the still-current OpenSSL group-arithmetic API;
+     * only the legacy EC_KEY object wrapper (EC_KEY_new_by_curve_name and
+     * friends) is deprecated as of OpenSSL 3.0, and nothing here needs it --
+     * the group is all EC_POINT_mul requires to turn the raw private scalar
+     * into the public point. */
+    EC_GROUP *group = EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1);
     BIGNUM *private_key = BN_bin2bn(store->key.bytes, 32, NULL);
-    EC_POINT *public_key = ec ? EC_POINT_new(EC_KEY_get0_group(ec)) : NULL;
+    EC_POINT *public_key = group ? EC_POINT_new(group) : NULL;
     BIGNUM *x = BN_new(), *y = BN_new();
     unsigned char x_raw[32], y_raw[32];
     char *x_b64 = NULL, *y_b64 = NULL, *json = NULL;
     cJSON *root = NULL;
     wf_status status = WF_ERR_CRYPTO;
-    if (!ec || !private_key || !public_key || !x || !y ||
-        EC_POINT_mul(EC_KEY_get0_group(ec), public_key, private_key, NULL, NULL,
-                     NULL) != 1 ||
-        EC_POINT_get_affine_coordinates(EC_KEY_get0_group(ec), public_key, x, y,
-                                        NULL) != 1 ||
+    if (!group || !private_key || !public_key || !x || !y ||
+        EC_POINT_mul(group, public_key, private_key, NULL, NULL, NULL) != 1 ||
+        EC_POINT_get_affine_coordinates(group, public_key, x, y, NULL) != 1 ||
         BN_bn2binpad(x, x_raw, sizeof(x_raw)) != (int)sizeof(x_raw) ||
         BN_bn2binpad(y, y_raw, sizeof(y_raw)) != (int)sizeof(y_raw))
         goto done;
@@ -154,7 +157,7 @@ done:
     BN_free(x);
     BN_free(y);
     EC_POINT_free(public_key);
-    EC_KEY_free(ec);
+    EC_GROUP_free(group);
     return status;
 }
 
