@@ -19,13 +19,18 @@ It provides a runnable PDS foundation, supporting multi-account hosting.
   but the spec is what other implementations were written against.
 - `src/server.c` is the central file: server lifecycle, XRPC route registration, auth callback, and all protocol handler functions.
 - `cpp/metalbear/account.cpp` manages credential storage, app passwords, email tokens, and account state (active/deactivated) in a per-account SQLite database. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
-- `src/auth.c` manages session tokens (access/refresh JWTs) with scrypt-hashed refresh tokens and scope-based access control.
+- `src/oauth/auth.c` manages session tokens (access/refresh JWTs) with scrypt-hashed refresh tokens and scope-based access control.
 - `src/sequencer.c` handles the firehose event stream (commits, identity, account, sync events) with configurable retention.
 - `cpp/metalbear/account_registry.cpp` manages the multi-account registry, mapping account DIDs to their respective data directory paths. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
 - `src/email.c` is the optional SMTP email client using libcurl.
-- `src/backup.c` implements repository backup/restore with CRC32 checksums.
-- `src/oauth.c` handles OAuth 2.0 token endpoints.
-- `src/oauth_scope.c` implements OAuth auth scope parsing and matching for AT Protocol granular permissions. Parses static scopes (`atproto`, `transition:*`) and dynamic repo scopes (`repo:<collection>?action=<action>`). Integrated with the authentication callback in `server.c` to enforce scope-based access control on repo write operations.
+- `src/repo/backup.c` implements repository backup/restore with CRC32 checksums.
+- `src/oauth/oauth.c` handles OAuth 2.0 token endpoints.
+- `src/oauth/oauth_scope.c` implements OAuth auth scope parsing and matching for AT Protocol granular permissions. Parses static scopes (`atproto`, `transition:*`) and dynamic repo scopes (`repo:<collection>?action=<action>`). Integrated with the authentication callback in `server.c` to enforce scope-based access control on repo write operations.
+- `src/repo/repo_store.c` is the durable, writable repo storage engine (records, MST, commits) and its XRPC route handlers. `src/repo/blob_store.c` / `src/repo/blob_store_server.c` are the blob persistence layer and its routes.
+- `src/account/account_context.c` / `src/account/account_cache.c` resolve and cache the per-request account context (DID, repo, auth) route handlers share.
+- `src/dns/handle_dns.c` / `src/dns/handle_dns_rfc2136.c` publish the `_atproto` handle-resolution TXT records (static zone file and RFC 2136 dynamic update, respectively).
+- `src/moderation/report.c` stores `com.atproto.moderation.createReport` submissions.
+- `src/ops/metrics.c` / `src/ops/update_watcher.c` back `GET /metrics` and the self-update checker.
 - `cpp/metalbear/key_rotation.cpp` manages P-256 signing key rotation. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
 - `include/metalbear/` contains all public headers.
 
