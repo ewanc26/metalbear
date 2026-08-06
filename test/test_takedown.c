@@ -525,6 +525,37 @@ int main(void) {
                             &response) == WF_ERR_HTTP);
     CHECK(response.status == 401);
     wf_response_free(&response);
+
+    /* getServiceAuth is in the takendown allowlist, but only to mint a token
+     * for createAccount -- so the holder can migrate to another PDS. Any
+     * other lxm (or none at all) is refused, matching the reference's
+     * `isTakendown(scope) && lxm !== createAccount.lxm` check. */
+    wf_xrpc_client_set_auth(client, mallory_takendown_access);
+    {
+        wf_xrpc_param params[] = {{"aud", victim_did},
+                                  {"lxm", "com.atproto.server.createAccount"}};
+        wf_xrpc_query_params(client, "com.atproto.server.getServiceAuth",
+                             params, 2, &response);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+    }
+    {
+        wf_xrpc_param params[] = {{"aud", victim_did},
+                                  {"lxm", "com.atproto.repo.getRecord"}};
+        wf_xrpc_query_params(client, "com.atproto.server.getServiceAuth",
+                             params, 2, &response);
+        CHECK(response.status == 400);
+        error_name(&response, err, sizeof(err));
+        CHECK(strcmp(err, "InvalidToken") == 0);
+        wf_response_free(&response);
+    }
+    {
+        wf_xrpc_param params[] = {{"aud", victim_did}};
+        wf_xrpc_query_params(client, "com.atproto.server.getServiceAuth",
+                             params, 1, &response);
+        CHECK(response.status == 400);
+        wf_response_free(&response);
+    }
     wf_xrpc_client_set_auth(client, NULL);
     free(mallory_takendown_access);
     free(mallory_takendown_refresh);
