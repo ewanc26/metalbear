@@ -1156,6 +1156,41 @@ static wf_status oauth_signin(void *ctx, const wf_xrpc_request *req,
     return json_response(resp, root, "no-store");
 }
 
+/*
+ * GET /oauth/session (not part of the OAuth spec). Read-only check of the
+ * presented device-session cookie -- the same check `oauth_authorize`'s
+ * approval step makes, exposed ahead of time so the consent page can send a
+ * user to sign in *before* showing a consent screen it cannot actually
+ * finish, rather than after: a regular JWT session (the `auth` store) is not
+ * proof of a device session, since nothing establishes one but
+ * POST /oauth/signin, and a returning user with only a JWT session would
+ * otherwise reach "Approve" and loop back to this same consent page with
+ * nothing having happened.
+ */
+static wf_status oauth_session(void *ctx, const wf_xrpc_request *req,
+                               wf_xrpc_response *resp) {
+    oauth_route_ctx *rctx = ctx;
+    char *token = find_cookie(req->cookie_header, MB_DEVICE_COOKIE);
+    char subject[256];
+    wf_status status =
+        token ? metalbear_oauth_device_session_verify(rctx->store, token,
+                                                       subject, sizeof(subject))
+              : WF_ERR_NOT_FOUND;
+    free(token);
+    if (status != WF_OK) {
+        wf_xrpc_response_set_error(resp, 401, "invalid_grant",
+                                   "No device session");
+        return WF_OK;
+    }
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    if (!cJSON_AddStringToObject(root, "did", subject)) {
+        cJSON_Delete(root);
+        return WF_ERR_ALLOC;
+    }
+    return json_response(resp, root, "no-store");
+}
+
 /* POST /oauth/signout (not part of the OAuth spec). Revokes the presented
  * device session, if any, and clears the cookie either way — the desired
  * end state (signed out) holds whether or not there was a session to
@@ -1211,6 +1246,8 @@ wf_status metalbear_oauth_routes_register(
             ctx) != WF_OK ||
         wf_xrpc_server_register_http_route(server, "POST", "/oauth/signin",
                                            oauth_signin, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(server, "GET", "/oauth/session",
+                                           oauth_session, ctx) != WF_OK ||
         wf_xrpc_server_register_http_route(server, "POST", "/oauth/signout",
                                            oauth_signout, ctx) != WF_OK) {
         free(ctx->public_url);
