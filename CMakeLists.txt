@@ -12,18 +12,33 @@ add_compile_options(-Wno-gcc-compat)
 # configure time -- accurate for the common case (a fresh cmake + build, which
 # is what both the Docker image and CI do); re-run cmake to refresh the commit
 # after reconfiguring an existing build tree from a new commit without a full
-# reconfigure in between. Falls back to "unknown" outside a git checkout (e.g. a
-# source tarball).
-find_package(Git QUIET)
-set(METALBEAR_BUILD_COMMIT "unknown")
-if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
-  execute_process(
-    COMMAND ${GIT_EXECUTABLE} rev-parse --short=12 HEAD
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    OUTPUT_VARIABLE METALBEAR_BUILD_COMMIT
-    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-  if(NOT METALBEAR_BUILD_COMMIT)
-    set(METALBEAR_BUILD_COMMIT "unknown")
+# reconfigure in between.
+#
+# The Docker build's context deliberately excludes .git (see the repo root's
+# .dockerignore -- keeping the context small), so git-detection can never see a
+# commit from inside that build. Accept an external override instead: the
+# Dockerfile passes -DMETALBEAR_BUILD_COMMIT=... from a build arg computed on
+# the host, where .git *is* available. A CACHE variable set via -D on the
+# initial configure wins over the set() below, so the override is used as-is and
+# git-detection is skipped entirely; without an override this falls back to
+# "unknown" outside a git checkout too (e.g. a source tarball).
+set(METALBEAR_BUILD_COMMIT
+    "unknown"
+    CACHE
+      STRING
+      "Short git commit this build was compiled from; auto-detected unless overridden with -D."
+)
+if(METALBEAR_BUILD_COMMIT STREQUAL "unknown")
+  find_package(Git QUIET)
+  if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    execute_process(
+      COMMAND ${GIT_EXECUTABLE} rev-parse --short=12 HEAD
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      OUTPUT_VARIABLE METALBEAR_BUILD_COMMIT
+      OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(NOT METALBEAR_BUILD_COMMIT)
+      set(METALBEAR_BUILD_COMMIT "unknown")
+    endif()
   endif()
 endif()
 string(TIMESTAMP METALBEAR_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
