@@ -2258,6 +2258,24 @@ static wf_status create_session(void *ctx, const wf_xrpc_request *request,
         }
     }
 
+    /* Matches the reference's OLD_PASSWORD_MAX_LENGTH check (createSession.ts):
+     * reject an implausibly long password before it is ever hashed, rather
+     * than paying scrypt's cost (proportional to input size) for an input no
+     * real password reaches. */
+    {
+        const cJSON *password_check =
+            request->params
+                ? cJSON_GetObjectItemCaseSensitive(request->params, "password")
+                : NULL;
+        if (cJSON_IsString(password_check) &&
+            strlen(password_check->valuestring) > 512) {
+            wf_xrpc_response_set_error(
+                response, 401, "AuthenticationRequired",
+                "Password too long. Consider resetting your password.");
+            return WF_OK;
+        }
+    }
+
     metalbear_credential_kind credential =
         valid_login(server, request->params, &acct, &app_password_name);
     if (credential == METALBEAR_CREDENTIAL_INVALID || !acct) {
