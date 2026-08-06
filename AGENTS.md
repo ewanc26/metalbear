@@ -147,6 +147,12 @@ the same way.
 - **No version jumps**: bump from the immediately previous released version.
   Never skip a patch, minor, or major number; do not backfill gaps with
   phantom tags or releases.
+- **Attach binaries starting at 1.0.0**: releases before 1.0.0 are source-only
+  (`gh release create` with no upload). From the 1.0.0 release onward, every
+  release must also attach built binaries as release assets (e.g. `gh release
+  upload v<major>.<minor>.<patch> <path>...`) — built via the same flow as
+  local verification (`cmake --build build`), for each platform the project
+  ships prebuilt artifacts for.
 
 ## Release and redeploy
 
