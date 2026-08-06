@@ -58,6 +58,8 @@ add_library(
   src/oauth/oauth_credentials.c
   cpp/metalbear/key_rotation.cpp
   src/repo/repo_store.c
+  src/repo/repo_routes.c
+  src/repo/did_document.c
   src/sequencer.c
   src/server.c
   src/admin/admin_routes.c
