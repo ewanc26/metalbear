@@ -128,18 +128,33 @@ wf_status create_session(void *ctx, const wf_xrpc_request *request,
      * Credentials are checked before the takedown so the error does not
      * distinguish a taken-down account from a wrong password to anyone who
      * does not already hold the password.
+     *
+     * `allowTakendown` (com.atproto.server.createSession lexicon) lets the
+     * caller opt into a session anyway, narrowly scoped to
+     * METALBEAR_ACCESS_TAKENDOWN rather than refused outright -- matching
+     * the reference's `formatScope(appPassword, isSoftDeleted)`, which
+     * checks the takedown before the credential kind and returns
+     * AuthScope.Takendown regardless of whether an app password was used.
      */
-    if (account_is_taken_down(server, acct->did)) {
-        free(app_password_name);
-        metalbear_metrics_inc(METALBEAR_METRIC_LOGIN_FAILURES);
-        LOG_WARN("create_session: refused taken-down account did=%s",
-                 acct->did);
-        wf_xrpc_response_set_error(response, 401, "AccountTakedown",
-                                   "Account has been taken down");
-        return WF_OK;
+    bool taken_down = account_is_taken_down(server, acct->did);
+    if (taken_down) {
+        const cJSON *allow_takendown =
+            request->params ? cJSON_GetObjectItemCaseSensitive(request->params,
+                                                               "allowTakendown")
+                            : NULL;
+        if (!cJSON_IsTrue(allow_takendown)) {
+            free(app_password_name);
+            metalbear_metrics_inc(METALBEAR_METRIC_LOGIN_FAILURES);
+            LOG_WARN("create_session: refused taken-down account did=%s",
+                     acct->did);
+            wf_xrpc_response_set_error(response, 401, "AccountTakedown",
+                                       "Account has been taken down");
+            return WF_OK;
+        }
     }
     metalbear_access_scope scope =
-        credential == METALBEAR_CREDENTIAL_ACCOUNT ? METALBEAR_ACCESS_FULL
+        taken_down ? METALBEAR_ACCESS_TAKENDOWN
+        : credential == METALBEAR_CREDENTIAL_ACCOUNT ? METALBEAR_ACCESS_FULL
         : credential == METALBEAR_CREDENTIAL_APP_PASSWORD_PRIVILEGED
             ? METALBEAR_ACCESS_APP_PASSWORD_PRIVILEGED
             : METALBEAR_ACCESS_APP_PASSWORD;
