@@ -48,14 +48,14 @@ jobs:
             arch: arm64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: MetalBear
 
       # Build the SDK from source at a matching commit rather than against
       # whatever a package manager offers: the two move together.
       - name: Check out Wolfram
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ewanc26/wolfram
           path: wolfram
@@ -156,7 +156,7 @@ jobs:
           tar -C dist -czf "$NAME.tar.gz" "$NAME"
           shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: metalbear-${{ matrix.name }}
           path: |
@@ -196,11 +196,11 @@ jobs:
             flavor: 'latest=false'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: MetalBear
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ewanc26/wolfram
           path: wolfram
@@ -299,14 +299,14 @@ jobs:
       # Only the named binary artifacts. The image job's buildx runs upload
       # *.dockerbuild attestation artifacts that repeatedly fail to download
       # here and have been taking every tag release down with them.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: metalbear-*
           merge-multiple: true
 
       - name: Publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/*.tar.gz
