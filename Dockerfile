@@ -48,6 +48,13 @@ COPY wolfram ./wolfram
 # own fallback does, rather than failing.
 ARG METALBEAR_BUILD_COMMIT=unknown
 
+# Where this image sits on the software release life cycle (see README.md's
+# "Release stage" section) -- defaults to CMakeLists.txt's own default, but a
+# deployment building its own image (a stable self-host, say) can override it
+# with --build-arg or docker-compose.yaml's build.args, same pattern as
+# METALBEAR_BUILD_COMMIT above.
+ARG METALBEAR_RELEASE_STAGE=alpha
+
 # Static internal libraries: the project's own objects link into the binary, so
 # the runtime stage carries one file instead of four shared libraries that have
 # to be kept in step with it.
@@ -57,6 +64,7 @@ RUN cmake -S MetalBear -B build \
         -DMETALBEAR_BUILD_TESTS=OFF \
         -DWOLFRAM_SOURCE_DIR=/src/wolfram \
         -DMETALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}" \
+        -DMETALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}" \
     && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)"
 
 # A toolchain image with the sources and the test suite, for poking at the
