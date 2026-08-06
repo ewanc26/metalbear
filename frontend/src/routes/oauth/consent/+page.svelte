@@ -16,8 +16,43 @@
 	let confirming: boolean = $state(false);
 	let info: AuthorizeInfo | null = $state(null);
 	let infoFailed: boolean = $state(false);
+	/*
+	 * Some OAuth clients omit login_hint entirely, expecting the provider
+	 * itself to ask "who are you?" -- oauth_authorize redirects here without
+	 * one rather than erroring in that case (see redirect_to_consent in
+	 * oauth_routes.c). identifierInput collects it directly instead of
+	 * requiring the client to have resolved a handle up front.
+	 */
+	let needsIdentifier: boolean = $state(false);
+	let identifierInput: string = $state('');
 
 	auth.subscribe((s) => (session = s));
+
+	async function proceedWithLoginHint() {
+		/*
+		 * A regular JWT session (the `auth` store) proves nothing about the
+		 * OAuth device session "Approve" actually needs -- nothing else
+		 * establishes one but /oauth/signin, which /login only calls when it
+		 * knows it's on an OAuth path. A returning user who already has a
+		 * JWT session from an earlier, unrelated visit must still be sent
+		 * through /login here, or "Approve" would have nothing to check and
+		 * loop back to this same page having done nothing.
+		 */
+		const redirectTarget = `/oauth/consent?${new URLSearchParams({
+			client_id: clientId,
+			request_uri: requestUri,
+			...(loginHint ? { login_hint: loginHint } : {})
+		}).toString()}`;
+		if (!session || !(await hasDeviceSession())) {
+			loading = false;
+			goto(`/login?redirect=${encodeURIComponent(redirectTarget)}`);
+			return;
+		}
+
+		info = await authorizeInfo(clientId, requestUri);
+		infoFailed = info === null;
+		loading = false;
+	}
 
 	onMount(async () => {
 		clientId = $page.url.searchParams.get('client_id') ?? '';
@@ -29,25 +64,23 @@
 			return;
 		}
 
-		/*
-		 * A regular JWT session (the `auth` store) proves nothing about the
-		 * OAuth device session "Approve" actually needs -- nothing else
-		 * establishes one but /oauth/signin, which /login only calls when it
-		 * knows it's on an OAuth path. A returning user who already has a
-		 * JWT session from an earlier, unrelated visit must still be sent
-		 * through /login here, or "Approve" would have nothing to check and
-		 * loop back to this same page having done nothing.
-		 */
-		if (!session || !(await hasDeviceSession())) {
+		if (!loginHint) {
+			needsIdentifier = true;
 			loading = false;
-			goto(`/login?redirect=${encodeURIComponent($page.url.pathname + $page.url.search)}`);
 			return;
 		}
 
-		info = await authorizeInfo(clientId, requestUri);
-		infoFailed = info === null;
-		loading = false;
+		await proceedWithLoginHint();
 	});
+
+	async function handleIdentifierSubmit(e: Event) {
+		e.preventDefault();
+		if (!identifierInput.trim()) return;
+		loginHint = identifierInput.trim();
+		needsIdentifier = false;
+		loading = true;
+		await proceedWithLoginHint();
+	}
 
 	async function handleApprove() {
 		confirming = true;
@@ -78,6 +111,37 @@
 		<p class="mt-4 text-center text-sm text-slate-500">
 			<a href="/" class="text-emerald-500 hover:text-emerald-400">← Back to status</a>
 		</p>
+	{:else if needsIdentifier}
+		<div class="rounded-lg border border-slate-800 bg-slate-900/30 p-8">
+			<h1 class="mb-2 text-xl font-semibold text-white">Sign in to authorize</h1>
+			<p class="mb-6 text-sm text-slate-400">
+				An application is requesting access to an account on this server. Enter your handle or DID
+				to continue.
+			</p>
+			<form onsubmit={handleIdentifierSubmit} class="flex flex-col gap-4">
+				<div>
+					<label for="identifier" class="mb-1.5 block text-sm font-medium text-slate-300"
+						>Handle or DID</label
+					>
+					<input
+						id="identifier"
+						type="text"
+						bind:value={identifierInput}
+						placeholder="alice.bsky.social"
+						required
+						autocomplete="username"
+						class="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+					/>
+				</div>
+				<button
+					type="submit"
+					disabled={!identifierInput.trim()}
+					class="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+				>
+					Continue
+				</button>
+			</form>
+		</div>
 	{:else if !session}
 		<p class="text-sm text-slate-400">Redirecting to sign in…</p>
 	{:else if infoFailed}
