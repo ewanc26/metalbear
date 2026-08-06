@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "metalbear/account_registry.h"
+#include "metalbear/account/account_registry.h"
 
 #include <stdio.h>
 #include <stdlib.h>

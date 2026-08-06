@@ -2,7 +2,7 @@
  * test_oauth_scope.c — Tests for OAuth scope parsing and matching
  */
 
-#include "metalbear/oauth_scope.h"
+#include "metalbear/oauth/oauth_scope.h"
 #include "wolfram/xrpc.h"
 #include <cJSON.h>
 #include <stdio.h>

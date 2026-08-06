@@ -1,12 +1,12 @@
 #ifndef METALBEAR_ACCOUNT_CONTEXT_H
 #define METALBEAR_ACCOUNT_CONTEXT_H
 
-#include "metalbear/account.h"
-#include "metalbear/auth.h"
-#include "metalbear/key_rotation.h"
+#include "metalbear/account/account.h"
+#include "metalbear/oauth/auth.h"
+#include "metalbear/repo/key_rotation.h"
 #include "metalbear/sequencer.h"
-#include "metalbear/blob_store.h"
-#include "metalbear/repo_store.h"
+#include "metalbear/repo/blob_store.h"
+#include "metalbear/repo/repo_store.h"
 #include "wolfram/xrpc.h"
 
 #ifdef __cplusplus

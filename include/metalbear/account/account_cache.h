@@ -1,9 +1,9 @@
 #ifndef METALBEAR_ACCOUNT_CACHE_H
 #define METALBEAR_ACCOUNT_CACHE_H
 
-#include "metalbear/account_context.h"
+#include "metalbear/account/account_context.h"
 #include "metalbear/sequencer.h"
-#include "metalbear/account_registry.h"
+#include "metalbear/account/account_registry.h"
 
 #include <stdbool.h>
 

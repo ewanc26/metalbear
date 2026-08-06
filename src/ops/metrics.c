@@ -7,7 +7,7 @@
  * indistinguishable from a scrape that arrived a microsecond earlier.
  */
 
-#include "metalbear/metrics.h"
+#include "metalbear/ops/metrics.h"
 
 #include <pthread.h>
 #include <stdatomic.h>
