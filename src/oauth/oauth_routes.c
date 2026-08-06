@@ -751,6 +751,126 @@ done:
     return status;
 }
 
+/*
+ * Best-effort fetch of a client's display fields (client_name, client_uri,
+ * logo_uri) from its metadata document, for the consent screen -- so a user
+ * approves a named, recognizable app rather than a bare client_id URL.
+ * Unlike client_jwks_resolve, failure here is never fatal to the flow: a
+ * client whose metadata document is slow, unreachable, or missing these
+ * optional fields still gets a consent screen, just with the raw client_id
+ * shown instead of a friendly name. All three out params are NULL (not an
+ * error) when the corresponding field is absent or the fetch fails
+ * entirely; only allocation failure returns non-WF_OK.
+ */
+static wf_status fetch_client_display_metadata(const char *client_id,
+                                               char **out_name, char **out_uri,
+                                               char **out_logo) {
+    *out_name = NULL;
+    *out_uri = NULL;
+    *out_logo = NULL;
+    if (!client_id_fetchable(client_id)) return WF_OK;
+
+    cJSON *metadata = NULL;
+    if (http_get_json(client_id, &metadata) != WF_OK || !metadata) return WF_OK;
+
+    cJSON *name = cJSON_GetObjectItemCaseSensitive(metadata, "client_name");
+    cJSON *uri = cJSON_GetObjectItemCaseSensitive(metadata, "client_uri");
+    cJSON *logo = cJSON_GetObjectItemCaseSensitive(metadata, "logo_uri");
+    wf_status status = WF_OK;
+    if (cJSON_IsString(name) && name->valuestring[0]) {
+        *out_name = strdup(name->valuestring);
+        if (!*out_name) status = WF_ERR_ALLOC;
+    }
+    /* Only offer client_uri/logo_uri onward as https (or loopback http, for
+     * local dev/test) -- the same fetchability rule as the client_id itself,
+     * so the consent page never gets handed a javascript: or data: URI to
+     * put in an href/src. */
+    if (status == WF_OK && cJSON_IsString(uri) &&
+        client_id_fetchable(uri->valuestring)) {
+        *out_uri = strdup(uri->valuestring);
+        if (!*out_uri) status = WF_ERR_ALLOC;
+    }
+    if (status == WF_OK && cJSON_IsString(logo) &&
+        client_id_fetchable(logo->valuestring)) {
+        *out_logo = strdup(logo->valuestring);
+        if (!*out_logo) status = WF_ERR_ALLOC;
+    }
+    cJSON_Delete(metadata);
+    if (status != WF_OK) {
+        free(*out_name);
+        free(*out_uri);
+        free(*out_logo);
+        *out_name = *out_uri = *out_logo = NULL;
+    }
+    return status;
+}
+
+/* ---- GET /oauth/authorize/info ----
+ * Read-only counterpart to /oauth/authorize: lets the consent page show
+ * what is actually being requested (scope, and the requesting client's
+ * display name/logo when its metadata document offers them) before the
+ * user decides, without consuming the PAR the way approval does. */
+static wf_status oauth_authorize_info(void *ctx, const wf_xrpc_request *req,
+                                      wf_xrpc_response *resp) {
+    oauth_route_ctx *rctx = ctx;
+    const char *request_uri = NULL;
+    const char *client_id = NULL;
+    if (req->params && cJSON_IsObject(req->params)) {
+        cJSON *ru =
+            cJSON_GetObjectItemCaseSensitive(req->params, "request_uri");
+        cJSON *cid = cJSON_GetObjectItemCaseSensitive(req->params, "client_id");
+        if (cJSON_IsString(ru)) request_uri = ru->valuestring;
+        if (cJSON_IsString(cid)) client_id = cid->valuestring;
+    }
+    if (!request_uri || !client_id) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Missing request_uri or client_id");
+        return WF_OK;
+    }
+
+    char *scope = NULL, *redirect_uri = NULL;
+    wf_status status = metalbear_oauth_par_peek(
+        rctx->store, request_uri, client_id, &scope, &redirect_uri);
+    if (status == WF_ERR_NOT_FOUND) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Unknown or expired authorization request");
+        return WF_OK;
+    }
+    if (status != WF_OK) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Authorization request does not match "
+                                   "this client");
+        return WF_OK;
+    }
+    free(redirect_uri); /* not part of this response */
+
+    char *name = NULL, *uri = NULL, *logo = NULL;
+    fetch_client_display_metadata(client_id, &name, &uri, &logo);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        free(scope);
+        free(name);
+        free(uri);
+        free(logo);
+        return WF_ERR_ALLOC;
+    }
+    bool ok = cJSON_AddStringToObject(root, "client_id", client_id) &&
+              cJSON_AddStringToObject(root, "scope", scope);
+    if (ok && name) ok = cJSON_AddStringToObject(root, "client_name", name);
+    if (ok && uri) ok = cJSON_AddStringToObject(root, "client_uri", uri);
+    if (ok && logo) ok = cJSON_AddStringToObject(root, "logo_uri", logo);
+    free(scope);
+    free(name);
+    free(uri);
+    free(logo);
+    if (!ok) {
+        cJSON_Delete(root);
+        return WF_ERR_ALLOC;
+    }
+    return json_response(resp, root, "no-store");
+}
+
 /* Verify an RFC 7523 client assertion against the client's published JWKS.
  * On success *out_client_id is a heap copy of the authenticated client_id
  * (the assertion's iss/sub, which must equal the presented client_id);
@@ -1086,6 +1206,9 @@ wf_status metalbear_oauth_routes_register(
                                            oauth_revoke, ctx) != WF_OK ||
         wf_xrpc_server_register_http_route(server, "GET", "/oauth/authorize",
                                            oauth_authorize, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(
+            server, "GET", "/oauth/authorize/info", oauth_authorize_info,
+            ctx) != WF_OK ||
         wf_xrpc_server_register_http_route(server, "POST", "/oauth/signin",
                                            oauth_signin, ctx) != WF_OK ||
         wf_xrpc_server_register_http_route(server, "POST", "/oauth/signout",

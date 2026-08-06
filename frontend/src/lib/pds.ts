@@ -18,6 +18,15 @@ export interface ServerInfo {
 	links?: { privacyPolicy?: string; termsOfService?: string };
 }
 
+export interface AuthorizeInfo {
+	client_id: string;
+	scope: string;
+	/** Present only when the client's metadata document offers them. */
+	client_name?: string;
+	client_uri?: string;
+	logo_uri?: string;
+}
+
 export interface RepoInfo {
 	did: string;
 	head: string;
@@ -159,6 +168,31 @@ export async function operatorInfo(): Promise<OperatorInfo | null> {
 
 export function describeServer(): Promise<ServerInfo> {
 	return xrpc<ServerInfo>('com.atproto.server.describeServer');
+}
+
+/*
+ * What a pending OAuth authorization request is actually asking for --
+ * requested scope, and the requesting client's display name/logo when its
+ * metadata document offers them. Read-only: unlike approving the request,
+ * this does not consume it, so the consent page can safely reload or retry.
+ * Returns null on any failure (network error, or the server rejecting an
+ * unknown/expired/mismatched request) -- the caller distinguishes "still
+ * loading" from "failed" with its own state, same as the rest of this file.
+ */
+export async function authorizeInfo(
+	clientId: string,
+	requestUri: string
+): Promise<AuthorizeInfo | null> {
+	try {
+		const url = new URL('/oauth/authorize/info', window.location.origin);
+		url.searchParams.set('client_id', clientId);
+		url.searchParams.set('request_uri', requestUri);
+		const res = await fetch(url, { headers: { accept: 'application/json' } });
+		if (!res.ok) return null;
+		return (await res.json()) as AuthorizeInfo;
+	} catch {
+		return null;
+	}
 }
 
 export async function listRepos(): Promise<RepoInfo[]> {
