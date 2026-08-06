@@ -55,11 +55,13 @@ add_library(
   src/oauth/oauth.c
   src/oauth/oauth_routes.c
   src/oauth/oauth_scope.c
+  src/oauth/oauth_credentials.c
   cpp/metalbear/key_rotation.cpp
   src/repo/repo_store.c
   src/sequencer.c
   src/server.c
   src/admin/admin_routes.c
+  src/identity/identity_routes.c
   src/moderation/report.c
   src/repo/blob_store.c
   src/repo/blob_store_server.c
