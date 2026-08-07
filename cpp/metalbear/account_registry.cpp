@@ -574,6 +574,72 @@ void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
     std::free(entries);
 }
 
+wf_status metalbear_account_registry_get_invite_code_uses(
+    metalbear_account_registry *registry, const char *code,
+    metalbear_invite_code_use_entry **out, size_t *out_count) {
+    if (!registry || !code || !out || !out_count) return WF_ERR_INVALID_ARG;
+    *out = nullptr;
+    *out_count = 0;
+    pthread_mutex_lock(&registry->mutex);
+    sqlite3_stmt *stmt = nullptr;
+    wf_status status = WF_OK;
+    size_t capacity = 0;
+    /* used_at is second-precision (datetime('now')), so two redemptions in
+     * the same second tie on it; rowid as a secondary key keeps insertion
+     * order deterministic instead of leaving ties to SQLite's whim. */
+    if (sqlite3_prepare_v2(registry->db.get(),
+                           "SELECT used_by,used_at FROM invite_code_use "
+                           "WHERE code=? ORDER BY used_at ASC, rowid ASC;",
+                           -1, &stmt, nullptr) != SQLITE_OK) {
+        status = WF_ERR_INTERNAL;
+    } else {
+        sqlite3_bind_text(stmt, 1, code, -1, SQLITE_TRANSIENT);
+    }
+    while (status == WF_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        if (*out_count == capacity) {
+            size_t next = capacity ? capacity * 2 : 4;
+            void *resized = std::realloc(*out, next * sizeof(**out));
+            if (!resized) {
+                status = WF_ERR_ALLOC;
+                break;
+            }
+            *out = static_cast<metalbear_invite_code_use_entry *>(resized);
+            std::memset(*out + capacity, 0, (next - capacity) * sizeof(**out));
+            capacity = next;
+        }
+        metalbear_invite_code_use_entry *item = &(*out)[*out_count];
+        const char *used_by =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+        const char *used_at =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+        item->used_by = used_by ? strdup(used_by) : nullptr;
+        item->used_at = used_at ? strdup(used_at) : nullptr;
+        if (!item->used_by || !item->used_at) {
+            status = WF_ERR_ALLOC;
+        } else {
+            (*out_count)++;
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&registry->mutex);
+    if (status != WF_OK) {
+        metalbear_invite_code_use_entries_free(*out, *out_count);
+        *out = nullptr;
+        *out_count = 0;
+    }
+    return status;
+}
+
+void metalbear_invite_code_use_entries_free(
+    metalbear_invite_code_use_entry *entries, size_t count) {
+    if (!entries) return;
+    for (size_t i = 0; i < count; i++) {
+        std::free(entries[i].used_by);
+        std::free(entries[i].used_at);
+    }
+    std::free(entries);
+}
+
 wf_status metalbear_account_registry_disable_invite_codes(
     metalbear_account_registry *registry, const char **codes, size_t code_count,
     const char **accounts, size_t account_count) {
