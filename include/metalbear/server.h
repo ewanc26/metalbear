@@ -70,12 +70,11 @@ typedef struct metalbear_config {
      * PDS_MAX_REPO_IMPORT_SIZE). 0 => no limit. */
     int64_t max_import_size;
     /*
-     * Per-client request budget: `rate_limit` requests per `rate_limit_window`
-     * seconds. Both default to the historical 100/60 when zero.
-     *
-     * 100 per minute is under two requests a second, which a single AppView or
-     * a relay backfilling with getRepo will exceed without being abusive, so an
-     * operator serving real traffic needs to be able to raise it.
+     * Per-client (IP-keyed) request budget: `rate_limit` requests per
+     * `rate_limit_window` seconds. Both default to 3000/300 when zero,
+     * matching the reference PDS's "global-ip" bucket (rate-limits.ts)
+     * exactly. sync.getRepo carries its own separate route budget and does
+     * not draw from this one, also matching the reference.
      */
     int64_t rate_limit;
     int64_t rate_limit_window;
