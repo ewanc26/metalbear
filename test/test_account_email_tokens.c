@@ -18,12 +18,12 @@
 #include <unistd.h>
 
 static int failures;
-#define CHECK(expr)                                                          \
-    do {                                                                     \
-        if (!(expr)) {                                                      \
-            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-            failures++;                                                     \
-        }                                                                    \
+#define CHECK(expr)                                                            \
+    do {                                                                       \
+        if (!(expr)) {                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr);    \
+            failures++;                                                        \
+        }                                                                      \
     } while (0)
 
 int main(void) {
@@ -34,17 +34,15 @@ int main(void) {
     unlink(path); /* metalbear_account_store_open creates its own file */
 
     metalbear_account_store *store = NULL;
-    CHECK(metalbear_account_store_open(path, "bootstrap-pw", &store) ==
-          WF_OK);
+    CHECK(metalbear_account_store_open(path, "bootstrap-pw", &store) == WF_OK);
     CHECK(store != NULL);
 
     char reset_token[64];
     char confirm_token[64];
     CHECK(metalbear_account_create_email_token(store, "reset", reset_token,
                                                sizeof(reset_token)) == WF_OK);
-    CHECK(metalbear_account_create_email_token(
-              store, "confirm", confirm_token, sizeof(confirm_token)) ==
-          WF_OK);
+    CHECK(metalbear_account_create_email_token(store, "confirm", confirm_token,
+                                               sizeof(confirm_token)) == WF_OK);
 
     /* Deleting by kind only touches that kind. */
     CHECK(metalbear_account_delete_email_tokens_by_kind(store, "reset") ==
@@ -57,9 +55,8 @@ int main(void) {
     /* Re-mint both, then wipe everything regardless of kind. */
     CHECK(metalbear_account_create_email_token(store, "reset", reset_token,
                                                sizeof(reset_token)) == WF_OK);
-    CHECK(metalbear_account_create_email_token(
-              store, "confirm", confirm_token, sizeof(confirm_token)) ==
-          WF_OK);
+    CHECK(metalbear_account_create_email_token(store, "confirm", confirm_token,
+                                               sizeof(confirm_token)) == WF_OK);
     CHECK(metalbear_account_delete_all_email_tokens(store) == WF_OK);
     CHECK(metalbear_account_verify_email_token(store, "reset", reset_token) !=
           WF_OK);
