@@ -176,8 +176,34 @@ static wf_status blob_get_handler(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
-    /* Serve the raw bytes with the stored Content-Type. */
+    /* Serve the raw bytes with the stored Content-Type.
+     *
+     * Blobs are attacker-supplied bytes served from the PDS's own origin,
+     * so they must never be interpretable as a document there -- see the
+     * matching, more detailed comment on com.atproto.sync.getBlob in
+     * sync_routes.c, which this mirrors exactly. This registration path
+     * (metalbear_xrpc_server_register_blob_store[_resolver], used directly
+     * by embedders rather than through the full PDS route registration in
+     * server.c) previously omitted all three headers, serving blobs with
+     * nothing stopping a browser from rendering an uploaded HTML/SVG blob
+     * as same-origin script. */
     wf_xrpc_response_set_content_type(resp, mime);
+    wf_xrpc_response_add_header(resp, "X-Content-Type-Options", "nosniff");
+    char safe_cid[80];
+    size_t safe_len = 0;
+    for (const char *p = cid->valuestring;
+         *p && safe_len + 1 < sizeof(safe_cid); p++) {
+        if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+            (*p >= '0' && *p <= '9'))
+            safe_cid[safe_len++] = *p;
+    }
+    safe_cid[safe_len] = '\0';
+    char disposition[128];
+    snprintf(disposition, sizeof(disposition), "attachment; filename=\"%s\"",
+             safe_cid);
+    wf_xrpc_response_add_header(resp, "Content-Disposition", disposition);
+    wf_xrpc_response_add_header(resp, "Content-Security-Policy",
+                                "default-src 'none'; sandbox");
     wf_xrpc_response_set_body(resp, (const char *)data, len);
     free(data);
     free(mime);
