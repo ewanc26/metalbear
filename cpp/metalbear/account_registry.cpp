@@ -122,6 +122,29 @@ wf_status metalbear_account_registry_open(const char *path,
         }
         if (err) sqlite3_free(err);
     }
+    /* Correct timestamps written with SQLite's own datetime('now') shape
+     * ("2026-08-07 00:53:26": space-separated, no timezone) instead of the
+     * RFC 3339 the datetime lexicon format requires
+     * ("2026-08-07T00:53:26.000Z") -- every writer in this file used the
+     * wrong one until now. Detected by "has a space, has no T": swap the
+     * space for T and append the missing fractional-seconds+Z suffix,
+     * across every column any writer here ever stamped that way. A row
+     * already in the correct shape has no space to match, so this is a
+     * no-op on a clean database. */
+    sqlite3_exec(reg->db.get(),
+                 "UPDATE accounts SET created_at="
+                 "REPLACE(created_at,' ','T')||'.000Z' "
+                 "WHERE created_at LIKE '% %' AND created_at NOT LIKE '%T%';"
+                 "UPDATE invite_code SET created_at="
+                 "REPLACE(created_at,' ','T')||'.000Z' "
+                 "WHERE created_at LIKE '% %' AND created_at NOT LIKE '%T%';"
+                 "UPDATE invite_code_use SET used_at="
+                 "REPLACE(used_at,' ','T')||'.000Z' "
+                 "WHERE used_at LIKE '% %' AND used_at NOT LIKE '%T%';"
+                 "UPDATE subject_takedown SET created_at="
+                 "REPLACE(created_at,' ','T')||'.000Z' "
+                 "WHERE created_at LIKE '% %' AND created_at NOT LIKE '%T%';",
+                 nullptr, nullptr, nullptr);
     *out = reg;
     return WF_OK;
 }
