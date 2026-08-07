@@ -703,6 +703,15 @@ wf_status admin_update_account_password(void *ctx,
     }
     metalbear_account_reset_password(acct, password->valuestring);
     metalbear_account_store_free(acct);
+    /*
+     * Revoke every session the account holds, matching the reference
+     * (account-manager.ts's updateAccountPassword revokes refresh tokens in
+     * the same transaction). An admin resets a password to lock an attacker
+     * out; leaving their existing sessions alive would defeat the point.
+     */
+    metalbear_account_context *sess_acct =
+        context_for_did(server, did->valuestring);
+    if (sess_acct) metalbear_auth_delete_all(sess_acct->auth);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     return set_json(response, root);
@@ -802,14 +811,30 @@ wf_status admin_get_invite_codes(void *ctx, const wf_xrpc_request *request,
         for (size_t j = 0; j < icode_count && taken < limit; j++) {
             cJSON *obj = cJSON_CreateObject();
             if (!obj) continue;
+            /* Field names/types match com.atproto.server.defs#inviteCode
+             * exactly: forAccount/createdBy (not the fabricated
+             * "availableBy"), available as the remaining-use count, disabled,
+             * createdAt. `uses` is required as an array of #inviteCodeUse
+             * ({usedBy, usedAt}) entries, but the registry only keeps a
+             * decrementing remaining-use counter, not a per-redemption log --
+             * emitting an empty array here is honest about that missing
+             * granularity rather than fabricating usedBy/usedAt values. */
             cJSON_AddStringToObject(obj, "code", icode_entries[j].code);
-            cJSON_AddStringToObject(obj, "availableBy", entries[i].handle);
-            cJSON_AddNumberToObject(obj, "uses",
+            cJSON_AddStringToObject(obj, "forAccount",
+                                    icode_entries[j].for_account
+                                        ? icode_entries[j].for_account
+                                        : entries[i].did);
+            cJSON_AddStringToObject(obj, "createdBy",
+                                    icode_entries[j].created_by
+                                        ? icode_entries[j].created_by
+                                        : entries[i].did);
+            cJSON_AddNumberToObject(obj, "available",
                                     icode_entries[j].uses_remaining);
             cJSON_AddBoolToObject(obj, "disabled",
                                   icode_entries[j].disabled != 0);
             cJSON_AddStringToObject(obj, "createdAt",
                                     icode_entries[j].created_at);
+            cJSON_AddItemToObject(obj, "uses", cJSON_CreateArray());
             cJSON_AddItemToArray(codes, obj);
             taken++;
         }

@@ -1085,6 +1085,7 @@ int main(void) {
                     cJSON_GetObjectItemCaseSensitive(json, "codes");
                 int found = 0;
                 int found_disabled = 0;
+                int found_shape_ok = 0;
                 for (int i = 0; cJSON_IsArray(all_codes) &&
                                 i < cJSON_GetArraySize(all_codes);
                      i++) {
@@ -1096,12 +1097,32 @@ int main(void) {
                         found = 1;
                         found_disabled = cJSON_IsTrue(
                             cJSON_GetObjectItemCaseSensitive(c, "disabled"));
+                        /* com.atproto.server.defs#inviteCode's required
+                         * fields, matching the reference's shape exactly
+                         * (not the old fabricated "availableBy"/"uses" as a
+                         * bare count). */
+                        cJSON *for_account =
+                            cJSON_GetObjectItemCaseSensitive(c, "forAccount");
+                        cJSON *created_by =
+                            cJSON_GetObjectItemCaseSensitive(c, "createdBy");
+                        cJSON *available =
+                            cJSON_GetObjectItemCaseSensitive(c, "available");
+                        cJSON *uses =
+                            cJSON_GetObjectItemCaseSensitive(c, "uses");
+                        found_shape_ok =
+                            cJSON_IsString(for_account) &&
+                            strcmp(for_account->valuestring, alice_did) ==
+                                0 &&
+                            cJSON_IsString(created_by) &&
+                            cJSON_IsNumber(available) &&
+                            available->valuedouble == 2 && cJSON_IsArray(uses);
                     }
                 }
                 cJSON_Delete(json);
                 wf_response_free(&response);
                 CHECK(found);
                 CHECK(!found_disabled);
+                CHECK(found_shape_ok);
             }
             free(gifted_code);
         }
