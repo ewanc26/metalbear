@@ -226,6 +226,12 @@ bool check_endpoint_rate_limit(wf_rate_limiter *tier_a, wf_rate_limiter *tier_b,
  * header is absent or uses a different scheme. */
 const char *bearer_token(const char *header);
 
+/* Decode the `sub` claim from a JWT *without* verifying its signature. Used
+ * only to route a request to the account whose auth store can then perform
+ * real signature/expiry/scope verification. Returns a caller-owned string
+ * (free() it), or NULL on any parse failure. */
+char *jwt_subject(const char *token);
+
 /* The reference PDS's assertRepoAvailability, which every sync read runs
  * before touching the repository. A taken-down repository reports a
  * different error from a deactivated one. Returns false with the response
