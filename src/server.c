@@ -527,14 +527,20 @@ static bool takendown_route_allowed(const char *nsid) {
            strcmp(nsid, "app.bsky.actor.getPreferences") == 0;
 }
 
-/* Every "app.bsky." and "chat.bsky." route proxies straight to the AppView
- * and requires rpc: scope there, matching the reference's generic
- * proxyHandler/assertRpc behavior (pipethrough.ts) -- a blanket namespace
- * check rather than a per-route allowlist, so a newly wired proxy route
- * (appview_routes.c's appview_get_ handlers, appview_register_push,
+/* Every "app.bsky.", "chat.bsky.", and "tools.ozone." route proxies to some
+ * other service and requires rpc: scope there, matching the reference's
+ * generic proxyHandler/assertRpc behavior (pipethrough.ts) -- a blanket
+ * namespace check rather than a per-route allowlist, so a newly wired proxy
+ * route (appview_routes.c's appview_get_ handlers, appview_register_push,
  * appview_unregister_push, or the generic proxy_fallback) needs no matching
- * addition here. The one exception is app.bsky.actor's getPreferences and
- * putPreferences: the reference proxies those too, but MetalBear stores
+ * addition here. tools.ozone.* has no sensible default target (the
+ * reference falls back to an operator-configured modService MetalBear has
+ * no equivalent config for), but a real moderator client always sends an
+ * explicit atproto-proxy header naming its own ozone instance, and the
+ * scope check below already prioritizes that verbatim over any default --
+ * so the header-present case, the only one actually reachable, comes out
+ * correct regardless. The one exception is app.bsky.actor's getPreferences
+ * and putPreferences: the reference proxies those too, but MetalBear stores
  * preferences locally, so their audience is not the AppView and they get
  * their own self-referential check above instead. */
 static bool proxied_appview_rpc_route(const char *nsid) {
@@ -542,7 +548,8 @@ static bool proxied_appview_rpc_route(const char *nsid) {
         return strcmp(nsid, "app.bsky.actor.getPreferences") != 0 &&
                strcmp(nsid, "app.bsky.actor.putPreferences") != 0;
     }
-    return strncmp(nsid, "chat.bsky.", 10) == 0;
+    return strncmp(nsid, "chat.bsky.", 10) == 0 ||
+           strncmp(nsid, "tools.ozone.", 12) == 0;
 }
 
 static wf_status authenticate_request(wf_xrpc_request *req, void *ctx);
