@@ -1038,6 +1038,23 @@ int main(void) {
             json = json_response(&response);
             CHECK(cJSON_IsTrue(
                 cJSON_GetObjectItemCaseSensitive(json, "invitesDisabled")));
+            char *indexed_at_1 = strdup(
+                cJSON_GetObjectItemCaseSensitive(json, "indexedAt")
+                    ->valuestring);
+            cJSON_Delete(json);
+            wf_response_free(&response);
+
+            /* indexedAt is the account's creation time, not the request
+             * time -- a second call must return the exact same value, not
+             * a fresh "now". */
+            CHECK(wf_http_get_with_headers(client, url, &auth_hdr, 1,
+                                           &response) == WF_OK);
+            CHECK(response.status == 200);
+            json = json_response(&response);
+            CHECK(strcmp(indexed_at_1,
+                         cJSON_GetObjectItemCaseSensitive(json, "indexedAt")
+                             ->valuestring) == 0);
+            free(indexed_at_1);
             cJSON_Delete(json);
             wf_response_free(&response);
         }
