@@ -457,9 +457,12 @@ static bool inactive_route_allowed(const char *nsid) {
  * ("atproto" alone) must never reach these, only a session JWT can. The other
  * three full_access_route entries (importRepo, requestPlcOperationSignature,
  * signPlcOperation) are different -- the reference allows OAuth there given a
- * matching account/identity scope, which MetalBear's scope model does not yet
- * enforce narrowly, so they fall through to the full-access-or-nothing check
- * below instead of being forbidden outright.
+ * matching account/identity scope, which MetalBear's scope model now DOES
+ * enforce narrowly (see the repo:manage and identity:* checks further down
+ * in authenticate(), just after this function's callers), so they fall
+ * through to the full-access-or-nothing check below only for a session JWT
+ * or an "atproto" (full-access) OAuth grant, not to bypass scope checking
+ * outright.
  */
 static bool oauth_forbidden_route(const char *nsid) {
     return strcmp(nsid, "com.atproto.server.createAppPassword") == 0 ||
@@ -1030,11 +1033,26 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
         bool refresh_route =
             strcmp(req->nsid, "com.atproto.server.refreshSession") == 0 ||
             strcmp(req->nsid, "com.atproto.server.deleteSession") == 0;
-        wf_status verify_status =
-            refresh_route
-                ? WF_OK
-                : metalbear_auth_verify_access_scope(
-                      context_for_did(server, sub)->auth, provided, &scope);
+        /* `sub` is the token's unverified claim -- any string a caller cared
+         * to put there, not necessarily a DID this server hosts. Resolving
+         * it before verification (needed to find which account's auth store
+         * even checks the signature) must not assume a match: an unknown
+         * DID here used to dereference a NULL context_for_did() result
+         * directly, letting anyone crash the whole multi-tenant server with
+         * a JWT-shaped token naming an account that doesn't exist. */
+        metalbear_account_context *sub_acct =
+            refresh_route ? NULL : context_for_did(server, sub);
+        if (!refresh_route && !sub_acct) {
+            LOG_DEBUG("authenticate: unknown did=%s for nsid=%s host=%s", sub,
+                      req->nsid ? req->nsid : "-",
+                      req->host_header ? req->host_header : "-");
+            free(sub);
+            return WF_ERR_PERMISSION;
+        }
+        wf_status verify_status = refresh_route
+                                      ? WF_OK
+                                      : metalbear_auth_verify_access_scope(
+                                            sub_acct->auth, provided, &scope);
         if (verify_status != WF_OK) {
             LOG_WARN("authenticate: token verify failed for did=%s nsid=%s "
                      "status=%d",

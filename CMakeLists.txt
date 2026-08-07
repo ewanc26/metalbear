@@ -180,6 +180,15 @@ if(METALBEAR_BUILD_TESTS)
   target_link_libraries(test_metalbear_auth PRIVATE metalbear_core)
   add_test(NAME metalbear_auth COMMAND test_metalbear_auth)
 
+  add_executable(test_metalbear_auth_unknown_subject
+                 test/test_auth_unknown_subject.c)
+  target_link_libraries(test_metalbear_auth_unknown_subject
+                        PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_auth_unknown_subject
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_auth_unknown_subject
+           COMMAND test_metalbear_auth_unknown_subject)
+
   add_executable(test_metalbear_oauth test/test_oauth.c)
   target_link_libraries(test_metalbear_oauth PRIVATE metalbear_core)
   add_test(NAME metalbear_oauth COMMAND test_metalbear_oauth)
@@ -289,6 +298,19 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_account_email_tokens
           COMMAND test_metalbear_account_email_tokens)
+
+  add_executable(test_metalbear_email_internal test/test_email_internal.c)
+  target_link_libraries(test_metalbear_email_internal PRIVATE metalbear_core)
+  add_test(NAME metalbear_email_internal COMMAND test_metalbear_email_internal)
+
+  add_executable(test_metalbear_account_email_send_failure
+                 test/test_account_email_send_failure.c)
+  target_link_libraries(test_metalbear_account_email_send_failure
+                        PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_account_email_send_failure
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_account_email_send_failure
+          COMMAND test_metalbear_account_email_send_failure)
 
   add_executable(test_metalbear_proxy test/test_proxy.c)
   target_link_libraries(test_metalbear_proxy PRIVATE metalbear_core
