@@ -65,9 +65,7 @@
 		</a>
 	{:else if current}
 		<section class="mb-8 rounded-lg border border-slate-800 bg-slate-900/30 p-6">
-			<h2 class="mb-4 text-sm font-semibold tracking-widest text-slate-500 uppercase">
-				Session
-			</h2>
+			<h2 class="mb-4 text-sm font-semibold tracking-widest text-slate-500 uppercase">Session</h2>
 			<dl class="grid gap-x-8 gap-y-4 sm:grid-cols-2">
 				<div>
 					<dt class="text-sm text-slate-500">Handle</dt>
@@ -109,5 +107,26 @@
 		>
 			Refresh tokens
 		</button>
+
+		<section class="mt-8 rounded-lg border border-slate-800 bg-slate-900/30 p-6">
+			<h2 class="mb-4 text-sm font-semibold tracking-widest text-slate-500 uppercase">Manage</h2>
+			<ul class="space-y-2 text-sm">
+				<li>
+					<a href="/account/app-passwords" class="text-emerald-500 hover:text-emerald-400"
+						>App passwords →</a
+					>
+				</li>
+				<li>
+					<a href="/account/apps" class="text-emerald-500 hover:text-emerald-400"
+						>Connected apps →</a
+					>
+				</li>
+				<li>
+					<a href="/account/devices" class="text-emerald-500 hover:text-emerald-400"
+						>Active devices →</a
+					>
+				</li>
+			</ul>
+		</section>
 	{/if}
 </main>

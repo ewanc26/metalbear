@@ -125,6 +125,24 @@ async function xrpc<T>(path: string, params?: Record<string, string>): Promise<T
 	return res.json() as Promise<T>;
 }
 
+/* A GET query, but with the session's Bearer token attached -- for the
+ * (growing) set of XRPC queries that require auth, where xrpc() (no
+ * Authorization header at all) would just get a 401. */
+async function xrpcAuthed<T>(path: string, params?: Record<string, string>): Promise<T> {
+	const session = currentSession();
+	if (!session) throw new Error('Not authenticated');
+	const url = new URL(`/xrpc/${path}`, window.location.origin);
+	for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
+	const res = await fetch(url, {
+		headers: {
+			accept: 'application/json',
+			authorization: `Bearer ${session.accessJwt}`
+		}
+	});
+	if (!res.ok) throw new Error(`${path}: ${res.status}`);
+	return res.json() as Promise<T>;
+}
+
 async function xrpcPost<T>(path: string, body: unknown): Promise<T> {
 	const session = currentSession();
 	const url = new URL(`/xrpc/${path}`, window.location.origin);
@@ -408,13 +426,48 @@ export async function createAppPassword(
 }
 
 export async function listAppPasswords(): Promise<AppPassword[]> {
-	const { passwords } = await xrpcPost<ListAppPasswordsResponse>(
-		'com.atproto.server.listAppPasswords',
-		{}
+	/* listAppPasswords is registered as a query (GET-only) -- xrpcPost (which
+	 * this used to call) gets refused with "Incorrect HTTP method for this
+	 * endpoint", so this was silently broken until this fix. */
+	const { passwords } = await xrpcAuthed<ListAppPasswordsResponse>(
+		'com.atproto.server.listAppPasswords'
 	);
 	return passwords;
 }
 
 export async function revokeAppPassword(name: string): Promise<void> {
 	await xrpcPost<Record<string, never>>('com.atproto.server.revokeAppPassword', { name });
+}
+
+/* ---- OAuth account management: connected apps, active devices ---- */
+
+export interface DeviceInfo {
+	sessionId: string;
+	expiresAt: number;
+}
+
+export async function listDevices(): Promise<DeviceInfo[]> {
+	const { devices } = await xrpcAuthed<{ devices: DeviceInfo[] }>(
+		'com.metalbear.oauth.listDevices'
+	);
+	return devices;
+}
+
+export async function revokeDevice(sessionId: string): Promise<void> {
+	await xrpcPost<Record<string, never>>('com.metalbear.oauth.revokeDevice', { sessionId });
+}
+
+export interface GrantInfo {
+	clientId: string;
+	scope: string;
+	expiresAt: number;
+}
+
+export async function listGrants(): Promise<GrantInfo[]> {
+	const { grants } = await xrpcAuthed<{ grants: GrantInfo[] }>('com.metalbear.oauth.listGrants');
+	return grants;
+}
+
+export async function revokeGrant(clientId: string): Promise<void> {
+	await xrpcPost<Record<string, never>>('com.metalbear.oauth.revokeGrant', { clientId });
 }
