@@ -280,6 +280,15 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_rate_limits COMMAND test_metalbear_rate_limits)
 
+  add_executable(test_metalbear_account_email_tokens
+                 test/test_account_email_tokens.c)
+  target_link_libraries(test_metalbear_account_email_tokens
+                        PRIVATE metalbear_core SQLite3::SQLite3)
+  target_include_directories(test_metalbear_account_email_tokens
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_account_email_tokens
+          COMMAND test_metalbear_account_email_tokens)
+
   add_executable(test_metalbear_proxy test/test_proxy.c)
   target_link_libraries(test_metalbear_proxy PRIVATE metalbear_core
                                                      Threads::Threads)

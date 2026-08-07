@@ -1225,6 +1225,15 @@ int main(void) {
         cJSON_Delete(json_response(&response));
         wf_response_free(&response);
 
+        /* Idempotent, matching the reference: a retry of a delete whose
+         * response was lost in transit must not surprise the caller with a
+         * 404 for the very thing it just asked to happen. */
+        CHECK(wf_http_post(client, del_url, "application/json", del_body, &hdr,
+                           1, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON_Delete(json_response(&response));
+        wf_response_free(&response);
+
         /* Account should no longer be resolvable. */
         wf_xrpc_client_set_auth(client, NULL);
         CHECK(wf_xrpc_query_params(

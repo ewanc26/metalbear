@@ -660,6 +660,13 @@ wf_status admin_update_account_email(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     metalbear_account_store_email(acct, email->valuestring);
+    /* Every outstanding email token (confirm/update/reset) was minted
+     * against the old email; leaving them valid after an admin override
+     * would let a stale token confirm or reset against an address the
+     * account holder never saw. Matches the reference's
+     * emailToken.deleteAllEmailTokens in the same transaction
+     * (account-manager.ts's updateAccountEmail). */
+    metalbear_account_delete_all_email_tokens(acct);
     metalbear_account_store_free(acct);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
@@ -712,6 +719,10 @@ wf_status admin_update_account_password(void *ctx,
         return WF_OK;
     }
     metalbear_account_reset_password(acct, password->valuestring);
+    /* The reset token that (if any) led here is now spent; matches the
+     * reference deleting the "reset_password"-kind token in the same
+     * transaction (account-manager.ts's updateAccountPassword). */
+    metalbear_account_delete_email_tokens_by_kind(acct, "reset");
     metalbear_account_store_free(acct);
     /*
      * Revoke every session the account holds, matching the reference
@@ -940,9 +951,16 @@ wf_status admin_delete_account(void *ctx, const wf_xrpc_request *request,
     if (metalbear_account_registry_find_by_did(
             server->registry, did->valuestring, &entry) != WF_OK ||
         !entry) {
-        wf_xrpc_response_set_error(response, 404, "AccountNotFound",
-                                   "account is not hosted here");
-        return WF_OK;
+        /* Idempotent, matching the reference exactly (deleteAccount.ts runs
+         * deleteAccount/sequenceAccountDeletion/actorStore.destroy
+         * unconditionally, with no existence check at all): the desired
+         * end state -- this DID hosts no account -- already holds, so a
+         * retry of a delete whose response was lost in transit succeeds
+         * rather than surprising the caller with a 404 for the very thing
+         * it just asked to happen. */
+        cJSON *root = cJSON_CreateObject();
+        if (!root) return WF_ERR_ALLOC;
+        return set_json(response, root);
     }
 
     char *data_dir = strdup(entry->data_directory);
