@@ -131,6 +131,66 @@ wf_status metalbear_oauth_device_session_verify(metalbear_oauth_store *store,
 wf_status metalbear_oauth_device_session_revoke(metalbear_oauth_store *store,
                                                 const char *token);
 
+/*
+ * One device session, as surfaced to an account-management UI: a stable,
+ * non-secret identifier (base64url of the session's token_hash) and its
+ * expiry. Exposing the hash is safe -- it does not let anyone forge the
+ * token that hashes to it, since that would require breaking SHA-256
+ * preimage resistance -- but the bearer token itself is never returned
+ * once issued.
+ */
+typedef struct metalbear_oauth_device_session_info {
+    char *session_id;
+    int64_t expires_at;
+} metalbear_oauth_device_session_info;
+
+/* List every still-valid device session for `subject`, most recently
+ * expiring first (every session is minted with the same fixed lifetime, so
+ * expiry order is also creation order). Caller frees with
+ * metalbear_oauth_device_session_info_list_free. */
+wf_status metalbear_oauth_device_session_list(
+    metalbear_oauth_store *store, const char *subject,
+    metalbear_oauth_device_session_info **out_items, size_t *out_count);
+
+void metalbear_oauth_device_session_info_list_free(
+    metalbear_oauth_device_session_info *items, size_t count);
+
+/* Revoke one device session by the session_id
+ * metalbear_oauth_device_session_list returned, scoped to `subject` so one
+ * account can never revoke another's session by guessing or reusing an id.
+ * WF_ERR_NOT_FOUND if it does not belong to `subject` (including "does not
+ * exist at all"). */
+wf_status metalbear_oauth_device_session_revoke_by_id(
+    metalbear_oauth_store *store, const char *subject, const char *session_id);
+
+/* One OAuth client currently holding a live grant (refresh token) for an
+ * account -- what an account-management "connected apps" page lists. */
+typedef struct metalbear_oauth_grant_info {
+    char *client_id;
+    char *scope;
+    int64_t expires_at;
+} metalbear_oauth_grant_info;
+
+/* List every OAuth client with a still-valid refresh token for `subject`,
+ * one entry per distinct client_id (a client that re-authorized more than
+ * once is still one connection, not several). Caller frees with
+ * metalbear_oauth_grant_info_list_free. */
+wf_status metalbear_oauth_grants_list(metalbear_oauth_store *store,
+                                      const char *subject,
+                                      metalbear_oauth_grant_info **out_items,
+                                      size_t *out_count);
+
+void metalbear_oauth_grant_info_list_free(metalbear_oauth_grant_info *items,
+                                          size_t count);
+
+/* Revoke every refresh token `client_id` holds for `subject` -- ending that
+ * app's access outright rather than waiting for its current token to
+ * expire. WF_OK even if the client had no live grant: the desired state
+ * (disconnected) already holds. */
+wf_status metalbear_oauth_grants_revoke(metalbear_oauth_store *store,
+                                        const char *subject,
+                                        const char *client_id);
+
 #ifdef __cplusplus
 }
 #endif
