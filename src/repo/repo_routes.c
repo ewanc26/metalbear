@@ -2,6 +2,7 @@
 
 #include "metalbear/repo/blob_store.h"
 
+#include "wolfram/identity.h"
 #include "wolfram/repo/diff.h"
 #include "wolfram/repo/record.h"
 #include "wolfram/server.h"
@@ -1101,19 +1102,51 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
-    wf_repo_verify_options opts = {s->did, s->signing_key_didkey, NULL};
     wf_cid old_head = s->head;
     wf_status st;
 
     if (s->head.len == 0) {
         /* No existing commit to diff against (e.g. a freshly created
          * account that has not written anything on this host yet): there is
-         * no chain to preserve, so the imported commit is adopted as-is,
-         * verified against this account's own signing key. Every
+         * no chain to preserve, so the imported commit is adopted as-is.
+         * It is verified against the DID's CURRENTLY PUBLISHED #atproto key
+         * -- not this account's own local signing key, which createAccount
+         * just generated and which has never been published anywhere, so it
+         * can only match an imported commit by coincidence. This is
+         * precisely the migration bootstrap case (createAccount with an
+         * existing `did`, immediately followed by importRepo): the DID
+         * document has not been repointed at this host yet, so the commit
+         * being imported is still signed by whichever server currently
+         * holds the identity. Resolving the published key here mirrors the
+         * reference PDS's verifyRepo, which resolves the signing key from
+         * the DID document rather than trusting local state. Every
          * subsequent import instead goes through the diff-and-reapply path
-         * below, which never adopts a foreign commit verbatim. */
+         * below, which never adopts a foreign commit verbatim and does use
+         * this account's own key, since by then it is the one that signed
+         * the base being diffed against. */
+        wf_xrpc_client *resolve_client =
+            wf_xrpc_client_new("https://localhost");
+        if (!resolve_client) {
+            wf_car_free(&imported);
+            return WF_ERR_ALLOC;
+        }
+        char *published_key = NULL;
+        wf_status key_st = wf_did_resolve_verification_key(
+            resolve_client, s->did, "#atproto", &published_key);
+        wf_xrpc_client_free(resolve_client);
+        if (key_st != WF_OK) {
+            wf_car_free(&imported);
+            wf_xrpc_response_set_error(
+                resp, 400, "InvalidCAR",
+                "could not resolve this DID's currently published signing "
+                "key");
+            return WF_OK;
+        }
+
+        wf_repo_verify_options opts = {s->did, published_key, NULL};
         wf_commit commit;
         st = wf_repo_verify(&imported, &opts, &commit);
+        free(published_key);
         if (st != WF_OK) {
             wf_car_free(&imported);
             wf_xrpc_response_set_error(resp, 400, "InvalidCAR",
@@ -1162,6 +1195,7 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
          * is deliberately NOT wf_repo_diff_apply: that adopts the imported
          * commit's own rev/prev/sig verbatim, which would splice a foreign
          * commit into this repo's chain instead of extending it. */
+        wf_repo_verify_options opts = {s->did, s->signing_key_didkey, NULL};
         wf_repo_diff diff = {0};
         st = wf_repo_diff_verify(&s->car, &s->head, &imported, &opts, &diff);
         wf_car_free(&imported);
