@@ -87,9 +87,13 @@ struct metalbear_server {
     wf_rate_limiter *rl_update_handle_day;
     /* sync/getRepo.ts: 6000/5min, keyed by IP, and (per rate-limits.ts's
      * "global" bucket calcKey) deliberately excluded from the global-ip
-     * bucket below -- a high-volume relay sync path with its own budget,
-     * not sharing the general per-IP allowance every other route draws
-     * from. */
+     * bucket -- a high-volume relay sync path with its own budget, not
+     * sharing the general per-IP allowance every other route draws from.
+     * The general allowance is `rate_limiter` above (default 3000/5min,
+     * matching rate-limits.ts's "global-ip" bucket); getRepo's own
+     * route-specific limiter here replaces it rather than stacking, since
+     * a route-specific limiter always takes precedence (see
+     * wf_server_find_route_rate_limiter in xrpc_server.c). */
     wf_rate_limiter *rl_get_repo_5min;
     metalbear_email *email;
     char *service_did;

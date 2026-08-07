@@ -518,10 +518,10 @@ account, reads over loopback at 8 concurrent connections:
 Writes are bounded by secp256k1 commit signing and the SQLite transaction, not
 by request handling, which is why they sit two orders of magnitude below reads.
 
-The default per-client budget of 100 requests per 60 seconds is under two a
-second; a single AppView or a relay backfilling with `getRepo` exceeds it
-without being abusive, so raise `limits.rate_limit` on a host serving real
-traffic. These numbers were taken with it raised.
+The default per-client budget is 3000 requests per 5 minutes (10/sec),
+matching the reference PDS's "global-ip" bucket; `sync.getRepo` carries its
+own separate budget and does not draw from it. Raise `limits.rate_limit` on a
+host serving unusually high real traffic.
 
 ## Security boundary
 

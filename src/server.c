@@ -3073,11 +3073,17 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     if (config->firehose_ping_seconds > 0)
         metalbear_sequencer_set_ping_seconds(config->firehose_ping_seconds);
 
-    /* Per-client request budget, configurable; 100 per 60s by default. */
+    /* Per-client (IP-keyed) request budget, configurable; matches the
+     * reference's "global-ip" bucket by default (rate-limits.ts: 3000/5min).
+     * A route-specific limiter (wf_xrpc_server_set_route_rate_limiter)
+     * replaces this one for that route rather than stacking with it -- see
+     * wf_server_find_route_rate_limiter in xrpc_server.c -- which is exactly
+     * how the reference excludes sync.getRepo from its global-ip bucket
+     * (rl_get_repo_5min below covers that route on its own budget). */
     {
-        int64_t budget = config->rate_limit > 0 ? config->rate_limit : 100;
+        int64_t budget = config->rate_limit > 0 ? config->rate_limit : 3000;
         int64_t window =
-            config->rate_limit_window > 0 ? config->rate_limit_window : 60;
+            config->rate_limit_window > 0 ? config->rate_limit_window : 300;
         server->rate_limiter =
             wf_rate_limiter_new((size_t)budget, (size_t)window, 0);
         server->rate_limit_budget = budget;
