@@ -226,6 +226,45 @@ int main(void) {
         CHECK(invited_by == NULL);
     }
 
+    /* Global keyset-paginated listing (admin.getInviteCodes' cursor):
+     * code1/code2/code3 exist server-wide. A page of 2 plus a page of the
+     * remainder must cover all three exactly once, in the same
+     * createdAt DESC, code DESC order a single unpaginated call gives. */
+    {
+        metalbear_invite_code_entry *page1 = NULL;
+        size_t page1_count = 0;
+        CHECK(metalbear_account_registry_list_invite_codes(
+                  registry, NULL, NULL, 2, &page1, &page1_count) == WF_OK);
+        CHECK(page1_count == 2);
+
+        metalbear_invite_code_entry *page2 = NULL;
+        size_t page2_count = 0;
+        if (page1_count == 2) {
+            CHECK(metalbear_account_registry_list_invite_codes(
+                      registry, page1[1].created_at, page1[1].code, 2, &page2,
+                      &page2_count) == WF_OK);
+            /* Exactly one code remains after a page of 2 out of 3. */
+            CHECK(page2_count == 1);
+        }
+
+        /* No overlap between pages, and together they cover all three. */
+        int seen_c1 = 0, seen_c2 = 0, seen_c3 = 0;
+        for (size_t i = 0; i < page1_count; i++) {
+            if (strcmp(page1[i].code, code1) == 0) seen_c1++;
+            if (strcmp(page1[i].code, code2) == 0) seen_c2++;
+            if (strcmp(page1[i].code, code3) == 0) seen_c3++;
+        }
+        for (size_t i = 0; i < page2_count; i++) {
+            if (strcmp(page2[i].code, code1) == 0) seen_c1++;
+            if (strcmp(page2[i].code, code2) == 0) seen_c2++;
+            if (strcmp(page2[i].code, code3) == 0) seen_c3++;
+        }
+        CHECK(seen_c1 == 1 && seen_c2 == 1 && seen_c3 == 1);
+
+        metalbear_invite_code_entries_free(page1, page1_count);
+        metalbear_invite_code_entries_free(page2, page2_count);
+    }
+
     /* Nonexistent code */
     CHECK(metalbear_account_registry_consume_invite_code(
               registry, "DOES-NOT-EXIST", "did:plc:alice") == WF_ERR_NOT_FOUND);

@@ -130,6 +130,19 @@ wf_status metalbear_account_registry_get_invite_codes(
     metalbear_account_registry *registry, const char *did,
     metalbear_invite_code_entry **out, size_t *out_count);
 
+/* One page of every invite code on the server (not scoped to an account),
+ * newest first (created_at DESC, code DESC as a tiebreaker), for
+ * admin.getInviteCodes' global listing. `after_created_at`/`after_code`
+ * are the keyset cursor from the previous page's last row (both NULL/""
+ * for the first page); at most `limit` rows come back. Keyset rather than
+ * offset pagination: an offset counts row positions in a list that keeps
+ * changing as codes are created, so a page walked while new codes appear
+ * would skip or repeat rows an offset-based scheme can't tell apart. */
+wf_status metalbear_account_registry_list_invite_codes(
+    metalbear_account_registry *registry, const char *after_created_at,
+    const char *after_code, size_t limit, metalbear_invite_code_entry **out,
+    size_t *out_count);
+
 /* Every redemption of `code`, oldest first. Matches
  * com.atproto.server.defs#inviteCodeUse's {usedBy, usedAt} shape. */
 wf_status metalbear_account_registry_get_invite_code_uses(
