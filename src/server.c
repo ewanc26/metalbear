@@ -315,9 +315,9 @@ static const char *request_account_did(metalbear_server *server,
     if (req->params && cJSON_IsObject(req->params)) {
         cJSON *repo = cJSON_GetObjectItemCaseSensitive(req->params, "repo");
         cJSON *did = cJSON_GetObjectItemCaseSensitive(req->params, "did");
-        cand = cJSON_IsString(repo) ? repo->valuestring
-                                    : (cJSON_IsString(did) ? did->valuestring
-                                                          : NULL);
+        cand = cJSON_IsString(repo)
+                   ? repo->valuestring
+                   : (cJSON_IsString(did) ? did->valuestring : NULL);
         if (cand && strncmp(cand, "at://", 5) == 0) {
             const char *p = cand + 5;
             size_t n = 0;
@@ -337,7 +337,7 @@ static const char *request_account_did(metalbear_server *server,
     if (strncmp(cand, "did:", 4) == 0) return cand;
     metalbear_account_entry *entry = NULL;
     if (metalbear_account_registry_find_by_handle(server->registry, cand,
-                                                   &entry) != WF_OK ||
+                                                  &entry) != WF_OK ||
         !entry)
         return NULL;
     size_t n = strlen(entry->did);

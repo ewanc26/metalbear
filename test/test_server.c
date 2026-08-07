@@ -1038,9 +1038,9 @@ int main(void) {
             json = json_response(&response);
             CHECK(cJSON_IsTrue(
                 cJSON_GetObjectItemCaseSensitive(json, "invitesDisabled")));
-            char *indexed_at_1 = strdup(
-                cJSON_GetObjectItemCaseSensitive(json, "indexedAt")
-                    ->valuestring);
+            char *indexed_at_1 =
+                strdup(cJSON_GetObjectItemCaseSensitive(json, "indexedAt")
+                           ->valuestring);
             cJSON_Delete(json);
             wf_response_free(&response);
 
@@ -1128,8 +1128,7 @@ int main(void) {
                             cJSON_GetObjectItemCaseSensitive(c, "uses");
                         found_shape_ok =
                             cJSON_IsString(for_account) &&
-                            strcmp(for_account->valuestring, alice_did) ==
-                                0 &&
+                            strcmp(for_account->valuestring, alice_did) == 0 &&
                             cJSON_IsString(created_by) &&
                             cJSON_IsNumber(available) &&
                             available->valuedouble == 2 && cJSON_IsArray(uses);
@@ -1744,11 +1743,9 @@ int main(void) {
         cJSON_Delete(json);
         wf_response_free(&response);
 
-        wf_xrpc_param describe_by_handle[] = {
-            {"repo", "alice.example.com"}};
+        wf_xrpc_param describe_by_handle[] = {{"repo", "alice.example.com"}};
         CHECK(wf_xrpc_query_params(client, "com.atproto.repo.describeRepo",
-                                   describe_by_handle, 1,
-                                   &response) == WF_OK);
+                                   describe_by_handle, 1, &response) == WF_OK);
         CHECK(response.status == 200);
         json = json_response(&response);
         did_field = cJSON_GetObjectItemCaseSensitive(json, "did");
