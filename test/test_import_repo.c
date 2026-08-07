@@ -498,14 +498,15 @@ int main(void) {
 
             /* getRepo on a headless account with no commits yet fails with
              * RepoNotFound, so give it one record to export first. */
-            CHECK(wf_xrpc_procedure(
-                      src_client, "com.atproto.repo.createRecord",
-                      "{\"repo\":\"did:plc:metalbeartest\","
-                      "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"first\","
-                      "\"record\":{\"$type\":\"app.bsky.feed.post\","
-                      "\"text\":\"hello from migration bootstrap test\","
-                      "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
-                      &response) == WF_OK);
+            CHECK(
+                wf_xrpc_procedure(
+                    src_client, "com.atproto.repo.createRecord",
+                    "{\"repo\":\"did:plc:metalbeartest\","
+                    "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"first\","
+                    "\"record\":{\"$type\":\"app.bsky.feed.post\","
+                    "\"text\":\"hello from migration bootstrap test\","
+                    "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
+                    &response) == WF_OK);
             CHECK(response.status == 200);
             wf_response_free(&response);
 
@@ -545,11 +546,10 @@ int main(void) {
 
             if (car_bytes && mig_access) {
                 wf_xrpc_client_set_auth(mig_client, mig_access);
-                CHECK(wf_xrpc_upload_blob(mig_client,
-                                          "com.atproto.repo.importRepo",
-                                          car_bytes, car_len,
-                                          "application/vnd.ipld.car",
-                                          &response) == WF_ERR_HTTP);
+                CHECK(wf_xrpc_upload_blob(
+                          mig_client, "com.atproto.repo.importRepo", car_bytes,
+                          car_len, "application/vnd.ipld.car",
+                          &response) == WF_ERR_HTTP);
                 CHECK(response.status == 400);
                 cJSON *json = json_response(&response);
                 CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")
