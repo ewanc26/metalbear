@@ -344,6 +344,15 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_import_repo COMMAND test_metalbear_import_repo)
 
+  add_executable(test_metalbear_identity_plc_operation
+                 test/test_identity_plc_operation.c)
+  target_link_libraries(test_metalbear_identity_plc_operation
+                        PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_identity_plc_operation
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_identity_plc_operation
+          COMMAND test_metalbear_identity_plc_operation)
+
   add_executable(test_metalbear_metrics test/test_metrics.c)
   target_link_libraries(test_metalbear_metrics PRIVATE metalbear_core)
   target_include_directories(test_metalbear_metrics
