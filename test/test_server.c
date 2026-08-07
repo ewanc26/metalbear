@@ -1727,6 +1727,37 @@ int main(void) {
     wf_car_free(&repo_car);
     wf_response_free(&response);
 
+    /* describeRepo resolves a handle-based `repo` param, not just a literal
+     * did: string -- it is an at-identifier per the lexicon, either form
+     * must work. request_account_did used to return NULL for anything not
+     * already a did:, silently 400ing RepoNotFound for every handle-based
+     * read. */
+    {
+        wf_xrpc_param describe_by_did[] = {{"repo", "did:plc:metalbeartest"}};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.repo.describeRepo",
+                                   describe_by_did, 1, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        cJSON *did_field = cJSON_GetObjectItemCaseSensitive(json, "did");
+        CHECK(cJSON_IsString(did_field) &&
+              strcmp(did_field->valuestring, "did:plc:metalbeartest") == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        wf_xrpc_param describe_by_handle[] = {
+            {"repo", "alice.example.com"}};
+        CHECK(wf_xrpc_query_params(client, "com.atproto.repo.describeRepo",
+                                   describe_by_handle, 1,
+                                   &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        did_field = cJSON_GetObjectItemCaseSensitive(json, "did");
+        CHECK(cJSON_IsString(did_field) &&
+              strcmp(did_field->valuestring, "did:plc:metalbeartest") == 0);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+
     wf_xrpc_param block_params[] = {
         {"did", "did:plc:metalbeartest"},
         {"cids", commit_cid},

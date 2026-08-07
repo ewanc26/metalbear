@@ -309,29 +309,45 @@ static wf_status authenticate_oauth(metalbear_server *server,
 static const char *request_account_did(metalbear_server *server,
                                        const wf_xrpc_request *req, char *buf,
                                        size_t bufsz) {
-    (void)server;
     if (req->authed_subject && req->authed_subject[0])
         return req->authed_subject;
+    const char *cand = NULL;
     if (req->params && cJSON_IsObject(req->params)) {
         cJSON *repo = cJSON_GetObjectItemCaseSensitive(req->params, "repo");
         cJSON *did = cJSON_GetObjectItemCaseSensitive(req->params, "did");
-        const char *cand =
-            cJSON_IsString(repo)
-                ? repo->valuestring
-                : (cJSON_IsString(did) ? did->valuestring : NULL);
-        if (cand && strncmp(cand, "did:", 4) == 0) return cand;
+        cand = cJSON_IsString(repo) ? repo->valuestring
+                                    : (cJSON_IsString(did) ? did->valuestring
+                                                          : NULL);
         if (cand && strncmp(cand, "at://", 5) == 0) {
             const char *p = cand + 5;
             size_t n = 0;
             while (p[n] && p[n] != '/') n++;
-            if (n > 0 && n < bufsz) {
-                memcpy(buf, p, n);
-                buf[n] = '\0';
-                return buf;
-            }
+            if (n == 0 || n >= bufsz) return NULL;
+            memcpy(buf, p, n);
+            buf[n] = '\0';
+            cand = buf;
         }
     }
-    return NULL;
+    if (!cand) return NULL;
+    /* The `repo`/`did` param (and an at:// URI's authority) is an
+     * "at-identifier" per the lexicon -- a handle or a DID, either one.
+     * Resolving only literal did: strings silently failed every handle-based
+     * read (describeRepo, listRecords, unauthenticated getRecord, ...) with
+     * RepoNotFound, which is wrong: the reference resolves both. */
+    if (strncmp(cand, "did:", 4) == 0) return cand;
+    metalbear_account_entry *entry = NULL;
+    if (metalbear_account_registry_find_by_handle(server->registry, cand,
+                                                   &entry) != WF_OK ||
+        !entry)
+        return NULL;
+    size_t n = strlen(entry->did);
+    const char *resolved = NULL;
+    if (n < bufsz) {
+        memcpy(buf, entry->did, n + 1);
+        resolved = buf;
+    }
+    metalbear_account_entry_free(entry);
+    return resolved;
 }
 
 /*
