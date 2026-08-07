@@ -111,7 +111,8 @@ wf_status metalbear_account_registry_open(const char *path,
         sqlite3_exec(reg->db.get(),
                      "ALTER TABLE accounts ADD COLUMN created_at TEXT NOT "
                      "NULL DEFAULT '';"
-                     "UPDATE accounts SET created_at=datetime('now') WHERE "
+                     "UPDATE accounts SET "
+                     "created_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE "
                      "created_at='';",
                      nullptr, nullptr, &err);
         if (err && !std::strstr(err, "duplicate column name")) {
@@ -198,7 +199,7 @@ wf_status metalbear_account_registry_add(metalbear_account_registry *registry,
     if (sqlite3_prepare_v2(
             registry->db.get(),
             "INSERT INTO accounts(did,handle,password_hash,data_directory,"
-            "created_at) VALUES(?,?,?,?,datetime('now'));",
+            "created_at) VALUES(?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
             -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, did, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 2, handle, -1, SQLITE_TRANSIENT);
@@ -426,7 +427,8 @@ wf_status metalbear_account_registry_create_invite_codes(
         if (sqlite3_prepare_v2(
                 registry->db.get(),
                 "INSERT INTO invite_code(code,for_account,uses_remaining,"
-                "created_at) VALUES(?,?,?,datetime('now'));",
+                "created_at) "
+                "VALUES(?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
                 -1, &stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, codes[i], -1, SQLITE_TRANSIENT);
             sqlite3_bind_text(stmt, 2, for_account, -1, SQLITE_TRANSIENT);
@@ -486,7 +488,7 @@ wf_status metalbear_account_registry_consume_invite_code(
     sqlite3_stmt *ins = nullptr;
     if (sqlite3_prepare_v2(registry->db.get(),
                            "INSERT INTO invite_code_use(code,used_by,used_at) "
-                           "VALUES(?,?,datetime('now'));",
+                           "VALUES(?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
                            -1, &ins, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(ins, 1, code, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(ins, 2, used_by, -1, SQLITE_TRANSIENT);
@@ -584,8 +586,8 @@ wf_status metalbear_account_registry_get_invite_code_uses(
     sqlite3_stmt *stmt = nullptr;
     wf_status status = WF_OK;
     size_t capacity = 0;
-    /* used_at is second-precision (datetime('now')), so two redemptions in
-     * the same second tie on it; rowid as a secondary key keeps insertion
+    /* used_at has millisecond precision but two redemptions can still land
+     * in the same millisecond; rowid as a secondary key keeps insertion
      * order deterministic instead of leaving ties to SQLite's whim. */
     if (sqlite3_prepare_v2(registry->db.get(),
                            "SELECT used_by,used_at FROM invite_code_use "
@@ -729,7 +731,8 @@ metalbear_account_registry_set_takedown(metalbear_account_registry *registry,
         if (sqlite3_prepare_v2(
                 registry->db.get(),
                 "INSERT INTO subject_takedown(did,uri,blob_cid,"
-                "takedown_ref,created_at) VALUES(?,?,?,?,datetime('now'));",
+                "takedown_ref,created_at) "
+                "VALUES(?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
                 -1, &ins, nullptr) == SQLITE_OK) {
             bind_text_or_null(ins, 1, did);
             bind_text_or_null(ins, 2, uri);
