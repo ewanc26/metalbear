@@ -55,6 +55,48 @@ static void iso_now(char *buf, size_t size) {
     strftime(buf, size, "%Y-%m-%dT%H:%M:%SZ", &tm);
 }
 
+/* Build a full com.atproto.server.defs#inviteCode JSON object from a
+ * registry entry, including its real per-redemption `uses` log. Shared by
+ * getInviteCodes (every code) and getAccountInfo/getAccountInfos'
+ * `invitedBy` (the one code that created a given account). `fallback_did`
+ * fills forAccount/createdBy when the registry row itself has neither
+ * (self-service codes never recorded created_by). */
+static cJSON *build_invite_code_json(metalbear_server *server,
+                                     const metalbear_invite_code_entry *entry,
+                                     const char *fallback_did) {
+    cJSON *obj = cJSON_CreateObject();
+    if (!obj) return NULL;
+    cJSON_AddStringToObject(obj, "code", entry->code);
+    cJSON_AddStringToObject(obj, "forAccount",
+                            entry->for_account ? entry->for_account
+                                               : fallback_did);
+    cJSON_AddStringToObject(
+        obj, "createdBy", entry->created_by ? entry->created_by : fallback_did);
+    cJSON_AddNumberToObject(obj, "available", entry->uses_remaining);
+    cJSON_AddBoolToObject(obj, "disabled", entry->disabled != 0);
+    cJSON_AddStringToObject(obj, "createdAt", entry->created_at);
+    cJSON *uses = cJSON_CreateArray();
+    if (!uses) {
+        cJSON_Delete(obj);
+        return NULL;
+    }
+    metalbear_invite_code_use_entry *use_entries = NULL;
+    size_t use_count = 0;
+    if (metalbear_account_registry_get_invite_code_uses(
+            server->registry, entry->code, &use_entries, &use_count) == WF_OK) {
+        for (size_t k = 0; k < use_count; k++) {
+            cJSON *use = cJSON_CreateObject();
+            if (!use) continue;
+            cJSON_AddStringToObject(use, "usedBy", use_entries[k].used_by);
+            cJSON_AddStringToObject(use, "usedAt", use_entries[k].used_at);
+            cJSON_AddItemToArray(uses, use);
+        }
+        metalbear_invite_code_use_entries_free(use_entries, use_count);
+    }
+    cJSON_AddItemToObject(obj, "uses", uses);
+    return obj;
+}
+
 /* ---- com.atproto.admin.getAccountInfo (query, admin-gated) ----
  * Mirrors refpds `pdsadmin account list`: look the DID up in the
  * registry and return its did/handle/email/active. Unknown DID is an
@@ -118,6 +160,36 @@ wf_status admin_get_account_info(void *ctx, const wf_xrpc_request *request,
      * the same account. */
     cJSON_AddStringToObject(root, "indexedAt",
                             entry->created_at ? entry->created_at : "");
+    /* invitedBy: the code that created this account, if any (self-signup
+     * with invites off, or created before invite tracking, leaves this
+     * absent -- matches the reference's optional field). */
+    metalbear_invite_code_entry *invited_by_entry = NULL;
+    if (metalbear_account_registry_get_invite_code_for_account(
+            server->registry, entry->did, entry->handle, &invited_by_entry) ==
+        WF_OK) {
+        cJSON *invited_by_json =
+            build_invite_code_json(server, invited_by_entry, entry->did);
+        if (invited_by_json)
+            cJSON_AddItemToObject(root, "invitedBy", invited_by_json);
+        metalbear_invite_code_entries_free(invited_by_entry, 1);
+    }
+    /* invites: codes this account itself owns/has minted. */
+    metalbear_invite_code_entry *own_codes = NULL;
+    size_t own_code_count = 0;
+    if (metalbear_account_registry_get_invite_codes(server->registry,
+                                                    entry->did, &own_codes,
+                                                    &own_code_count) == WF_OK) {
+        cJSON *invites = cJSON_CreateArray();
+        if (invites) {
+            for (size_t i = 0; i < own_code_count; i++) {
+                cJSON *code_json =
+                    build_invite_code_json(server, &own_codes[i], entry->did);
+                if (code_json) cJSON_AddItemToArray(invites, code_json);
+            }
+            cJSON_AddItemToObject(root, "invites", invites);
+        }
+        metalbear_invite_code_entries_free(own_codes, own_code_count);
+    }
     metalbear_account_entry_free(entry);
     return set_json(response, root);
 }
@@ -463,7 +535,6 @@ wf_status admin_send_email(void *ctx, const wf_xrpc_request *request,
 /* ---- Helper: build accountView JSON for admin endpoints ---- */
 static cJSON *build_account_view(metalbear_server *server,
                                  const metalbear_account_entry *entry) {
-    (void)server;
     cJSON *obj = cJSON_CreateObject();
     if (!obj) return NULL;
     cJSON_AddStringToObject(obj, "did", entry->did);
@@ -505,6 +576,33 @@ static cJSON *build_account_view(metalbear_server *server,
      * not the request time. */
     cJSON_AddStringToObject(obj, "indexedAt",
                             entry->created_at ? entry->created_at : "");
+    /* Same invitedBy/invites as admin_get_account_info. */
+    metalbear_invite_code_entry *invited_by_entry = NULL;
+    if (metalbear_account_registry_get_invite_code_for_account(
+            server->registry, entry->did, entry->handle, &invited_by_entry) ==
+        WF_OK) {
+        cJSON *invited_by_json =
+            build_invite_code_json(server, invited_by_entry, entry->did);
+        if (invited_by_json)
+            cJSON_AddItemToObject(obj, "invitedBy", invited_by_json);
+        metalbear_invite_code_entries_free(invited_by_entry, 1);
+    }
+    metalbear_invite_code_entry *own_codes = NULL;
+    size_t own_code_count = 0;
+    if (metalbear_account_registry_get_invite_codes(server->registry,
+                                                    entry->did, &own_codes,
+                                                    &own_code_count) == WF_OK) {
+        cJSON *invites = cJSON_CreateArray();
+        if (invites) {
+            for (size_t i = 0; i < own_code_count; i++) {
+                cJSON *code_json =
+                    build_invite_code_json(server, &own_codes[i], entry->did);
+                if (code_json) cJSON_AddItemToArray(invites, code_json);
+            }
+            cJSON_AddItemToObject(obj, "invites", invites);
+        }
+        metalbear_invite_code_entries_free(own_codes, own_code_count);
+    }
     return obj;
 }
 
@@ -846,50 +944,9 @@ wf_status admin_get_invite_codes(void *ctx, const wf_xrpc_request *request,
                 &icode_count) != WF_OK)
             continue;
         for (size_t j = 0; j < icode_count && taken < limit; j++) {
-            cJSON *obj = cJSON_CreateObject();
+            cJSON *obj = build_invite_code_json(server, &icode_entries[j],
+                                                entries[i].did);
             if (!obj) continue;
-            /* Field names/types match com.atproto.server.defs#inviteCode
-             * exactly: forAccount/createdBy (not the fabricated
-             * "availableBy"), available as the remaining-use count, disabled,
-             * createdAt, uses as the real per-redemption {usedBy, usedAt}
-             * log from invite_code_use. */
-            cJSON_AddStringToObject(obj, "code", icode_entries[j].code);
-            cJSON_AddStringToObject(obj, "forAccount",
-                                    icode_entries[j].for_account
-                                        ? icode_entries[j].for_account
-                                        : entries[i].did);
-            cJSON_AddStringToObject(obj, "createdBy",
-                                    icode_entries[j].created_by
-                                        ? icode_entries[j].created_by
-                                        : entries[i].did);
-            cJSON_AddNumberToObject(obj, "available",
-                                    icode_entries[j].uses_remaining);
-            cJSON_AddBoolToObject(obj, "disabled",
-                                  icode_entries[j].disabled != 0);
-            cJSON_AddStringToObject(obj, "createdAt",
-                                    icode_entries[j].created_at);
-            cJSON *uses = cJSON_CreateArray();
-            if (!uses) {
-                cJSON_Delete(obj);
-                continue;
-            }
-            metalbear_invite_code_use_entry *use_entries = NULL;
-            size_t use_count = 0;
-            if (metalbear_account_registry_get_invite_code_uses(
-                    server->registry, icode_entries[j].code, &use_entries,
-                    &use_count) == WF_OK) {
-                for (size_t k = 0; k < use_count; k++) {
-                    cJSON *use = cJSON_CreateObject();
-                    if (!use) continue;
-                    cJSON_AddStringToObject(use, "usedBy",
-                                            use_entries[k].used_by);
-                    cJSON_AddStringToObject(use, "usedAt",
-                                            use_entries[k].used_at);
-                    cJSON_AddItemToArray(uses, use);
-                }
-                metalbear_invite_code_use_entries_free(use_entries, use_count);
-            }
-            cJSON_AddItemToObject(obj, "uses", uses);
             cJSON_AddItemToArray(codes, obj);
             taken++;
         }

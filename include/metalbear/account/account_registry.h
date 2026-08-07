@@ -138,6 +138,17 @@ wf_status metalbear_account_registry_get_invite_code_uses(
 void metalbear_invite_code_use_entries_free(
     metalbear_invite_code_use_entry *entries, size_t count);
 
+/* The invite code that was consumed to create this account, if any.
+ * create_account records the redemption against the handle it saw at
+ * signup, so both `did` and `handle` are matched -- pass whichever you
+ * have; the other may be NULL. Returns WF_ERR_NOT_FOUND when the account
+ * was not created through an invite code (invites not required, or
+ * created before invite tracking). Caller frees *out with
+ * metalbear_invite_code_entries_free(*out, 1). */
+wf_status metalbear_account_registry_get_invite_code_for_account(
+    metalbear_account_registry *registry, const char *did, const char *handle,
+    metalbear_invite_code_entry **out);
+
 /* Disable invite codes by exact code string or by account. Pass an array of
  *  codes and/or accounts; both may be NULL/empty. Returns WF_OK when at least
  *  one row was touched, WF_ERR_NOT_FOUND when nothing matched. */
