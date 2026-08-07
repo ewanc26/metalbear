@@ -465,8 +465,13 @@ wf_status request_email_confirmation(void *ctx, const wf_xrpc_request *request,
                                    "Could not create confirmation token");
         return WF_OK;
     }
-    if (server->email)
-        metalbear_email_send_verification(server->email, email, token);
+    if (server->email && metalbear_email_send_verification(server->email, email,
+                                                           token) != WF_OK) {
+        free(email);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not send confirmation email");
+        return WF_OK;
+    }
     free(email);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
@@ -546,8 +551,13 @@ wf_status request_email_update(void *ctx, const wf_xrpc_request *request,
                                    "Could not create update token");
         return WF_OK;
     }
-    if (server->email)
-        metalbear_email_send_verification(server->email, email, token);
+    if (server->email && metalbear_email_send_verification(server->email, email,
+                                                           token) != WF_OK) {
+        free(email);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not send update email");
+        return WF_OK;
+    }
     free(email);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
@@ -707,8 +717,25 @@ wf_status request_password_reset(void *ctx, const wf_xrpc_request *request,
                                    "Could not create reset token");
         return WF_OK;
     }
-    if (server->email)
-        metalbear_email_send_password_reset(server->email, email, token);
+    /*
+     * Unlike request_email_confirmation/request_email_update (both
+     * authenticated -- the caller already knows their own account exists),
+     * this endpoint is unauthenticated and deliberately always reports
+     * success for an account that exists, to avoid email enumeration (see
+     * the same-shaped branch above for a non-existent one). Surfacing an
+     * email-send failure as an error here would reintroduce exactly that:
+     * during an SMTP outage, real accounts would 500 while made-up
+     * addresses kept getting 200, telling an attacker exactly which
+     * addresses are real. Log it instead, so an operator can notice a
+     * broken mail pipe from logs/metrics without the response leaking
+     * anything to the caller.
+     */
+    if (server->email && metalbear_email_send_password_reset(
+                             server->email, email, token) != WF_OK) {
+        LOG_ERROR("request_password_reset: failed to send reset email to "
+                  "did=%s",
+                  acct->did);
+    }
     free(email);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
