@@ -1105,7 +1105,7 @@ static wf_status request_account_delete(void *ctx,
     }
     if (!check_endpoint_rate_limit(server->rl_request_account_delete_day,
                                    server->rl_request_account_delete_hour,
-                                   acct->did, response)) {
+                                   acct->did, 1, response)) {
         return WF_OK;
     }
     char token[33];
@@ -1400,6 +1400,47 @@ bool assert_repo_available(metalbear_server *server,
     return true;
 }
 
+/* Sum of per-operation costs for an applyWrites batch, matching
+ * rate-limits.ts's ratelimitPoints exactly: 3 per create, 2 per update, 1
+ * per delete (and, matching its own `else` fallthrough, 1 for anything else
+ * too — an unrecognized op is still one write attempt). Returns 0 (no extra
+ * charge) when `params` carries no `writes` array at all; applyWrites'
+ * handler rejects that shape on its own regardless of rate limiting. */
+static unsigned int apply_writes_rate_limit_cost(const cJSON *params) {
+    const cJSON *writes =
+        params ? cJSON_GetObjectItemCaseSensitive(params, "writes") : NULL;
+    if (!cJSON_IsArray(writes)) return 0;
+    unsigned int cost = 0;
+    const cJSON *op = NULL;
+    cJSON_ArrayForEach(op, writes) {
+        const cJSON *type = cJSON_GetObjectItemCaseSensitive(op, "$type");
+        const char *t = cJSON_IsString(type) ? type->valuestring : "";
+        if (strcmp(t, "com.atproto.repo.applyWrites#create") == 0) {
+            cost += 3;
+        } else if (strcmp(t, "com.atproto.repo.applyWrites#update") == 0) {
+            cost += 2;
+        } else {
+            cost += 1;
+        }
+    }
+    return cost;
+}
+
+/* The repo-write cost this request charges against the shared
+ * repo-write-hour/-day buckets (rate-limits.ts): 3/2/1 for a single
+ * createRecord/putRecord/deleteRecord, the summed per-operation cost for an
+ * applyWrites batch, or 0 for every other route this guard also covers
+ * (reads, describeRepo, etc.), which this rate limit does not apply to. */
+static unsigned int repo_write_rate_limit_cost(const wf_xrpc_request *req) {
+    const char *nsid = req->nsid ? req->nsid : "";
+    if (strcmp(nsid, "com.atproto.repo.createRecord") == 0) return 3;
+    if (strcmp(nsid, "com.atproto.repo.putRecord") == 0) return 2;
+    if (strcmp(nsid, "com.atproto.repo.deleteRecord") == 0) return 1;
+    if (strcmp(nsid, "com.atproto.repo.applyWrites") == 0)
+        return apply_writes_rate_limit_cost(req->params);
+    return 0;
+}
+
 /*
  * The repository layer's access guard, consulted by every route registered
  * through metalbear_xrpc_server_register_pds_repo_resolver_ex. A read of the
@@ -1424,7 +1465,16 @@ static bool repo_access_guard(void *ctx, const wf_xrpc_request *req,
     /* An unresolvable account is the handler's own error to report, in the
      * terms its lexicon uses. */
     if (!acct) return true;
-    return assert_repo_available(server, acct, req, resp);
+    if (!assert_repo_available(server, acct, req, resp)) return false;
+
+    unsigned int write_cost = repo_write_rate_limit_cost(req);
+    if (write_cost > 0 &&
+        !check_endpoint_rate_limit(server->rl_repo_write_hour,
+                                   server->rl_repo_write_day, acct->did,
+                                   write_cost, resp)) {
+        return false;
+    }
+    return true;
 }
 
 cJSON *build_did_doc(metalbear_server *server,
@@ -1452,8 +1502,10 @@ cJSON *build_did_doc(metalbear_server *server,
  * own built-in limiter uses, and returns false; returns true otherwise.
  */
 bool check_endpoint_rate_limit(wf_rate_limiter *tier_a, wf_rate_limiter *tier_b,
-                               const char *key, wf_xrpc_response *response) {
+                               const char *key, unsigned int cost,
+                               wf_xrpc_response *response) {
     if (!key) key = "unknown";
+    if (cost == 0) cost = 1;
     wf_rate_limiter *tiers[2] = {tier_a, tier_b};
     wf_rate_limit_status statuses[2] = {0};
     wf_status results[2] = {WF_OK, WF_OK};
@@ -1463,7 +1515,7 @@ bool check_endpoint_rate_limit(wf_rate_limiter *tier_a, wf_rate_limiter *tier_b,
     for (int i = 0; i < 2; i++) {
         if (!tiers[i]) continue;
         results[i] =
-            wf_rate_limiter_consume_status(tiers[i], key, 1, &statuses[i]);
+            wf_rate_limiter_consume_status(tiers[i], key, cost, &statuses[i]);
         if (results[i] != WF_OK) limited = true;
         if (reported < 0 ||
             statuses[i].remaining < statuses[reported].remaining) {
@@ -3049,6 +3101,11 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_rate_limiter_new(5, 3600, 0);
     server->rl_request_email_update_day = wf_rate_limiter_new(15, 86400, 0);
     server->rl_request_email_update_hour = wf_rate_limiter_new(5, 3600, 0);
+    server->rl_repo_write_hour = wf_rate_limiter_new(5000, 3600, 0);
+    server->rl_repo_write_day = wf_rate_limiter_new(35000, 86400, 0);
+    server->rl_update_handle_5min = wf_rate_limiter_new(10, 300, 0);
+    server->rl_update_handle_day = wf_rate_limiter_new(50, 86400, 0);
+    server->rl_get_repo_5min = wf_rate_limiter_new(6000, 300, 0);
 
     /* Open moderation report store */
     char *reports_path = join_path(config->data_directory, "reports.sqlite3");
@@ -3595,6 +3652,11 @@ void metalbear_server_free(metalbear_server *server) {
     wf_rate_limiter_free(server->rl_request_email_confirmation_hour);
     wf_rate_limiter_free(server->rl_request_email_update_day);
     wf_rate_limiter_free(server->rl_request_email_update_hour);
+    wf_rate_limiter_free(server->rl_repo_write_hour);
+    wf_rate_limiter_free(server->rl_repo_write_day);
+    wf_rate_limiter_free(server->rl_update_handle_5min);
+    wf_rate_limiter_free(server->rl_update_handle_day);
+    wf_rate_limiter_free(server->rl_get_repo_5min);
     metalbear_log_close();
     free(server->service_did);
     free(server->public_url);
