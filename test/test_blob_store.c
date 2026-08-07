@@ -45,11 +45,13 @@ static int raw_http(const char *host, uint16_t port, const char *method,
                     const char *path, const unsigned char *body,
                     size_t body_len, const char *content_type,
                     unsigned char **out_body, size_t *out_len,
-                    char **out_content_type, long *out_status) {
+                    char **out_content_type, long *out_status,
+                    char **out_headers) {
     *out_body = NULL;
     *out_len = 0;
     *out_content_type = NULL;
     *out_status = 0;
+    if (out_headers) *out_headers = NULL;
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return -1;
@@ -130,6 +132,15 @@ static int raw_http(const char *host, uint16_t port, const char *method,
 
     size_t head_len = (size_t)(sep - (char *)buf);
     sscanf((const char *)buf, "HTTP/%*s %ld", out_status);
+
+    if (out_headers) {
+        char *h = (char *)malloc(head_len + 1);
+        if (h) {
+            memcpy(h, buf, head_len);
+            h[head_len] = '\0';
+            *out_headers = h;
+        }
+    }
 
     /* Extract Content-Type (case-insensitive). */
     const char *p = (const char *)buf;
@@ -457,7 +468,7 @@ static int test_server_roundtrip(void) {
     char *up_ct = NULL;
     long up_status = 0;
     if (raw_http(host, port, "POST", up_path, payload, sizeof(payload), mime,
-                 &up_body, &up_len, &up_ct, &up_status) != 0) {
+                 &up_body, &up_len, &up_ct, &up_status, NULL) != 0) {
         fprintf(stderr, "FAIL: upload request\n");
         wf_xrpc_server_free(server);
         metalbear_blob_store_free(store);
@@ -528,8 +539,9 @@ static int test_server_roundtrip(void) {
         size_t gl = 0;
         char *gct = NULL;
         long gstatus = 0;
+        char *ghdrs = NULL;
         if (raw_http(host, port, "GET", get_path, NULL, 0, NULL, &gb, &gl, &gct,
-                     &gstatus) != 0) {
+                     &gstatus, &ghdrs) != 0) {
             fprintf(stderr, "FAIL: get request\n");
             fail = 1;
         } else {
@@ -544,8 +556,29 @@ static int test_server_roundtrip(void) {
                         gct ? gct : "NULL", mime);
                 fail = 1;
             }
+            /* Blobs are attacker-supplied bytes served from this origin --
+             * these three headers stop a browser from ever interpreting
+             * one as same-origin HTML/SVG/script. Regression coverage: this
+             * exact registration path
+             * (metalbear_xrpc_server_register_blob_store, used above) used to
+             * serve blobs with none of them set. */
+            if (!ghdrs || !strstr(ghdrs, "X-Content-Type-Options: nosniff")) {
+                fprintf(stderr,
+                        "FAIL: missing X-Content-Type-Options header\n");
+                fail = 1;
+            }
+            if (!ghdrs || !strstr(ghdrs, "Content-Disposition: attachment")) {
+                fprintf(stderr, "FAIL: missing Content-Disposition header\n");
+                fail = 1;
+            }
+            if (!ghdrs || !strstr(ghdrs, "Content-Security-Policy:")) {
+                fprintf(stderr,
+                        "FAIL: missing Content-Security-Policy header\n");
+                fail = 1;
+            }
             free(gb);
             free(gct);
+            free(ghdrs);
         }
     }
 
