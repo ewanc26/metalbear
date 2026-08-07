@@ -892,3 +892,200 @@ wf_status metalbear_oauth_device_session_revoke(metalbear_oauth_store *store,
     pthread_mutex_unlock(&store->mutex);
     return status;
 }
+
+/* ── Account-management listings (connected apps, active devices) ─────── */
+
+wf_status metalbear_oauth_device_session_list(
+    metalbear_oauth_store *store, const char *subject,
+    metalbear_oauth_device_session_info **out_items, size_t *out_count) {
+    if (!store || !subject || !subject[0] || !out_items || !out_count)
+        return WF_ERR_INVALID_ARG;
+    *out_items = NULL;
+    *out_count = 0;
+
+    pthread_mutex_lock(&store->mutex);
+    prune(store, (int64_t)time(NULL));
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db,
+                           "SELECT token_hash, expires_at FROM device_session "
+                           "WHERE subject=? AND expires_at>? "
+                           "ORDER BY expires_at DESC;",
+                           -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, subject, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, (int64_t)time(NULL));
+        size_t cap = 0, n = 0;
+        metalbear_oauth_device_session_info *items = NULL;
+        status = WF_OK;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            if (n == cap) {
+                cap = cap ? cap * 2 : 8;
+                metalbear_oauth_device_session_info *grown =
+                    realloc(items, cap * sizeof(*items));
+                if (!grown) {
+                    status = WF_ERR_ALLOC;
+                    break;
+                }
+                items = grown;
+            }
+            const void *hash = sqlite3_column_blob(stmt, 0);
+            int hash_len = sqlite3_column_bytes(stmt, 0);
+            char *session_id = NULL;
+            if (!hash || hash_len <= 0 ||
+                wf_crypto_base64url_encode(hash, (size_t)hash_len,
+                                           &session_id) != WF_OK) {
+                status = WF_ERR_INTERNAL;
+                break;
+            }
+            items[n].session_id = session_id;
+            items[n].expires_at = sqlite3_column_int64(stmt, 1);
+            n++;
+        }
+        if (status == WF_OK) {
+            *out_items = items;
+            *out_count = n;
+        } else {
+            for (size_t i = 0; i < n; i++) free(items[i].session_id);
+            free(items);
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+void metalbear_oauth_device_session_info_list_free(
+    metalbear_oauth_device_session_info *items, size_t count) {
+    if (!items) return;
+    for (size_t i = 0; i < count; i++) free(items[i].session_id);
+    free(items);
+}
+
+wf_status metalbear_oauth_device_session_revoke_by_id(
+    metalbear_oauth_store *store, const char *subject, const char *session_id) {
+    if (!store || !subject || !subject[0] || !session_id || !session_id[0])
+        return WF_ERR_INVALID_ARG;
+    unsigned char *hash = NULL;
+    size_t hash_len = 0;
+    if (wf_crypto_base64url_decode(session_id, &hash, &hash_len) != WF_OK)
+        return WF_ERR_INVALID_ARG;
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(
+            store->db,
+            "DELETE FROM device_session WHERE token_hash=? AND subject=?;", -1,
+            &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_blob(stmt, 1, hash, (int)hash_len, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, subject, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_DONE) {
+            status = sqlite3_changes(store->db) > 0 ? WF_OK : WF_ERR_NOT_FOUND;
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    free(hash);
+    return status;
+}
+
+wf_status metalbear_oauth_grants_list(metalbear_oauth_store *store,
+                                      const char *subject,
+                                      metalbear_oauth_grant_info **out_items,
+                                      size_t *out_count) {
+    if (!store || !subject || !subject[0] || !out_items || !out_count)
+        return WF_ERR_INVALID_ARG;
+    *out_items = NULL;
+    *out_count = 0;
+
+    pthread_mutex_lock(&store->mutex);
+    prune(store, (int64_t)time(NULL));
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    /* One row per distinct client_id: a client that re-authorized more than
+     * once (minting a second refresh token before the first expired) is
+     * still one connection to list, not several -- scope/expiry are taken
+     * from whichever of its rows expires latest, the one that actually
+     * governs how long the connection still has left. */
+    if (sqlite3_prepare_v2(
+            store->db,
+            "SELECT client_id, scope, MAX(expires_at) FROM oauth_refresh "
+            "WHERE subject=? AND expires_at>? "
+            "GROUP BY client_id ORDER BY MAX(expires_at) DESC;",
+            -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, subject, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, (int64_t)time(NULL));
+        size_t cap = 0, n = 0;
+        metalbear_oauth_grant_info *items = NULL;
+        status = WF_OK;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            if (n == cap) {
+                cap = cap ? cap * 2 : 8;
+                metalbear_oauth_grant_info *grown =
+                    realloc(items, cap * sizeof(*items));
+                if (!grown) {
+                    status = WF_ERR_ALLOC;
+                    break;
+                }
+                items = grown;
+            }
+            const char *client_id = (const char *)sqlite3_column_text(stmt, 0);
+            const char *scope = (const char *)sqlite3_column_text(stmt, 1);
+            items[n].client_id = client_id ? strdup(client_id) : NULL;
+            items[n].scope = scope ? strdup(scope) : NULL;
+            if (!items[n].client_id || !items[n].scope) {
+                free(items[n].client_id);
+                free(items[n].scope);
+                status = WF_ERR_ALLOC;
+                break;
+            }
+            items[n].expires_at = sqlite3_column_int64(stmt, 2);
+            n++;
+        }
+        if (status == WF_OK) {
+            *out_items = items;
+            *out_count = n;
+        } else {
+            for (size_t i = 0; i < n; i++) {
+                free(items[i].client_id);
+                free(items[i].scope);
+            }
+            free(items);
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+void metalbear_oauth_grant_info_list_free(metalbear_oauth_grant_info *items,
+                                          size_t count) {
+    if (!items) return;
+    for (size_t i = 0; i < count; i++) {
+        free(items[i].client_id);
+        free(items[i].scope);
+    }
+    free(items);
+}
+
+wf_status metalbear_oauth_grants_revoke(metalbear_oauth_store *store,
+                                        const char *subject,
+                                        const char *client_id) {
+    if (!store || !subject || !subject[0] || !client_id || !client_id[0])
+        return WF_ERR_INVALID_ARG;
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(
+            store->db,
+            "DELETE FROM oauth_refresh WHERE subject=? AND client_id=?;", -1,
+            &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, subject, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, client_id, -1, SQLITE_TRANSIENT);
+        status = sqlite3_step(stmt) == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}

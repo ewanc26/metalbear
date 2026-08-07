@@ -104,6 +104,7 @@ add_library(
   src/email.c
   src/oauth/oauth.c
   src/oauth/oauth_routes.c
+  src/oauth/oauth_account_routes.c
   src/oauth/oauth_scope.c
   src/oauth/oauth_credentials.c
   cpp/metalbear/key_rotation.cpp
@@ -313,6 +314,15 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_oauth_multi_device_session
            COMMAND test_metalbear_oauth_multi_device_session)
+
+  add_executable(test_metalbear_oauth_account_routes
+                 test/test_oauth_account_routes.c)
+  target_link_libraries(test_metalbear_oauth_account_routes
+                        PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_oauth_account_routes
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_oauth_account_routes
+           COMMAND test_metalbear_oauth_account_routes)
 
   add_executable(test_metalbear_repo_store test/test_repo_store.c)
   target_link_libraries(test_metalbear_repo_store PRIVATE metalbear_core)
