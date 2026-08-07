@@ -5,14 +5,26 @@
  * acceptingImports config gate, the full-access (repo:manage-equivalent)
  * auth requirement, the maxImportSize cap, and the InvalidCAR/success paths.
  *
- * importRepo verifies the incoming CAR's commit signature against the
- * *target* account's own signing key (a backup-restore onto the same
- * account, not a cross-account migration), so the genuine success and
- * InvalidCAR/full-access checks run against the same server and account
- * that produced the exported CAR. The accepting_imports=false and
- * max_import_size cases are refused before the CAR is ever parsed, so they
- * run against separate freshly-created accounts/servers without needing a
- * matching signing key.
+ * importRepo verifies the incoming CAR's commit signature two different
+ * ways depending on whether the target account already has a commit:
+ *
+ *  - Onto an existing head (the diff-and-reapply path): against the
+ *    *target* account's own signing key, since that key is what actually
+ *    signed the base being diffed against. The genuine success and
+ *    InvalidCAR/full-access checks below run against the same server and
+ *    account that produced the exported CAR, so this is what they exercise
+ *    (a backup-restore onto the same account, not a cross-account
+ *    migration).
+ *  - Onto a still-empty repo (the migration-bootstrap path -- createAccount
+ *    with an existing `did`, immediately followed by importRepo, before any
+ *    local write): against the DID's CURRENTLY PUBLISHED #atproto key,
+ *    resolved over the network, since the DID document has not been
+ *    repointed at this host yet and the imported commit is still signed by
+ *    whichever server currently holds the identity. The DID-resolution
+ *    failure case below exercises this offline (an unresolvable DID method
+ *    is refused before any network call is attempted); the resolution
+ *    *success* case requires a real DID document to resolve and is instead
+ *    covered by a live cross-server migration, not this offline suite.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -430,6 +442,136 @@ int main(void) {
             metalbear_server_free(server);
         }
         rmtree(directory);
+    }
+
+    /* ---- Fourth server: migration bootstrap onto a headless account whose
+     * DID uses an unresolvable method. wf_did_resolve_verification_key
+     * rejects an unknown DID method before ever attempting a network call
+     * (wf_did_method_of returns WF_DID_METHOD_UNKNOWN, short-circuiting
+     * did_fetch_document), so this stays fully offline while still proving
+     * the new resolve-then-verify path is reached and fails honestly rather
+     * than silently falling back to the account's own (irrelevant, freshly
+     * generated) local key. */
+    {
+        char src_directory[] = "/tmp/metalbear-import-migsrc-XXXXXX";
+        CHECK(mkdtemp(src_directory) != NULL);
+        metalbear_config src_config = {
+            .listen_address = "127.0.0.1",
+            .port = 0,
+            .thread_count = 2,
+            .data_directory = src_directory,
+            .service_did = "did:web:pds5.example.com",
+            .user_domain = ".example.com",
+            .invite_required = false,
+            .rate_limit = 10000,
+            .accepting_imports = true,
+        };
+        metalbear_server *src_server = metalbear_server_start(&src_config);
+        CHECK(src_server != NULL);
+
+        char mig_directory[] = "/tmp/metalbear-import-mig-XXXXXX";
+        CHECK(mkdtemp(mig_directory) != NULL);
+        metalbear_config mig_config = {
+            .listen_address = "127.0.0.1",
+            .port = 0,
+            .thread_count = 2,
+            .data_directory = mig_directory,
+            .service_did = "did:web:pds6.example.com",
+            .user_domain = ".example.com",
+            .invite_required = false,
+            .rate_limit = 10000,
+            .accepting_imports = true,
+        };
+        metalbear_server *mig_server = metalbear_server_start(&mig_config);
+        CHECK(mig_server != NULL);
+
+        if (src_server && mig_server) {
+            char src_base[80];
+            snprintf(src_base, sizeof(src_base), "http://127.0.0.1:%u",
+                     (unsigned)metalbear_server_port(src_server));
+            wf_xrpc_client *src_client = wf_xrpc_client_new(src_base);
+            wf_response response = {0};
+
+            char *src_access = NULL;
+            CHECK(create_test_account(src_client, &src_access) == WF_OK);
+            wf_xrpc_client_set_auth(src_client, src_access);
+
+            /* getRepo on a headless account with no commits yet fails with
+             * RepoNotFound, so give it one record to export first. */
+            CHECK(wf_xrpc_procedure(
+                      src_client, "com.atproto.repo.createRecord",
+                      "{\"repo\":\"did:plc:metalbeartest\","
+                      "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"first\","
+                      "\"record\":{\"$type\":\"app.bsky.feed.post\","
+                      "\"text\":\"hello from migration bootstrap test\","
+                      "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
+                      &response) == WF_OK);
+            CHECK(response.status == 200);
+            wf_response_free(&response);
+
+            wf_xrpc_param repo_params[] = {{"did", "did:plc:metalbeartest"}};
+            CHECK(wf_xrpc_query_params(src_client, "com.atproto.sync.getRepo",
+                                       repo_params, 1, &response) == WF_OK);
+            CHECK(response.status == 200 && response.body_len > 0);
+            size_t car_len = response.body_len;
+            unsigned char *car_bytes = malloc(car_len);
+            CHECK(car_bytes != NULL);
+            if (car_bytes) memcpy(car_bytes, response.body, car_len);
+            wf_response_free(&response);
+
+            char mig_base[80];
+            snprintf(mig_base, sizeof(mig_base), "http://127.0.0.1:%u",
+                     (unsigned)metalbear_server_port(mig_server));
+            wf_xrpc_client *mig_client = wf_xrpc_client_new(mig_base);
+
+            wf_response create_response = {0};
+            CHECK(wf_xrpc_procedure(
+                      mig_client, "com.atproto.server.createAccount",
+                      "{\"handle\":\"migrated.example.com\","
+                      "\"password\":\"correct horse battery staple\","
+                      "\"did\":\"did:example:unresolvable-method\","
+                      "\"email\":\"migrated@example.com\"}",
+                      &create_response) == WF_OK);
+            CHECK(create_response.status == 200);
+            cJSON *create_json = json_response(&create_response);
+            cJSON *mig_access_json =
+                cJSON_GetObjectItemCaseSensitive(create_json, "accessJwt");
+            char *mig_access = cJSON_IsString(mig_access_json)
+                                   ? strdup(mig_access_json->valuestring)
+                                   : NULL;
+            CHECK(mig_access != NULL);
+            cJSON_Delete(create_json);
+            wf_response_free(&create_response);
+
+            if (car_bytes && mig_access) {
+                wf_xrpc_client_set_auth(mig_client, mig_access);
+                CHECK(wf_xrpc_upload_blob(mig_client,
+                                          "com.atproto.repo.importRepo",
+                                          car_bytes, car_len,
+                                          "application/vnd.ipld.car",
+                                          &response) == WF_ERR_HTTP);
+                CHECK(response.status == 400);
+                cJSON *json = json_response(&response);
+                CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")
+                                 ->valuestring,
+                             "InvalidCAR") == 0);
+                CHECK(strstr(cJSON_GetObjectItemCaseSensitive(json, "message")
+                                 ->valuestring,
+                             "resolve") != NULL);
+                cJSON_Delete(json);
+                wf_response_free(&response);
+            }
+
+            free(car_bytes);
+            free(mig_access);
+            free(src_access);
+            wf_xrpc_client_free(src_client);
+            wf_xrpc_client_free(mig_client);
+        }
+        if (src_server) metalbear_server_free(src_server);
+        if (mig_server) metalbear_server_free(mig_server);
+        rmtree(src_directory);
+        rmtree(mig_directory);
     }
 
     printf("\n");
