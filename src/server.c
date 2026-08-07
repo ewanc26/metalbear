@@ -511,22 +511,22 @@ static bool takendown_route_allowed(const char *nsid) {
            strcmp(nsid, "app.bsky.actor.getPreferences") == 0;
 }
 
-/* Every route the reference asserts `rpc:` scope for and that MetalBear
- * actually proxies to the AppView (appview_routes.c's appview_get_* /
- * appview_register_push / appview_unregister_push). Deliberately excludes
- * app.bsky.actor.{get,put}Preferences: the reference proxies those too, but
- * MetalBear stores preferences locally, so their audience is not the
- * AppView and belongs in its own check, not this one. */
+/* Every "app.bsky." and "chat.bsky." route proxies straight to the AppView
+ * and requires rpc: scope there, matching the reference's generic
+ * proxyHandler/assertRpc behavior (pipethrough.ts) -- a blanket namespace
+ * check rather than a per-route allowlist, so a newly wired proxy route
+ * (appview_routes.c's appview_get_ handlers, appview_register_push,
+ * appview_unregister_push, or the generic proxy_fallback) needs no matching
+ * addition here. The one exception is app.bsky.actor's getPreferences and
+ * putPreferences: the reference proxies those too, but MetalBear stores
+ * preferences locally, so their audience is not the AppView and they get
+ * their own self-referential check above instead. */
 static bool proxied_appview_rpc_route(const char *nsid) {
-    return strcmp(nsid, "app.bsky.feed.getFeed") == 0 ||
-           strcmp(nsid, "app.bsky.feed.getAuthorFeed") == 0 ||
-           strcmp(nsid, "app.bsky.feed.getActorLikes") == 0 ||
-           strcmp(nsid, "app.bsky.feed.getTimeline") == 0 ||
-           strcmp(nsid, "app.bsky.feed.getPostThread") == 0 ||
-           strcmp(nsid, "app.bsky.actor.getProfile") == 0 ||
-           strcmp(nsid, "app.bsky.actor.getProfiles") == 0 ||
-           strcmp(nsid, "app.bsky.notification.registerPush") == 0 ||
-           strcmp(nsid, "app.bsky.notification.unregisterPush") == 0;
+    if (strncmp(nsid, "app.bsky.", 9) == 0) {
+        return strcmp(nsid, "app.bsky.actor.getPreferences") != 0 &&
+               strcmp(nsid, "app.bsky.actor.putPreferences") != 0;
+    }
+    return strncmp(nsid, "chat.bsky.", 10) == 0;
 }
 
 static wf_status authenticate_request(wf_xrpc_request *req, void *ctx);
@@ -811,6 +811,31 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
                             LOG_WARN("authenticate: OAuth scope denied "
                                      "createReport did=%s",
                                      sub);
+                            mb_scope_set_free(&scope_set);
+                            free(oauth_scope_str);
+                            free(sub);
+                            return WF_ERR_PERMISSION;
+                        }
+                    } else if (strcmp(nsid, "app.bsky.actor.getPreferences") ==
+                                   0 ||
+                               strcmp(nsid, "app.bsky.actor.putPreferences") ==
+                                   0) {
+                        scope_checked = true;
+                        /* The reference proxies these to the AppView and
+                         * asserts rpc: there; MetalBear stores preferences
+                         * locally instead (see proxied_appview_rpc_route's
+                         * comment), so the audience is this server's own PDS
+                         * service id -- the same self-referential pattern
+                         * createReport uses above for the same reason. */
+                        char aud_buf[320];
+                        snprintf(aud_buf, sizeof(aud_buf), "%s#atproto_pds",
+                                 server->service_did ? server->service_did
+                                                     : "");
+                        if (!mb_scope_set_allows_rpc(&scope_set, nsid,
+                                                     aud_buf)) {
+                            LOG_WARN("authenticate: OAuth scope denied "
+                                     "preferences did=%s nsid=%s",
+                                     sub, nsid);
                             mb_scope_set_free(&scope_set);
                             free(oauth_scope_str);
                             free(sub);
