@@ -64,6 +64,18 @@ wf_status metalbear_account_create_email_token(metalbear_account_store *store,
 wf_status metalbear_account_verify_email_token(metalbear_account_store *store,
                                                const char *kind,
                                                const char *token);
+/* Delete every outstanding email token of the given kind (e.g.
+ * "reset_password"), without needing to know the token value itself.
+ * Matches the reference's emailToken.deleteEmailToken(dbTxn, did, kind). */
+wf_status
+metalbear_account_delete_email_tokens_by_kind(metalbear_account_store *store,
+                                              const char *kind);
+/* Delete every outstanding email token regardless of kind. Matches the
+ * reference's emailToken.deleteAllEmailTokens(dbTxn, did), called whenever
+ * an admin overrides the account's email: any token minted against the old
+ * email (confirm/update/reset) must not remain usable afterward. */
+wf_status
+metalbear_account_delete_all_email_tokens(metalbear_account_store *store);
 wf_status metalbear_account_reset_password(metalbear_account_store *store,
                                            const char *new_password);
 wf_status metalbear_account_store_prefs_get(metalbear_account_store *store,
