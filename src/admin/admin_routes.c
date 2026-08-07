@@ -919,40 +919,85 @@ wf_status admin_get_invite_codes(void *ctx, const wf_xrpc_request *request,
                                  wf_xrpc_response *response) {
     metalbear_server *server = ctx;
     int limit = query_param_int(request->params, "limit", 100, 1, 500);
-    /* Enumerate all accounts and collect their invite codes. */
-    metalbear_account_entry *entries = NULL;
-    size_t count = 0;
-    if (metalbear_account_registry_list(server->registry, &entries, &count) !=
-        WF_OK) {
-        entries = NULL;
-        count = 0;
+    cJSON *sort_param =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "sort")
+            : NULL;
+    const char *sort = cJSON_IsString(sort_param) && sort_param->valuestring[0]
+                           ? sort_param->valuestring
+                           : "recent";
+    /* "usage" needs a use-count-ordered index this registry does not have
+     * yet; an honest 400 beats silently falling back to "recent" and
+     * returning results in an order the caller did not ask for. */
+    if (strcmp(sort, "recent") != 0) {
+        wf_xrpc_response_set_error(
+            response, 400, "InvalidRequest",
+            "only sort=recent is supported (usage sort is not implemented)");
+        return WF_OK;
+    }
+    cJSON *cursor_param =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor")
+            : NULL;
+    /* Keyset cursor: "<createdAt><US><code>" (US = 0x1F, a control byte no
+     * real created_at or client-supplied code is expected to contain), the
+     * last row's own sort key from the previous page -- opaque to the
+     * caller, who is only ever expected to echo it back verbatim. */
+    char after_created_at[40] = {0};
+    char after_code[256] = {0};
+    if (cJSON_IsString(cursor_param) && cursor_param->valuestring[0]) {
+        const char *sep = strchr(cursor_param->valuestring, '\x1f');
+        if (!sep) {
+            wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                       "malformed cursor");
+            return WF_OK;
+        }
+        size_t created_len = (size_t)(sep - cursor_param->valuestring);
+        if (created_len >= sizeof(after_created_at) ||
+            strlen(sep + 1) >= sizeof(after_code)) {
+            wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                       "malformed cursor");
+            return WF_OK;
+        }
+        memcpy(after_created_at, cursor_param->valuestring, created_len);
+        after_created_at[created_len] = '\0';
+        strcpy(after_code, sep + 1);
+    }
+    /* Fetch one extra row to learn whether a next page exists without a
+     * separate COUNT query. */
+    metalbear_invite_code_entry *icode_entries = NULL;
+    size_t icode_count = 0;
+    if (metalbear_account_registry_list_invite_codes(
+            server->registry, after_created_at[0] ? after_created_at : NULL,
+            after_code[0] ? after_code : NULL, (size_t)limit + 1,
+            &icode_entries, &icode_count) != WF_OK) {
+        icode_entries = NULL;
+        icode_count = 0;
     }
     cJSON *root = cJSON_CreateObject();
     cJSON *codes = cJSON_CreateArray();
     if (!root || !codes) {
         cJSON_Delete(root);
         cJSON_Delete(codes);
-        metalbear_account_entries_free(entries, count);
+        metalbear_invite_code_entries_free(icode_entries, icode_count);
         return WF_ERR_ALLOC;
     }
-    int taken = 0;
-    for (size_t i = 0; i < count && taken < limit; i++) {
-        metalbear_invite_code_entry *icode_entries = NULL;
-        size_t icode_count = 0;
-        if (metalbear_account_registry_get_invite_codes(
-                server->registry, entries[i].did, &icode_entries,
-                &icode_count) != WF_OK)
-            continue;
-        for (size_t j = 0; j < icode_count && taken < limit; j++) {
-            cJSON *obj = build_invite_code_json(server, &icode_entries[j],
-                                                entries[i].did);
-            if (!obj) continue;
-            cJSON_AddItemToArray(codes, obj);
-            taken++;
-        }
-        metalbear_invite_code_entries_free(icode_entries, icode_count);
+    size_t returned = icode_count > (size_t)limit ? (size_t)limit : icode_count;
+    for (size_t i = 0; i < returned; i++) {
+        cJSON *obj = build_invite_code_json(server, &icode_entries[i],
+                                            icode_entries[i].for_account);
+        if (obj) cJSON_AddItemToArray(codes, obj);
     }
-    metalbear_account_entries_free(entries, count);
+    if (icode_count > (size_t)limit) {
+        /* There is a next page: point the cursor at the last row actually
+         * returned (index `returned - 1`), not the lookahead row itself. */
+        char next_cursor[296];
+        snprintf(next_cursor, sizeof(next_cursor), "%s\x1f%s",
+                 icode_entries[returned - 1].created_at,
+                 icode_entries[returned - 1].code);
+        cJSON_AddStringToObject(root, "cursor", next_cursor);
+    }
+    metalbear_invite_code_entries_free(icode_entries, icode_count);
     cJSON_AddItemToObject(root, "codes", codes);
     return set_json(response, root);
 }
