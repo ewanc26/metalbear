@@ -109,11 +109,11 @@ wf_status metalbear_account_registry_open(const char *path,
     {
         char *err = nullptr;
         sqlite3_exec(reg->db.get(),
-                    "ALTER TABLE accounts ADD COLUMN created_at TEXT NOT "
-                    "NULL DEFAULT '';"
-                    "UPDATE accounts SET created_at=datetime('now') WHERE "
-                    "created_at='';",
-                    nullptr, nullptr, &err);
+                     "ALTER TABLE accounts ADD COLUMN created_at TEXT NOT "
+                     "NULL DEFAULT '';"
+                     "UPDATE accounts SET created_at=datetime('now') WHERE "
+                     "created_at='';",
+                     nullptr, nullptr, &err);
         if (err && !std::strstr(err, "duplicate column name")) {
             sqlite3_free(err);
             metalbear_account_registry_free(reg);
