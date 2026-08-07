@@ -536,6 +536,39 @@ wf_status metalbear_account_verify_email_token(metalbear_account_store *store,
     return status;
 }
 
+wf_status
+metalbear_account_delete_email_tokens_by_kind(metalbear_account_store *store,
+                                              const char *kind) {
+    if (!store || !kind) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = nullptr;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db.get(),
+                           "DELETE FROM email_token WHERE kind=?;", -1, &stmt,
+                           nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, kind, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_DONE) status = WF_OK;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status
+metalbear_account_delete_all_email_tokens(metalbear_account_store *store) {
+    if (!store) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = nullptr;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db.get(), "DELETE FROM email_token;", -1,
+                           &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_DONE) status = WF_OK;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
 wf_status metalbear_account_delete(metalbear_account_store *store) {
     if (!store) return WF_ERR_INVALID_ARG;
     pthread_mutex_lock(&store->mutex);
