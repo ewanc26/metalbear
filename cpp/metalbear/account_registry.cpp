@@ -75,7 +75,8 @@ wf_status metalbear_account_registry_open(const char *path,
                      "handle TEXT UNIQUE NOT NULL,"
                      "password_hash TEXT NOT NULL,"
                      "data_directory TEXT NOT NULL,"
-                     "active INTEGER NOT NULL DEFAULT 1);"
+                     "active INTEGER NOT NULL DEFAULT 1,"
+                     "created_at TEXT NOT NULL DEFAULT '');"
                      "CREATE TABLE IF NOT EXISTS invite_code("
                      "code TEXT PRIMARY KEY,"
                      "for_account TEXT NOT NULL,"
@@ -97,6 +98,29 @@ wf_status metalbear_account_registry_open(const char *path,
         metalbear_account_registry_free(reg);
         return WF_ERR_INTERNAL;
     }
+    /* Migrate registries that predate the created_at column. A fresh
+     * database already carries it (the CREATE TABLE above), so "duplicate
+     * column name" is the expected case; any other failure leaves the store
+     * unable to read a column the new queries depend on, so fail the open
+     * rather than limp on -- same pattern as account.cpp's invites_enabled
+     * migration. Existing rows get stamped with the migration time itself:
+     * their true creation time was never recorded, and that is an honest
+     * lower bound rather than a fabricated one. */
+    {
+        char *err = nullptr;
+        sqlite3_exec(reg->db.get(),
+                    "ALTER TABLE accounts ADD COLUMN created_at TEXT NOT "
+                    "NULL DEFAULT '';"
+                    "UPDATE accounts SET created_at=datetime('now') WHERE "
+                    "created_at='';",
+                    nullptr, nullptr, &err);
+        if (err && !std::strstr(err, "duplicate column name")) {
+            sqlite3_free(err);
+            metalbear_account_registry_free(reg);
+            return WF_ERR_INTERNAL;
+        }
+        if (err) sqlite3_free(err);
+    }
     *out = reg;
     return WF_OK;
 }
@@ -114,6 +138,7 @@ void metalbear_account_entry_free(metalbear_account_entry *entry) {
     std::free(entry->handle);
     std::free(entry->password_hash);
     std::free(entry->data_directory);
+    std::free(entry->created_at);
     std::free(entry);
 }
 
@@ -125,6 +150,7 @@ void metalbear_account_entries_free(metalbear_account_entry *entries,
         std::free(entries[i].handle);
         std::free(entries[i].password_hash);
         std::free(entries[i].data_directory);
+        std::free(entries[i].created_at);
     }
     std::free(entries);
 }
@@ -138,18 +164,22 @@ static wf_status read_entry(sqlite3_stmt *stmt, metalbear_account_entry *out) {
         reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
     const char *dir =
         reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
+    const char *created_at =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5));
     if (!did || !handle || !pw || !dir) return WF_ERR_INTERNAL;
     out->did = strdup(did);
     out->handle = strdup(handle);
     out->password_hash = strdup(pw);
     out->data_directory = strdup(dir);
+    out->created_at = strdup(created_at ? created_at : "");
     out->active = sqlite3_column_int(stmt, 4);
     if (!out->did || !out->handle || !out->password_hash ||
-        !out->data_directory) {
+        !out->data_directory || !out->created_at) {
         std::free(out->did);
         std::free(out->handle);
         std::free(out->password_hash);
         std::free(out->data_directory);
+        std::free(out->created_at);
         return WF_ERR_ALLOC;
     }
     return WF_OK;
@@ -167,8 +197,8 @@ wf_status metalbear_account_registry_add(metalbear_account_registry *registry,
     wf_status status = WF_ERR_INTERNAL;
     if (sqlite3_prepare_v2(
             registry->db.get(),
-            "INSERT INTO accounts(did,handle,password_hash,data_directory) "
-            "VALUES(?,?,?,?);",
+            "INSERT INTO accounts(did,handle,password_hash,data_directory,"
+            "created_at) VALUES(?,?,?,?,datetime('now'));",
             -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, did, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 2, handle, -1, SQLITE_TRANSIENT);
@@ -195,7 +225,8 @@ metalbear_account_registry_find_by_handle(metalbear_account_registry *registry,
     wf_status status = WF_ERR_INTERNAL;
     if (sqlite3_prepare_v2(
             registry->db.get(),
-            "SELECT did,handle,password_hash,data_directory,active "
+            "SELECT did,handle,password_hash,data_directory,active,"
+            "created_at "
             "FROM accounts WHERE handle=?;",
             -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, handle, -1, SQLITE_TRANSIENT);
@@ -226,7 +257,8 @@ metalbear_account_registry_find_by_did(metalbear_account_registry *registry,
     wf_status status = WF_ERR_INTERNAL;
     if (sqlite3_prepare_v2(
             registry->db.get(),
-            "SELECT did,handle,password_hash,data_directory,active "
+            "SELECT did,handle,password_hash,data_directory,active,"
+            "created_at "
             "FROM accounts WHERE did=?;",
             -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, did, -1, SQLITE_TRANSIENT);
@@ -258,7 +290,8 @@ wf_status metalbear_account_registry_list(metalbear_account_registry *registry,
     size_t capacity = 0;
     if (sqlite3_prepare_v2(
             registry->db.get(),
-            "SELECT did,handle,password_hash,data_directory,active "
+            "SELECT did,handle,password_hash,data_directory,active,"
+            "created_at "
             "FROM accounts ORDER BY handle;",
             -1, &stmt, nullptr) != SQLITE_OK) {
         status = WF_ERR_INTERNAL;
@@ -304,7 +337,8 @@ wf_status metalbear_account_registry_list_after(
     size_t capacity = 0;
     if (sqlite3_prepare_v2(
             registry->db.get(),
-            "SELECT did,handle,password_hash,data_directory,active "
+            "SELECT did,handle,password_hash,data_directory,active,"
+            "created_at "
             "FROM accounts WHERE did > ? ORDER BY did LIMIT ?;",
             -1, &stmt, nullptr) != SQLITE_OK) {
         status = WF_ERR_INTERNAL;
