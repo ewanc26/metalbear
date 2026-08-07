@@ -2,6 +2,7 @@
 #include "../server_internal.h"
 
 #include "metalbear/log.h"
+#include "metalbear/oauth/auth.h"
 
 #include <cJSON.h>
 #include <curl/curl.h>
@@ -614,9 +615,19 @@ static wf_status proxy_appview(metalbear_server *server,
     return WF_OK;
 }
 
-/* Generic fallback for unmatched NSIDs (runs before auth). Service-auth is
- * signed by the account the request resolves to; public AppViews may reject
- * unknown DIDs. */
+/* Generic fallback for unmatched NSIDs. Runs before MetalBear's own auth
+ * callback (the framework invokes it in place of route dispatch, not
+ * alongside it -- see xrpc_server.c's dispatch), so a Bearer token offered
+ * here has never been checked by anything: verify it the same way
+ * authenticate_request does for a registered route (decode the unverified
+ * `sub` claim to find which account's store should check the signature,
+ * then verify against that store), then mint the same kind of
+ * self-signed service-auth JWT proxy_appview mints for explicitly
+ * registered routes. Without this, every unregistered app.bsky./chat.bsky.
+ * route reached the AppView with no credential at all and any endpoint
+ * needing the caller's identity failed -- this function's own doc comment
+ * already promised "signed by the account the request resolves to" before
+ * this fix, it just never actually happened. */
 wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
                          wf_xrpc_response *resp) {
     metalbear_server *server = ctx;
@@ -627,6 +638,8 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
     }
 
     char *upstream = NULL;
+    const char *audience = server->appview_did;
+    char audience_buf[256];
     const char *proxy_header = req->atproto_proxy;
     if (proxy_header && proxy_header[0]) {
         const char *hash = strrchr(proxy_header, '#');
@@ -639,6 +652,11 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
             memcpy(did_buf, proxy_header, did_len);
             did_buf[did_len] = '\0';
             bare_did = did_buf;
+        }
+        if (did_len > 0 && did_len < sizeof(audience_buf)) {
+            memcpy(audience_buf, bare_did, did_len);
+            audience_buf[did_len] = '\0';
+            audience = audience_buf;
         }
         if (server->appview_did && strcmp(bare_did, server->appview_did) == 0) {
             upstream = strdup(server->appview_url);
@@ -671,11 +689,42 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
+    /* A token was offered but has never been checked by anything at this
+     * point -- verify it now, or refuse outright. Silently falling back to
+     * an anonymous proxy on a bad token would let a client downgrade its
+     * own auth requirement just by sending garbage, which registered
+     * routes never allow. */
+    char *service_token = NULL;
+    const char *provided = bearer_token(req->auth_header);
+    if (provided) {
+        char *sub = jwt_subject(provided);
+        metalbear_account_context *acct =
+            sub ? context_for_did(server, sub) : NULL;
+        metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
+        if (!acct || metalbear_auth_verify_access_scope(acct->auth, provided,
+                                                        &scope) != WF_OK) {
+            free(sub);
+            wf_xrpc_response_set_error(resp, 401, "InvalidToken",
+                                       "Token could not be verified");
+            return WF_OK;
+        }
+        if (acct->repo)
+            metalbear_repo_store_create_service_auth(acct->repo, audience,
+                                                     (int64_t)time(NULL) + 300,
+                                                     req->nsid, &service_token);
+        free(sub);
+    }
+
     struct curl_slist *hdrs = NULL;
     if (req->content_type && req->content_type[0]) {
         char ct[256];
         snprintf(ct, sizeof(ct), "Content-Type: %s", req->content_type);
         hdrs = curl_slist_append(hdrs, ct);
+    }
+    if (service_token) {
+        char auth[512];
+        snprintf(auth, sizeof(auth), "Authorization: Bearer %s", service_token);
+        hdrs = curl_slist_append(hdrs, auth);
     }
     if (req->client_ip && req->client_ip[0]) {
         char xff[128];
@@ -690,6 +739,7 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
     proxy_headers hdrs_out = {0};
     CURL *curl = curl_easy_init();
     if (!curl) {
+        free(service_token);
         curl_slist_free_all(hdrs);
         wf_xrpc_response_set_error(resp, 500, "InternalError",
                                    "Could not initialise HTTP client");
@@ -714,6 +764,7 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     curl_easy_cleanup(curl);
     curl_slist_free_all(hdrs);
+    free(service_token);
 
     if (rc != CURLE_OK) {
         free(body_out.data);
