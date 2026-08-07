@@ -201,6 +201,31 @@ int main(void) {
         metalbear_invite_code_use_entries_free(uses, use_count);
     }
 
+    /* invitedBy: the code that created an account, found by either DID or
+     * handle. Alice and bob both consumed code1. */
+    {
+        metalbear_invite_code_entry *invited_by = NULL;
+        CHECK(metalbear_account_registry_get_invite_code_for_account(
+                  registry, "did:plc:alice", NULL, &invited_by) == WF_OK);
+        CHECK(invited_by != NULL);
+        if (invited_by) CHECK(strcmp(invited_by->code, code1) == 0);
+        metalbear_invite_code_entries_free(invited_by, 1);
+
+        invited_by = NULL;
+        CHECK(metalbear_account_registry_get_invite_code_for_account(
+                  registry, NULL, "did:plc:bob", &invited_by) == WF_OK);
+        CHECK(invited_by != NULL);
+        if (invited_by) CHECK(strcmp(invited_by->code, code1) == 0);
+        metalbear_invite_code_entries_free(invited_by, 1);
+
+        /* An account that never consumed a code has no invitedBy. */
+        invited_by = NULL;
+        CHECK(metalbear_account_registry_get_invite_code_for_account(
+                  registry, "did:plc:nobody", "nobody.example.com",
+                  &invited_by) == WF_ERR_NOT_FOUND);
+        CHECK(invited_by == NULL);
+    }
+
     /* Nonexistent code */
     CHECK(metalbear_account_registry_consume_invite_code(
               registry, "DOES-NOT-EXIST", "did:plc:alice") == WF_ERR_NOT_FOUND);
