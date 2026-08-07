@@ -1,14 +1,11 @@
 <script lang="ts">
-	import { auth } from '$lib/stores/auth';
-	import type { Session } from '$lib/stores/auth';
-	import { authorizeInfo, hasDeviceSession } from '$lib/pds';
+	import { authorizeInfo, deviceSessions } from '$lib/pds';
 	import type { AuthorizeInfo } from '$lib/pds';
 	import { humanizeScopes } from '$lib/oauthScopes';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
 
-	let session: Session | null = $state(null);
 	let clientId: string = $state('');
 	let requestUri: string = $state('');
 	let loginHint: string = $state('');
@@ -16,6 +13,9 @@
 	let confirming: boolean = $state(false);
 	let info: AuthorizeInfo | null = $state(null);
 	let infoFailed: boolean = $state(false);
+	/* True for the brief window between deciding a sign-in is needed and the
+	 * goto() to /login actually navigating away. */
+	let redirecting: boolean = $state(false);
 	/*
 	 * Some OAuth clients omit login_hint entirely, expecting the provider
 	 * itself to ask "who are you?" -- oauth_authorize redirects here without
@@ -25,26 +25,39 @@
 	 */
 	let needsIdentifier: boolean = $state(false);
 	let identifierInput: string = $state('');
-
-	auth.subscribe((s) => (session = s));
+	/*
+	 * MetalBear is a multi-account host, and a browser can hold more than one
+	 * signed-in account's device session at once. When the client omitted
+	 * login_hint and this browser already has one or more, offer them as a
+	 * picker instead of falling straight to the identifier-entry form --
+	 * that form is for adding an account this browser hasn't signed into
+	 * yet, not for re-typing one that's already signed in.
+	 */
+	let pickerSubjects: string[] = $state([]);
+	let picking: boolean = $state(false);
 
 	async function proceedWithLoginHint() {
 		/*
-		 * A regular JWT session (the `auth` store) proves nothing about the
-		 * OAuth device session "Approve" actually needs -- nothing else
-		 * establishes one but /oauth/signin, which /login only calls when it
-		 * knows it's on an OAuth path. A returning user who already has a
-		 * JWT session from an earlier, unrelated visit must still be sent
-		 * through /login here, or "Approve" would have nothing to check and
-		 * loop back to this same page having done nothing.
+		 * Checking THIS specific account's device session, not just whether
+		 * any session exists, is what actually matters here: a browser
+		 * signed into a DIFFERENT account still has "a" session, but
+		 * /oauth/authorize will refuse it for this login_hint just the
+		 * same, and a check that only asked "any session?" would show
+		 * "Approve" anyway -- the click would redirect to /oauth/authorize,
+		 * get bounced right back here with nothing changed, and loop
+		 * forever. Send the browser to sign in as THIS account instead,
+		 * without disturbing whatever other account's session already
+		 * exists (see /oauth/signin's doc comment).
 		 */
 		const redirectTarget = `/oauth/consent?${new URLSearchParams({
 			client_id: clientId,
 			request_uri: requestUri,
 			...(loginHint ? { login_hint: loginHint } : {})
 		}).toString()}`;
-		if (!session || !(await hasDeviceSession())) {
+		const sessions = await deviceSessions(loginHint);
+		if (!sessions.matchesHint) {
 			loading = false;
+			redirecting = true;
 			goto(`/login?redirect=${encodeURIComponent(redirectTarget)}`);
 			return;
 		}
@@ -65,6 +78,13 @@
 		}
 
 		if (!loginHint) {
+			const sessions = await deviceSessions();
+			if (sessions.subjects.length > 0) {
+				pickerSubjects = sessions.subjects;
+				picking = true;
+				loading = false;
+				return;
+			}
 			needsIdentifier = true;
 			loading = false;
 			return;
@@ -80,6 +100,18 @@
 		needsIdentifier = false;
 		loading = true;
 		await proceedWithLoginHint();
+	}
+
+	async function handlePickAccount(subject: string) {
+		loginHint = subject;
+		picking = false;
+		loading = true;
+		await proceedWithLoginHint();
+	}
+
+	function handleUseDifferentAccount() {
+		picking = false;
+		needsIdentifier = true;
 	}
 
 	async function handleApprove() {
@@ -111,6 +143,30 @@
 		<p class="mt-4 text-center text-sm text-slate-500">
 			<a href="/" class="text-emerald-500 hover:text-emerald-400">← Back to status</a>
 		</p>
+	{:else if picking}
+		<div class="rounded-lg border border-slate-800 bg-slate-900/30 p-8">
+			<h1 class="mb-2 text-xl font-semibold text-white">Choose an account</h1>
+			<p class="mb-6 text-sm text-slate-400">
+				An application is requesting access to an account on this server. This browser is signed
+				into more than one — pick which one to continue with.
+			</p>
+			<div class="flex flex-col gap-2">
+				{#each pickerSubjects as subject (subject)}
+					<button
+						onclick={() => handlePickAccount(subject)}
+						class="rounded-lg border border-slate-700 px-4 py-2.5 text-left font-mono text-sm text-slate-200 transition hover:border-emerald-500 hover:text-white"
+					>
+						Continue as <span class="text-emerald-400">{subject}</span>
+					</button>
+				{/each}
+			</div>
+			<button
+				onclick={handleUseDifferentAccount}
+				class="mt-4 text-sm text-slate-500 hover:text-slate-400"
+			>
+				Use a different account
+			</button>
+		</div>
 	{:else if needsIdentifier}
 		<div class="rounded-lg border border-slate-800 bg-slate-900/30 p-8">
 			<h1 class="mb-2 text-xl font-semibold text-white">Sign in to authorize</h1>
@@ -142,7 +198,7 @@
 				</button>
 			</form>
 		</div>
-	{:else if !session}
+	{:else if redirecting}
 		<p class="text-sm text-slate-400">Redirecting to sign in…</p>
 	{:else if infoFailed}
 		<div class="rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-3 text-sm text-red-300">
@@ -185,19 +241,11 @@
 					<dt class="text-xs font-semibold tracking-widest text-slate-500 uppercase">Client ID</dt>
 					<dd class="mt-1 font-mono text-sm break-all text-slate-200">{clientId}</dd>
 				</div>
-				{#if loginHint}
-					<div>
-						<dt class="text-xs font-semibold tracking-widest text-slate-500 uppercase">
-							Requested account
-						</dt>
-						<dd class="mt-1 font-mono text-sm text-slate-200">{loginHint}</dd>
-					</div>
-				{/if}
 				<div>
 					<dt class="text-xs font-semibold tracking-widest text-slate-500 uppercase">
 						Signed in as
 					</dt>
-					<dd class="mt-1 font-mono text-sm text-emerald-400">{session.handle}</dd>
+					<dd class="mt-1 font-mono text-sm text-emerald-400">{loginHint}</dd>
 				</div>
 			</dl>
 
