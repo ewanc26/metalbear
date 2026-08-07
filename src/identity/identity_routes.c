@@ -617,6 +617,12 @@ wf_status update_handle(void *ctx, const wf_xrpc_request *request,
                                    "Invalid access token");
         return WF_OK;
     }
+    /* updateHandle.ts: 10/5min + 50/day, keyed by DID. */
+    if (!check_endpoint_rate_limit(server->rl_update_handle_5min,
+                                   server->rl_update_handle_day, acct->did, 1,
+                                   response)) {
+        return WF_OK;
+    }
     metalbear_account_entry *existing = NULL;
     if (metalbear_account_registry_find_by_handle(
             server->registry, handle->valuestring, &existing) == WF_OK &&

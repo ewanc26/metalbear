@@ -438,7 +438,7 @@ wf_status request_email_confirmation(void *ctx, const wf_xrpc_request *request,
     }
     if (!check_endpoint_rate_limit(server->rl_request_email_confirmation_day,
                                    server->rl_request_email_confirmation_hour,
-                                   acct->did, response)) {
+                                   acct->did, 1, response)) {
         return WF_OK;
     }
     char *email = NULL;
@@ -525,7 +525,7 @@ wf_status request_email_update(void *ctx, const wf_xrpc_request *request,
     }
     if (!check_endpoint_rate_limit(server->rl_request_email_update_day,
                                    server->rl_request_email_update_hour,
-                                   acct->did, response)) {
+                                   acct->did, 1, response)) {
         return WF_OK;
     }
     char *email = NULL;
@@ -672,7 +672,7 @@ wf_status request_password_reset(void *ctx, const wf_xrpc_request *request,
     metalbear_server *server = ctx;
     if (!check_endpoint_rate_limit(server->rl_request_password_reset_day,
                                    server->rl_request_password_reset_hour,
-                                   request->client_ip, response)) {
+                                   request->client_ip, 1, response)) {
         return WF_OK;
     }
     cJSON *email_param =
