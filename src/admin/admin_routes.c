@@ -16,6 +16,7 @@
 #include "metalbear/ops/metrics.h"
 #include "metalbear/repo/repo_store.h"
 #include "metalbear/sequencer.h"
+#include "wolfram/syntax.h"
 #include "wolfram/xrpc.h"
 
 #include <cJSON.h>
@@ -547,6 +548,15 @@ wf_status admin_update_account_handle(void *ctx, const wf_xrpc_request *request,
     if (!cJSON_IsString(handle) || !handle->valuestring[0]) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
                                    "handle is required");
+        return WF_OK;
+    }
+    /* Same syntax check the self-service update_handle route applies
+     * (identity_routes.c) -- an admin override must not be able to set a
+     * handle the account holder themselves could never set, matching the
+     * reference's shared normalizeAndValidateHandle. */
+    if (!wf_syntax_handle_is_valid(handle->valuestring)) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "invalid handle");
         return WF_OK;
     }
     /* Check handle is not already taken by another account. */
