@@ -34,6 +34,11 @@ typedef struct metalbear_invite_code_entry {
     char *created_at;
 } metalbear_invite_code_entry;
 
+typedef struct metalbear_invite_code_use_entry {
+    char *used_by;
+    char *used_at;
+} metalbear_invite_code_use_entry;
+
 /* Open the account registry, creating it when absent. */
 wf_status metalbear_account_registry_open(const char *path,
                                           metalbear_account_registry **out);
@@ -124,6 +129,14 @@ wf_status metalbear_account_registry_consume_invite_code(
 wf_status metalbear_account_registry_get_invite_codes(
     metalbear_account_registry *registry, const char *did,
     metalbear_invite_code_entry **out, size_t *out_count);
+
+/* Every redemption of `code`, oldest first. Matches
+ * com.atproto.server.defs#inviteCodeUse's {usedBy, usedAt} shape. */
+wf_status metalbear_account_registry_get_invite_code_uses(
+    metalbear_account_registry *registry, const char *code,
+    metalbear_invite_code_use_entry **out, size_t *out_count);
+void metalbear_invite_code_use_entries_free(
+    metalbear_invite_code_use_entry *entries, size_t count);
 
 /* Disable invite codes by exact code string or by account. Pass an array of
  *  codes and/or accounts; both may be NULL/empty. Returns WF_OK when at least
