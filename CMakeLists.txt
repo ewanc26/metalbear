@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(metalbear VERSION 0.20.6 LANGUAGES C CXX)
+project(metalbear VERSION 0.20.7 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
