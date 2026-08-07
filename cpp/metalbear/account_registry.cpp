@@ -599,6 +599,59 @@ void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
     std::free(entries);
 }
 
+wf_status metalbear_account_registry_get_invite_code_for_account(
+    metalbear_account_registry *registry, const char *did, const char *handle,
+    metalbear_invite_code_entry **out) {
+    if (!registry || (!did && !handle) || !out) return WF_ERR_INVALID_ARG;
+    *out = nullptr;
+    pthread_mutex_lock(&registry->mutex);
+    sqlite3_stmt *stmt = nullptr;
+    wf_status status = WF_ERR_NOT_FOUND;
+    if (sqlite3_prepare_v2(
+            registry->db.get(),
+            "SELECT ic.code,ic.for_account,ic.uses_remaining,ic.disabled,"
+            "ic.created_by,ic.created_at FROM invite_code_use icu "
+            "JOIN invite_code ic ON ic.code=icu.code "
+            "WHERE icu.used_by=? OR icu.used_by=? "
+            "ORDER BY icu.used_at ASC LIMIT 1;",
+            -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, did ? did : "", -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, handle ? handle : "", -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            auto *entry = static_cast<metalbear_invite_code_entry *>(
+                std::calloc(1, sizeof(metalbear_invite_code_entry)));
+            if (!entry) {
+                status = WF_ERR_ALLOC;
+            } else {
+                const char *c0 = reinterpret_cast<const char *>(
+                    sqlite3_column_text(stmt, 0));
+                const char *c1 = reinterpret_cast<const char *>(
+                    sqlite3_column_text(stmt, 1));
+                const char *c4 = reinterpret_cast<const char *>(
+                    sqlite3_column_text(stmt, 4));
+                const char *c5 = reinterpret_cast<const char *>(
+                    sqlite3_column_text(stmt, 5));
+                entry->code = c0 ? strdup(c0) : nullptr;
+                entry->for_account = c1 ? strdup(c1) : nullptr;
+                entry->uses_remaining = sqlite3_column_int(stmt, 2);
+                entry->disabled = sqlite3_column_int(stmt, 3);
+                entry->created_by = c4 ? strdup(c4) : nullptr;
+                entry->created_at = c5 ? strdup(c5) : nullptr;
+                if (!entry->code || !entry->for_account) {
+                    metalbear_invite_code_entries_free(entry, 1);
+                    status = WF_ERR_ALLOC;
+                } else {
+                    *out = entry;
+                    status = WF_OK;
+                }
+            }
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&registry->mutex);
+    return status;
+}
+
 wf_status metalbear_account_registry_get_invite_code_uses(
     metalbear_account_registry *registry, const char *code,
     metalbear_invite_code_use_entry **out, size_t *out_count) {
