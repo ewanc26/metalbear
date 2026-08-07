@@ -197,27 +197,52 @@ export function describeServer(): Promise<ServerInfo> {
 }
 
 /*
+ * The named failure reasons GET /oauth/authorize/info distinguishes (see
+ * oauth_authorize_info's doc comment in oauth_routes.c): 'expired' (the
+ * request_uri is unknown or its 5-minute PAR lifetime passed -- the only
+ * one actually fixable by going back to the application and starting
+ * over), 'client_mismatch' (a real, live request_uri, but for a different
+ * client_id than the one asking -- not something retrying fixes),
+ * 'invalid_request' (client_id/request_uri missing from the query
+ * entirely), and 'server_error' (an internal failure building the
+ * response, or this client couldn't reach/parse the server's response at
+ * all -- worth a literal retry).
+ */
+export type AuthorizeInfoError = 'invalid_request' | 'expired' | 'client_mismatch' | 'server_error';
+
+const AUTHORIZE_INFO_ERRORS: readonly AuthorizeInfoError[] = [
+	'invalid_request',
+	'expired',
+	'client_mismatch',
+	'server_error'
+];
+
+/*
  * What a pending OAuth authorization request is actually asking for --
  * requested scope, and the requesting client's display name/logo when its
  * metadata document offers them. Read-only: unlike approving the request,
  * this does not consume it, so the consent page can safely reload or retry.
- * Returns null on any failure (network error, or the server rejecting an
- * unknown/expired/mismatched request) -- the caller distinguishes "still
- * loading" from "failed" with its own state, same as the rest of this file.
  */
 export async function authorizeInfo(
 	clientId: string,
 	requestUri: string
-): Promise<AuthorizeInfo | null> {
+): Promise<{ ok: true; info: AuthorizeInfo } | { ok: false; error: AuthorizeInfoError }> {
 	try {
 		const url = new URL('/oauth/authorize/info', window.location.origin);
 		url.searchParams.set('client_id', clientId);
 		url.searchParams.set('request_uri', requestUri);
 		const res = await fetch(url, { headers: { accept: 'application/json' } });
-		if (!res.ok) return null;
-		return (await res.json()) as AuthorizeInfo;
+		if (!res.ok) {
+			const body = (await res.json().catch(() => null)) as { error?: string } | null;
+			const error =
+				body?.error && AUTHORIZE_INFO_ERRORS.includes(body.error as AuthorizeInfoError)
+					? (body.error as AuthorizeInfoError)
+					: 'server_error';
+			return { ok: false, error };
+		}
+		return { ok: true, info: (await res.json()) as AuthorizeInfo };
 	} catch {
-		return null;
+		return { ok: false, error: 'server_error' };
 	}
 }
 

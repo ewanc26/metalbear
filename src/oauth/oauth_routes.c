@@ -977,18 +977,27 @@ static wf_status oauth_authorize_info(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
+    /*
+     * Distinct `error` codes per failure, not one generic
+     * "invalid_request" for everything -- the consent page uses this to
+     * show an explanation that actually matches what went wrong (retry vs.
+     * go back to the app vs. "this isn't fixable by refreshing") instead of
+     * one message covering three unrelated causes. See #26 item 3.
+     */
     char *scope = NULL, *redirect_uri = NULL;
     wf_status status = metalbear_oauth_par_peek(
         rctx->store, request_uri, client_id, &scope, &redirect_uri);
     if (status == WF_ERR_NOT_FOUND) {
-        wf_xrpc_response_set_error(resp, 400, "invalid_request",
-                                   "Unknown or expired authorization request");
+        wf_xrpc_response_set_error(resp, 400, "expired",
+                                   "This authorization request has expired "
+                                   "or is unknown");
         return WF_OK;
     }
     if (status != WF_OK) {
-        wf_xrpc_response_set_error(resp, 400, "invalid_request",
-                                   "Authorization request does not match "
-                                   "this client");
+        wf_xrpc_response_set_error(
+            resp, 400, "client_mismatch",
+            "This authorization request does not match the application "
+            "that started it");
         return WF_OK;
     }
     free(redirect_uri); /* not part of this response */
@@ -1002,7 +1011,9 @@ static wf_status oauth_authorize_info(void *ctx, const wf_xrpc_request *req,
         free(name);
         free(uri);
         free(logo);
-        return WF_ERR_ALLOC;
+        wf_xrpc_response_set_error(resp, 500, "server_error",
+                                   "Could not build authorization info");
+        return WF_OK;
     }
     bool ok = cJSON_AddStringToObject(root, "client_id", client_id) &&
               cJSON_AddStringToObject(root, "scope", scope);
@@ -1015,7 +1026,9 @@ static wf_status oauth_authorize_info(void *ctx, const wf_xrpc_request *req,
     free(logo);
     if (!ok) {
         cJSON_Delete(root);
-        return WF_ERR_ALLOC;
+        wf_xrpc_response_set_error(resp, 500, "server_error",
+                                   "Could not build authorization info");
+        return WF_OK;
     }
     return json_response(resp, root, "no-store");
 }

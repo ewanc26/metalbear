@@ -324,6 +324,15 @@ if(METALBEAR_BUILD_TESTS)
   add_test(NAME metalbear_oauth_account_routes
            COMMAND test_metalbear_oauth_account_routes)
 
+  add_executable(test_metalbear_oauth_authorize_info
+                 test/test_oauth_authorize_info.c)
+  target_link_libraries(test_metalbear_oauth_authorize_info
+                        PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_oauth_authorize_info
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_oauth_authorize_info
+           COMMAND test_metalbear_oauth_authorize_info)
+
   add_executable(test_metalbear_repo_store test/test_repo_store.c)
   target_link_libraries(test_metalbear_repo_store PRIVATE metalbear_core)
   target_include_directories(
