@@ -18,6 +18,25 @@
  * proxy the README already requires, terminating HTTPS. */
 #define MB_DEVICE_COOKIE "mb_device"
 
+/*
+ * A browser can hold more than one signed-in account at once (MetalBear is a
+ * multi-account host): `mb_device`'s value is up to MB_DEVICE_MAX_SESSIONS
+ * session tokens joined by '.', one per account. '.' never appears in a
+ * token itself -- tokens are base64url (wf_crypto_base64url_encode), whose
+ * alphabet excludes it -- so no escaping is needed. The cap bounds both
+ * cookie size and the per-request verification work; signing into a new
+ * account past it evicts the oldest.
+ */
+#define MB_DEVICE_MAX_SESSIONS 5
+#define MB_DEVICE_TOKEN_SEP '.'
+
+/* One verified device session: its token (owned, for revocation/cookie
+ * rebuilding) and the account DID it authenticates. */
+typedef struct device_session_entry {
+    char *token;
+    char subject[256];
+} device_session_entry;
+
 typedef struct oauth_route_ctx {
     metalbear_oauth_store *store;
     char *public_url;
@@ -64,6 +83,83 @@ static char *find_cookie(const char *cookie_header, const char *name) {
         p = semi + 1;
     }
     return NULL;
+}
+
+/* Split a device-session cookie value ('.'-joined tokens) into up to
+ * MB_DEVICE_MAX_SESSIONS strdup'd tokens, written into `out`. Returns the
+ * count. Extra tokens beyond the cap are ignored -- this server never
+ * writes more than the cap, so seeing more only means a cookie value this
+ * server didn't produce, not something worth failing on. */
+static size_t split_device_tokens(const char *value,
+                                  char *out[MB_DEVICE_MAX_SESSIONS]) {
+    size_t n = 0;
+    if (!value) return 0;
+    const char *p = value;
+    while (*p && n < MB_DEVICE_MAX_SESSIONS) {
+        const char *sep = strchr(p, MB_DEVICE_TOKEN_SEP);
+        size_t len = sep ? (size_t)(sep - p) : strlen(p);
+        if (len > 0) {
+            char *tok = malloc(len + 1);
+            if (tok) {
+                memcpy(tok, p, len);
+                tok[len] = '\0';
+                out[n++] = tok;
+            }
+        }
+        if (!sep) break;
+        p = sep + 1;
+    }
+    return n;
+}
+
+/* Join up to MB_DEVICE_MAX_SESSIONS tokens into one '.'-separated cookie
+ * value. Caller frees the result. */
+static char *join_device_tokens(char *const tokens[], size_t count) {
+    size_t total = 1;
+    for (size_t i = 0; i < count; i++) total += strlen(tokens[i]) + 1;
+    char *out = malloc(total);
+    if (!out) return NULL;
+    out[0] = '\0';
+    for (size_t i = 0; i < count; i++) {
+        if (i > 0) strcat(out, ".");
+        strcat(out, tokens[i]);
+    }
+    return out;
+}
+
+static void free_device_sessions(device_session_entry entries[], size_t count) {
+    for (size_t i = 0; i < count; i++) free(entries[i].token);
+}
+
+/*
+ * Read the mb_device cookie and verify every token it carries against
+ * `store`, returning the still-valid ones (token + subject) in `out`. An
+ * expired or otherwise invalid token is silently dropped rather than
+ * surfaced as an error -- whatever survives is what the caller should
+ * persist back into the cookie on its next write, which self-heals a stale
+ * cookie over time with no separate cleanup pass needed.
+ */
+static size_t
+read_device_sessions(metalbear_oauth_store *store, const char *cookie_header,
+                     device_session_entry out[MB_DEVICE_MAX_SESSIONS]) {
+    char *value = find_cookie(cookie_header, MB_DEVICE_COOKIE);
+    if (!value) return 0;
+    char *tokens[MB_DEVICE_MAX_SESSIONS];
+    size_t token_count = split_device_tokens(value, tokens);
+    free(value);
+    size_t n = 0;
+    for (size_t i = 0; i < token_count; i++) {
+        char subject[256];
+        if (metalbear_oauth_device_session_verify(store, tokens[i], subject,
+                                                  sizeof(subject)) == WF_OK) {
+            out[n].token = tokens[i];
+            snprintf(out[n].subject, sizeof(out[n].subject), "%s", subject);
+            n++;
+        } else {
+            free(tokens[i]);
+        }
+    }
+    return n;
 }
 
 static wf_status json_response(wf_xrpc_response *resp, cJSON *root,
@@ -551,20 +647,26 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
      *
      * The browser must additionally hold a device-session cookie proving it
      * already presented that account's password once, in this browser,
-     * within the last 30 days. Absent one — first visit, expired, or one
-     * that names a different account than login_hint — no code is issued.
-     * The browser is redirected to sign in and land back here instead, with
-     * the same request_uri/client_id/login_hint it arrived with, so it can
-     * retry once the cookie is set.
+     * within the last 30 days -- one of possibly several, since a browser
+     * can be signed into more than one account at once (see
+     * MB_DEVICE_MAX_SESSIONS). Absent one for THIS account — first visit,
+     * expired, or only other accounts signed in — no code is issued. The
+     * browser is redirected to sign in and land back here instead, with the
+     * same request_uri/client_id/login_hint it arrived with, so it can
+     * retry once that account's session is set -- without disturbing
+     * whatever other accounts are already signed in.
      */
-    char *device_token = find_cookie(req->cookie_header, MB_DEVICE_COOKIE);
-    char verified_subject[256];
-    bool authenticated = device_token &&
-                         metalbear_oauth_device_session_verify(
-                             rctx->store, device_token, verified_subject,
-                             sizeof(verified_subject)) == WF_OK &&
-                         strcmp(verified_subject, subject) == 0;
-    free(device_token);
+    device_session_entry sessions[MB_DEVICE_MAX_SESSIONS];
+    size_t session_count =
+        read_device_sessions(rctx->store, req->cookie_header, sessions);
+    bool authenticated = false;
+    for (size_t i = 0; i < session_count; i++) {
+        if (strcmp(sessions[i].subject, subject) == 0) {
+            authenticated = true;
+            break;
+        }
+    }
+    free_device_sessions(sessions, session_count);
 
     if (!authenticated) {
         char *enc_ru = url_escape(request_uri);
@@ -1129,14 +1231,16 @@ static wf_status oauth_revoke(void *ctx, const wf_xrpc_request *req,
 }
 
 /* Build a `Set-Cookie` value for the device session and add it to `resp`.
- * `max_age_seconds` of 0 clears the cookie, per RFC 6265. */
-static void set_device_cookie(wf_xrpc_response *resp, const char *token,
+ * `value` is the full cookie value -- one token, or MB_DEVICE_MAX_SESSIONS
+ * of them joined by '.' (see join_device_tokens) -- not just a single
+ * session's token. `max_age_seconds` of 0 clears the cookie, per RFC 6265. */
+static void set_device_cookie(wf_xrpc_response *resp, const char *value,
                               int64_t max_age_seconds) {
     char cookie[512];
     snprintf(cookie, sizeof(cookie),
              MB_DEVICE_COOKIE "=%s; Path=/; HttpOnly; Secure; SameSite=Lax; "
                               "Max-Age=%lld",
-             token ? token : "", (long long)max_age_seconds);
+             value ? value : "", (long long)max_age_seconds);
     wf_xrpc_response_add_header(resp, "Set-Cookie", cookie);
 }
 
@@ -1187,15 +1291,52 @@ static wf_status oauth_signin(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
+    /*
+     * Signing into this account must not sign the browser out of any OTHER
+     * account already signed in here -- that would make an account picker
+     * pointless, since only ever one account could be signed in at a time.
+     * Keep every other still-valid session; drop any existing session for
+     * THIS subject (a fresh login replaces its own stale one rather than
+     * accumulating a row per login), and evict the oldest once the cap is
+     * reached.
+     */
+    device_session_entry existing[MB_DEVICE_MAX_SESSIONS];
+    size_t existing_count =
+        read_device_sessions(rctx->store, req->cookie_header, existing);
+    char *keep[MB_DEVICE_MAX_SESSIONS];
+    size_t keep_count = 0;
+    for (size_t i = 0; i < existing_count; i++) {
+        if (strcmp(existing[i].subject, subject) == 0) {
+            metalbear_oauth_device_session_revoke(rctx->store,
+                                                  existing[i].token);
+            free(existing[i].token);
+        } else {
+            keep[keep_count++] = existing[i].token;
+        }
+    }
+    while (keep_count >= MB_DEVICE_MAX_SESSIONS) {
+        metalbear_oauth_device_session_revoke(rctx->store, keep[0]);
+        free(keep[0]);
+        memmove(keep, keep + 1, (keep_count - 1) * sizeof(*keep));
+        keep_count--;
+    }
+
     char *token = NULL;
     if (metalbear_oauth_device_session_create(rctx->store, subject, &token) !=
         WF_OK) {
+        for (size_t i = 0; i < keep_count; i++) free(keep[i]);
         wf_xrpc_response_set_error(resp, 500, "internal_error",
                                    "Could not create a session");
         return WF_OK;
     }
-    set_device_cookie(resp, token, METALBEAR_DEVICE_SESSION_LIFETIME_SECONDS);
-    free(token);
+    keep[keep_count++] = token;
+
+    char *cookie_value = join_device_tokens(keep, keep_count);
+    for (size_t i = 0; i < keep_count; i++) free(keep[i]);
+    if (!cookie_value) return WF_ERR_ALLOC;
+    set_device_cookie(resp, cookie_value,
+                      METALBEAR_DEVICE_SESSION_LIFETIME_SECONDS);
+    free(cookie_value);
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
@@ -1204,54 +1345,133 @@ static wf_status oauth_signin(void *ctx, const wf_xrpc_request *req,
 }
 
 /*
- * GET /oauth/session (not part of the OAuth spec). Read-only check of the
- * presented device-session cookie -- the same check `oauth_authorize`'s
- * approval step makes, exposed ahead of time so the consent page can send a
- * user to sign in *before* showing a consent screen it cannot actually
- * finish, rather than after: a regular JWT session (the `auth` store) is not
- * proof of a device session, since nothing establishes one but
- * POST /oauth/signin, and a returning user with only a JWT session would
- * otherwise reach "Approve" and loop back to this same consent page with
- * nothing having happened.
+ * GET /oauth/session (not part of the OAuth spec). Read-only check of every
+ * device session the presented cookie carries -- the same check
+ * `oauth_authorize`'s approval step makes, exposed ahead of time so the
+ * consent page can send a user to sign in *before* showing a consent screen
+ * it cannot actually finish, rather than after: a regular JWT session (the
+ * `auth` store) is not proof of a device session, since nothing establishes
+ * one but POST /oauth/signin, and a returning user with only a JWT session
+ * would otherwise reach "Approve" and loop back to this same consent page
+ * with nothing having happened.
+ *
+ * `subjects` lists every account currently signed in on this browser (a
+ * multi-account host can have more than one at once), letting the consent
+ * page offer an account picker instead of just the single most-recent
+ * signed-in account. `did` names that most-recent one, for a caller that
+ * only wants a single answer -- the same subject this endpoint always
+ * returned back when a browser could only ever hold one session.
+ *
+ * An optional `login_hint` query param asks specifically whether THAT
+ * account is among the signed-in ones, resolved the same way
+ * `oauth_authorize` resolves it (rctx->resolve_subject) so a handle and a
+ * DID naming the same account agree. `matches_hint` answers that directly
+ * rather than making the caller resolve and compare a handle against a
+ * list of DIDs itself -- this is exactly the check that used to be missing
+ * client-side: without it, a consent page that only asked "is ANY session
+ * present" would treat a session for a DIFFERENT account as satisfying
+ * `login_hint` and loop forever retrying an authorize call that keeps
+ * failing for the actual requested account.
  */
 static wf_status oauth_session(void *ctx, const wf_xrpc_request *req,
                                wf_xrpc_response *resp) {
     oauth_route_ctx *rctx = ctx;
-    char *token = find_cookie(req->cookie_header, MB_DEVICE_COOKIE);
-    char subject[256];
-    wf_status status;
-    if (token) {
-        status = metalbear_oauth_device_session_verify(
-            rctx->store, token, subject, sizeof(subject));
-    } else {
-        status = WF_ERR_NOT_FOUND;
-    }
-    free(token);
-    if (status != WF_OK) {
+    device_session_entry sessions[MB_DEVICE_MAX_SESSIONS];
+    size_t count =
+        read_device_sessions(rctx->store, req->cookie_header, sessions);
+    if (count == 0) {
         wf_xrpc_response_set_error(resp, 401, "invalid_grant",
                                    "No device session");
         return WF_OK;
     }
     cJSON *root = cJSON_CreateObject();
-    if (!root) return WF_ERR_ALLOC;
-    if (!cJSON_AddStringToObject(root, "did", subject)) {
-        cJSON_Delete(root);
+    if (!root) {
+        free_device_sessions(sessions, count);
         return WF_ERR_ALLOC;
     }
+    cJSON *subjects = cJSON_CreateArray();
+    if (!subjects) {
+        cJSON_Delete(root);
+        free_device_sessions(sessions, count);
+        return WF_ERR_ALLOC;
+    }
+    for (size_t i = 0; i < count; i++)
+        cJSON_AddItemToArray(subjects, cJSON_CreateString(sessions[i].subject));
+    cJSON_AddItemToObject(root, "subjects", subjects);
+    cJSON_AddStringToObject(root, "did", sessions[count - 1].subject);
+
+    const char *hint = NULL;
+    if (req->params && cJSON_IsObject(req->params)) {
+        cJSON *lh = cJSON_GetObjectItemCaseSensitive(req->params, "login_hint");
+        if (cJSON_IsString(lh) && lh->valuestring[0]) hint = lh->valuestring;
+    }
+    if (hint) {
+        char hint_subject[256] = "";
+        bool resolved =
+            rctx->resolve_subject &&
+            rctx->resolve_subject(rctx->resolver_ctx, hint, hint_subject,
+                                  sizeof(hint_subject));
+        bool matches = false;
+        for (size_t i = 0; resolved && i < count; i++) {
+            if (strcmp(sessions[i].subject, hint_subject) == 0) {
+                matches = true;
+                break;
+            }
+        }
+        cJSON_AddBoolToObject(root, "matches_hint", matches);
+    }
+
+    free_device_sessions(sessions, count);
     return json_response(resp, root, "no-store");
 }
 
-/* POST /oauth/signout (not part of the OAuth spec). Revokes the presented
- * device session, if any, and clears the cookie either way — the desired
- * end state (signed out) holds whether or not there was a session to
- * revoke. */
+/*
+ * POST /oauth/signout (not part of the OAuth spec). With no body (or a
+ * body naming no `did`), revokes every device session the cookie carries
+ * and clears it entirely — the desired end state (signed out of
+ * everything) holds whether or not there was anything to revoke. With
+ * `{"did": "..."}`, revokes only that one account's session and rewrites
+ * the cookie with whatever others remain, so switching away from one
+ * signed-in account on a multi-account browser doesn't sign the others
+ * out too.
+ */
 static wf_status oauth_signout(void *ctx, const wf_xrpc_request *req,
                                wf_xrpc_response *resp) {
     oauth_route_ctx *rctx = ctx;
-    char *token = find_cookie(req->cookie_header, MB_DEVICE_COOKIE);
-    if (token) metalbear_oauth_device_session_revoke(rctx->store, token);
-    free(token);
-    set_device_cookie(resp, NULL, 0);
+    const char *only_subject = NULL;
+    if (req->params && cJSON_IsObject(req->params)) {
+        cJSON *did = cJSON_GetObjectItemCaseSensitive(req->params, "did");
+        if (cJSON_IsString(did) && did->valuestring[0])
+            only_subject = did->valuestring;
+    }
+
+    device_session_entry sessions[MB_DEVICE_MAX_SESSIONS];
+    size_t count =
+        read_device_sessions(rctx->store, req->cookie_header, sessions);
+
+    char *keep[MB_DEVICE_MAX_SESSIONS];
+    size_t keep_count = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (!only_subject || strcmp(sessions[i].subject, only_subject) == 0) {
+            metalbear_oauth_device_session_revoke(rctx->store,
+                                                  sessions[i].token);
+            free(sessions[i].token);
+        } else {
+            keep[keep_count++] = sessions[i].token;
+        }
+    }
+
+    if (keep_count == 0) {
+        set_device_cookie(resp, NULL, 0);
+    } else {
+        char *cookie_value = join_device_tokens(keep, keep_count);
+        if (cookie_value) {
+            set_device_cookie(resp, cookie_value,
+                              METALBEAR_DEVICE_SESSION_LIFETIME_SECONDS);
+            free(cookie_value);
+        }
+    }
+    for (size_t i = 0; i < keep_count; i++) free(keep[i]);
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
