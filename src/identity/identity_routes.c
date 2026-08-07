@@ -3,6 +3,7 @@
 
 #include "metalbear/log.h"
 #include "wolfram/crypto.h"
+#include "wolfram/plc.h"
 #include "wolfram/syntax.h"
 #include "wolfram/xrpc.h"
 
@@ -851,9 +852,10 @@ wf_status sign_plc_operation(void *ctx, const wf_xrpc_request *request,
 }
 
 /* ---- com.atproto.identity.submitPlcOperation (procedure) ----
- * Validates and submits a signed PLC operation.  In this standalone PDS
- * mode we validate the structure but skip actual PLC directory submission
- * (which requires an external PLC client). */
+ * Validates a signed PLC operation and submits it to the PLC directory via
+ * wf_plc_submit_operation_raw -- the same primitive account_routes.c uses
+ * for genesis operations, reused here for migration/rotation operations
+ * submitted by an already-authenticated account. */
 wf_status submit_plc_operation(void *ctx, const wf_xrpc_request *request,
                                wf_xrpc_response *response) {
     metalbear_server *server = ctx;
@@ -903,6 +905,24 @@ wf_status submit_plc_operation(void *ctx, const wf_xrpc_request *request,
             }
         }
     }
+    /* rotationKeys must include THIS server's own PLC rotation key -- a
+     * did:key derived from server->plc_rotation, exactly as
+     * getRecommendedDidCredentials advertises it above -- not
+     * server->service_did (a did:web string that is never a rotationKeys
+     * entry and can never match one). Submitting an operation that omits
+     * it would hand the identity to the new host while leaving the new
+     * host unable to ever sign a future PLC operation for it again. */
+    wf_signing_key server_rotation_key;
+    memset(&server_rotation_key, 0, sizeof(server_rotation_key));
+    char *server_rotation_didkey = NULL;
+    if (metalbear_key_rotation_current_key(server->plc_rotation,
+                                           &server_rotation_key) != WF_OK ||
+        wf_signing_key_public_didkey(&server_rotation_key,
+                                     &server_rotation_didkey) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not derive server rotation key");
+        return WF_OK;
+    }
     cJSON *rotation_keys =
         cJSON_GetObjectItemCaseSensitive(operation, "rotationKeys");
     if (rotation_keys && cJSON_IsArray(rotation_keys)) {
@@ -910,21 +930,43 @@ wf_status submit_plc_operation(void *ctx, const wf_xrpc_request *request,
         size_t n = cJSON_GetArraySize(rotation_keys);
         for (size_t i = 0; i < n; i++) {
             cJSON *key = cJSON_GetArrayItem(rotation_keys, i);
-            if (cJSON_IsString(key) && server->service_did &&
-                strcmp(key->valuestring, server->service_did) == 0) {
+            if (cJSON_IsString(key) &&
+                strcmp(key->valuestring, server_rotation_didkey) == 0) {
                 has_server_key = true;
                 break;
             }
         }
         if (!has_server_key) {
+            free(server_rotation_didkey);
             wf_xrpc_response_set_error(
                 response, 400, "InvalidRequest",
                 "Rotation keys do not include server's rotation key");
             return WF_OK;
         }
     }
-    /* In a full implementation, we would submit to the PLC directory here.
-     * For now, acknowledge the operation. */
+    free(server_rotation_didkey);
+
+    if (!server->plc_url || !server->plc_url[0]) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "No PLC directory configured");
+        return WF_OK;
+    }
+    char *op_json = cJSON_PrintUnformatted(operation);
+    if (!op_json) return WF_ERR_ALLOC;
+    LOG_INFO("submitting PLC operation to %s for DID %s", server->plc_url,
+             acct->did);
+    wf_status submit_st =
+        wf_plc_submit_operation_raw(server->plc_url, acct->did, op_json);
+    free(op_json);
+    if (submit_st != WF_OK) {
+        LOG_ERROR("failed to submit PLC operation to directory for DID %s",
+                  acct->did);
+        wf_xrpc_response_set_error(
+            response, 502, "InternalError",
+            "Failed to submit operation to PLC directory");
+        return WF_OK;
+    }
+
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     return set_json(response, root);
