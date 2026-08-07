@@ -839,11 +839,8 @@ wf_status admin_get_invite_codes(void *ctx, const wf_xrpc_request *request,
             /* Field names/types match com.atproto.server.defs#inviteCode
              * exactly: forAccount/createdBy (not the fabricated
              * "availableBy"), available as the remaining-use count, disabled,
-             * createdAt. `uses` is required as an array of #inviteCodeUse
-             * ({usedBy, usedAt}) entries, but the registry only keeps a
-             * decrementing remaining-use counter, not a per-redemption log --
-             * emitting an empty array here is honest about that missing
-             * granularity rather than fabricating usedBy/usedAt values. */
+             * createdAt, uses as the real per-redemption {usedBy, usedAt}
+             * log from invite_code_use. */
             cJSON_AddStringToObject(obj, "code", icode_entries[j].code);
             cJSON_AddStringToObject(obj, "forAccount",
                                     icode_entries[j].for_account
@@ -859,7 +856,28 @@ wf_status admin_get_invite_codes(void *ctx, const wf_xrpc_request *request,
                                   icode_entries[j].disabled != 0);
             cJSON_AddStringToObject(obj, "createdAt",
                                     icode_entries[j].created_at);
-            cJSON_AddItemToObject(obj, "uses", cJSON_CreateArray());
+            cJSON *uses = cJSON_CreateArray();
+            if (!uses) {
+                cJSON_Delete(obj);
+                continue;
+            }
+            metalbear_invite_code_use_entry *use_entries = NULL;
+            size_t use_count = 0;
+            if (metalbear_account_registry_get_invite_code_uses(
+                    server->registry, icode_entries[j].code, &use_entries,
+                    &use_count) == WF_OK) {
+                for (size_t k = 0; k < use_count; k++) {
+                    cJSON *use = cJSON_CreateObject();
+                    if (!use) continue;
+                    cJSON_AddStringToObject(use, "usedBy",
+                                            use_entries[k].used_by);
+                    cJSON_AddStringToObject(use, "usedAt",
+                                            use_entries[k].used_at);
+                    cJSON_AddItemToArray(uses, use);
+                }
+                metalbear_invite_code_use_entries_free(use_entries, use_count);
+            }
+            cJSON_AddItemToObject(obj, "uses", uses);
             cJSON_AddItemToArray(codes, obj);
             taken++;
         }

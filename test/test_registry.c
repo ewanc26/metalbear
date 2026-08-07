@@ -169,6 +169,21 @@ int main(void) {
     CHECK(metalbear_account_registry_consume_invite_code(
               registry, code1, "did:plc:charlie") != WF_OK);
 
+    /* Per-redemption use log: both real consumptions show up, in order,
+     * the failed one does not. */
+    {
+        metalbear_invite_code_use_entry *uses = NULL;
+        size_t use_count = 0;
+        CHECK(metalbear_account_registry_get_invite_code_uses(
+                  registry, code1, &uses, &use_count) == WF_OK);
+        CHECK(use_count == 2);
+        if (use_count == 2) {
+            CHECK(strcmp(uses[0].used_by, "did:plc:alice") == 0);
+            CHECK(strcmp(uses[1].used_by, "did:plc:bob") == 0);
+        }
+        metalbear_invite_code_use_entries_free(uses, use_count);
+    }
+
     /* Nonexistent code */
     CHECK(metalbear_account_registry_consume_invite_code(
               registry, "DOES-NOT-EXIST", "did:plc:alice") == WF_ERR_NOT_FOUND);
