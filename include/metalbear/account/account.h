@@ -30,6 +30,11 @@ wf_status metalbear_account_store_open(const char *path,
                                        metalbear_account_store **out);
 void metalbear_account_store_free(metalbear_account_store *store);
 int metalbear_account_is_active(metalbear_account_store *store);
+/* *out_deactivated_at is NULL (not an error) when the account is active or
+ * has never been deactivated; otherwise an ISO-8601 timestamp the caller
+ * frees with free(). */
+wf_status metalbear_account_get_deactivated_at(metalbear_account_store *store,
+                                               char **out_deactivated_at);
 wf_status metalbear_account_deactivate(metalbear_account_store *store,
                                        const char *delete_after);
 wf_status metalbear_account_activate(metalbear_account_store *store);

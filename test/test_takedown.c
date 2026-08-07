@@ -597,6 +597,50 @@ int main(void) {
         wf_response_free(&response);
     }
 
+    /* admin.getAccountInfo's deactivatedAt tracks a genuine deactivate/
+     * reactivate cycle: absent while active, set after deactivation, gone
+     * again after reactivation -- not the request time, the account's own
+     * state. */
+    {
+        char body[400];
+        snprintf(body, sizeof(body),
+                 "{\"subject\":{\"$type\":\"com.atproto.admin.defs#repoRef\","
+                 "\"did\":\"%s\"},\"deactivated\":{\"applied\":true}}",
+                 victim_did);
+        CHECK(admin_post(client, base, "com.atproto.admin.updateSubjectStatus",
+                         body, &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+
+        char info_query[128];
+        snprintf(info_query, sizeof(info_query),
+                 "com.atproto.admin.getAccountInfo?did=%s", victim_did);
+        CHECK(admin_get(client, base, info_query, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *json = json_response(&response);
+        cJSON *deactivated_at =
+            cJSON_GetObjectItemCaseSensitive(json, "deactivatedAt");
+        CHECK(cJSON_IsString(deactivated_at) && deactivated_at->valuestring[0]);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+
+        snprintf(body, sizeof(body),
+                 "{\"subject\":{\"$type\":\"com.atproto.admin.defs#repoRef\","
+                 "\"did\":\"%s\"},\"deactivated\":{\"applied\":false}}",
+                 victim_did);
+        CHECK(admin_post(client, base, "com.atproto.admin.updateSubjectStatus",
+                         body, &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+
+        CHECK(admin_get(client, base, info_query, &response) == WF_OK);
+        CHECK(response.status == 200);
+        json = json_response(&response);
+        CHECK(!cJSON_GetObjectItemCaseSensitive(json, "deactivatedAt"));
+        cJSON_Delete(json);
+        wf_response_free(&response);
+    }
+
     /* ---- (g) the firehose was told ------------------------------------- */
     char seq_path[512];
     snprintf(seq_path, sizeof(seq_path), "%s/sequencer.sqlite3", directory);

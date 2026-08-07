@@ -102,6 +102,12 @@ wf_status admin_get_account_info(void *ctx, const wf_xrpc_request *request,
                 email && email[0])
                 cJSON_AddStringToObject(root, "email", email);
             free(email);
+            char *deactivated_at = NULL;
+            if (metalbear_account_get_deactivated_at(acct, &deactivated_at) ==
+                    WF_OK &&
+                deactivated_at)
+                cJSON_AddStringToObject(root, "deactivatedAt", deactivated_at);
+            free(deactivated_at);
             metalbear_account_store_free(acct);
         }
         free(acct_path);
@@ -485,6 +491,12 @@ static cJSON *build_account_view(metalbear_server *server,
                 }
             }
             free(email);
+            char *deactivated_at = NULL;
+            if (metalbear_account_get_deactivated_at(acct, &deactivated_at) ==
+                    WF_OK &&
+                deactivated_at)
+                cJSON_AddStringToObject(obj, "deactivatedAt", deactivated_at);
+            free(deactivated_at);
             metalbear_account_store_free(acct);
         }
         free(acct_path);
