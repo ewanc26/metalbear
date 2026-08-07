@@ -39,6 +39,14 @@ wf_status get_repo(void *ctx, const wf_xrpc_request *request,
                                    "did is required");
         return WF_OK;
     }
+    /* getRepo.ts: 6000/5min, keyed by IP -- its own bucket, deliberately
+     * separate from the shared repo-write limits (this is a read) and from
+     * a general per-IP budget (a high-volume relay sync path gets its own
+     * allowance rather than competing with everything else from that IP). */
+    if (!check_endpoint_rate_limit(server->rl_get_repo_5min, NULL,
+                                   request->client_ip, 1, response)) {
+        return WF_OK;
+    }
     metalbear_account_context *acct = resolve_request_context(server, request);
     if (!assert_repo_available(server, acct, request, response)) return WF_OK;
     unsigned char *data = NULL;

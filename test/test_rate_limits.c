@@ -179,6 +179,120 @@ static wf_status bearer_post(wf_xrpc_client *client, const char *base,
     return wf_http_post(client, url, "application/json", "{}", &hdr, 1, out);
 }
 
+static wf_status bearer_post_body(wf_xrpc_client *client, const char *base,
+                                  const char *nsid, const char *access_jwt,
+                                  const char *body, wf_response *out) {
+    char auth[512];
+    snprintf(auth, sizeof(auth), "Bearer %s", access_jwt);
+    wf_http_header hdr = {"Authorization", auth};
+    char url[256];
+    snprintf(url, sizeof(url), "%s/xrpc/%s", base, nsid);
+    return wf_http_post(client, url, "application/json", body, &hdr, 1, out);
+}
+
+/* updateHandle.ts's tighter tier is 10/5min, keyed by the caller's own DID.
+ * Re-assigning your own current handle is a harmless no-op the handler
+ * accepts every time (the "already in use" check only rejects a handle a
+ * *different* DID owns), so the same request can be repeated to exhaust the
+ * budget without needing a fresh handle per attempt. */
+static int run_update_handle_limit(wf_xrpc_client *client, const char *base,
+                                   const char *access_jwt) {
+    int failures_before = failures;
+    wf_response response = {0};
+    int last_status = 0;
+
+    for (int i = 0; i < 10; i++) {
+        wf_response_free(&response);
+        wf_status s = bearer_post_body(
+            client, base, "com.atproto.identity.updateHandle", access_jwt,
+            "{\"handle\":\"quota.example.com\"}", &response);
+        last_status = (int)response.status;
+        if (s != WF_OK) {
+            fprintf(stderr,
+                    "FAIL updateHandle attempt %d: transport error %d\n", i,
+                    (int)s);
+            failures++;
+        }
+    }
+    CHECK(last_status == 200); /* the 10th still reached the handler */
+
+    wf_response_free(&response);
+    wf_status s = bearer_post_body(
+        client, base, "com.atproto.identity.updateHandle", access_jwt,
+        "{\"handle\":\"quota.example.com\"}", &response);
+    CHECK(s == WF_ERR_HTTP && response.status == 429);
+    wf_response_free(&response);
+
+    return failures == failures_before ? 0 : 1;
+}
+
+/*
+ * repo-write-hour/-day (rate-limits.ts) is a shared bucket across
+ * createRecord/putRecord/deleteRecord/applyWrites, weighted 3/2/1 points,
+ * with a 5000/35000 budget too large to practically exhaust in a unit test
+ * (unlike the small per-route budgets above). This instead proves the new
+ * check does not spuriously reject a normal write on any of the four routes
+ * it now gates -- a regression test for the wiring, not the ceiling. Full
+ * point-weighting is covered by direct code inspection of
+ * repo_write_rate_limit_cost/apply_writes_rate_limit_cost in server.c.
+ */
+static int run_repo_write_smoke(wf_xrpc_client *client, const char *base,
+                                const char *access_jwt) {
+    int failures_before = failures;
+    wf_response response = {0};
+
+    wf_status s = bearer_post_body(
+        client, base, "com.atproto.repo.createRecord", access_jwt,
+        "{\"repo\":\"did:plc:quotatest\",\"collection\":\"com.example.posts\","
+        "\"rkey\":\"rl-smoke\",\"record\":{\"$type\":\"com.example.posts\","
+        "\"text\":\"hi\"}}",
+        &response);
+    CHECK(s == WF_OK && response.status == 200);
+    wf_response_free(&response);
+
+    s = bearer_post_body(
+        client, base, "com.atproto.repo.putRecord", access_jwt,
+        "{\"repo\":\"did:plc:quotatest\",\"collection\":\"com.example.posts\","
+        "\"rkey\":\"rl-smoke\",\"record\":{\"$type\":\"com.example.posts\","
+        "\"text\":\"hi again\"}}",
+        &response);
+    CHECK(s == WF_OK && response.status == 200);
+    wf_response_free(&response);
+
+    s = bearer_post_body(
+        client, base, "com.atproto.repo.applyWrites", access_jwt,
+        "{\"repo\":\"did:plc:quotatest\",\"writes\":[{\"$type\":\"com.atproto."
+        "repo.applyWrites#create\",\"collection\":\"com.example.posts\","
+        "\"rkey\":\"rl-smoke-2\",\"value\":{\"$type\":\"com.example.posts\","
+        "\"text\":\"batch\"}}]}",
+        &response);
+    CHECK(s == WF_OK && response.status == 200);
+    wf_response_free(&response);
+
+    s = bearer_post_body(
+        client, base, "com.atproto.repo.deleteRecord", access_jwt,
+        "{\"repo\":\"did:plc:quotatest\",\"collection\":\"com.example.posts\","
+        "\"rkey\":\"rl-smoke\"}",
+        &response);
+    CHECK(s == WF_OK && response.status == 200);
+    wf_response_free(&response);
+
+    return failures == failures_before ? 0 : 1;
+}
+
+/* getRepo.ts's 6000/5min IP-keyed budget is likewise too large to exhaust
+ * here -- smoke test only, same rationale as run_repo_write_smoke. */
+static int run_get_repo_smoke(wf_xrpc_client *client) {
+    int failures_before = failures;
+    wf_xrpc_param params[] = {{"did", "did:plc:quotatest"}};
+    wf_response response = {0};
+    wf_status s = wf_xrpc_query_params(client, "com.atproto.sync.getRepo",
+                                       params, 1, &response);
+    CHECK(s == WF_OK && response.status == 200);
+    wf_response_free(&response);
+    return failures == failures_before ? 0 : 1;
+}
+
 static int run_request_account_delete_limit(wf_xrpc_client *client,
                                             const char *base,
                                             const char *access_jwt) {
@@ -256,6 +370,29 @@ int main(void) {
                 printf("PASS: requestAccountDelete rate limit (5/hour, "
                        "DID-keyed)\n");
             }
+
+            if (run_repo_write_smoke(client, base, access_jwt) != 0) {
+                fprintf(stderr, "repo-write rate limit smoke test failed\n");
+            } else {
+                printf("PASS: repo-write rate limit smoke test "
+                       "(createRecord/putRecord/applyWrites/deleteRecord "
+                       "still succeed)\n");
+            }
+
+            if (run_get_repo_smoke(client) != 0) {
+                fprintf(stderr, "getRepo rate limit smoke test failed\n");
+            } else {
+                printf("PASS: getRepo rate limit smoke test (still "
+                       "succeeds)\n");
+            }
+
+            if (run_update_handle_limit(client, base, access_jwt) != 0) {
+                fprintf(stderr, "updateHandle rate limit test failed\n");
+            } else {
+                printf("PASS: updateHandle rate limit (10/5min, "
+                       "DID-keyed)\n");
+            }
+
             free(access_jwt);
         }
 

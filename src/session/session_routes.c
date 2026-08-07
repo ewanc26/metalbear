@@ -90,7 +90,7 @@ wf_status create_session(void *ctx, const wf_xrpc_request *request,
         snprintf(key, sizeof(key), "%s-%s", id_str,
                  request->client_ip ? request->client_ip : "unknown");
         if (!check_endpoint_rate_limit(server->rl_create_session_day,
-                                       server->rl_create_session_5min, key,
+                                       server->rl_create_session_5min, key, 1,
                                        response)) {
             return WF_OK;
         }

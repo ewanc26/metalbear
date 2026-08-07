@@ -74,6 +74,23 @@ struct metalbear_server {
     wf_rate_limiter *rl_request_email_confirmation_hour;
     wf_rate_limiter *rl_request_email_update_day;
     wf_rate_limiter *rl_request_email_update_hour;
+    /* Shared across createRecord/putRecord/deleteRecord/applyWrites, keyed
+     * by DID, weighted by write cost (create=3, update=2, delete=1) --
+     * mirrors rate-limits.ts's "repo-write-hour"/"repo-write-day" shared
+     * buckets exactly, including the weighting comment ("creates=3,
+     * puts=2, deletes=1"). Shared because a client alternating write kinds
+     * should not get a bigger effective budget than one that only creates. */
+    wf_rate_limiter *rl_repo_write_hour;
+    wf_rate_limiter *rl_repo_write_day;
+    /* updateHandle.ts: 10/5min + 50/day, keyed by DID. */
+    wf_rate_limiter *rl_update_handle_5min;
+    wf_rate_limiter *rl_update_handle_day;
+    /* sync/getRepo.ts: 6000/5min, keyed by IP, and (per rate-limits.ts's
+     * "global" bucket calcKey) deliberately excluded from the global-ip
+     * bucket below -- a high-volume relay sync path with its own budget,
+     * not sharing the general per-IP allowance every other route draws
+     * from. */
+    wf_rate_limiter *rl_get_repo_5min;
     metalbear_email *email;
     char *service_did;
     char *public_url;
@@ -191,11 +208,15 @@ bool did_doc_matches_service(metalbear_server *server,
 
 /* Consume from up to two rate-limiter tiers under the same key, matching the
  * reference PDS's MethodRateLimit[] semantics for multi-tier endpoints.
- * `tier_b` may be NULL for a single-tier check. Always sets the RateLimit
- * and Retry-After response headers; returns false (with the
- * {"error":"RateLimitExceeded",...} body filled in) when any tier is empty. */
+ * `tier_b` may be NULL for a single-tier check. `cost` is the number of
+ * points this request consumes (1 for a normal request; repo writes are
+ * weighted per rate-limits.ts's calcPoints -- create=3, update=2, delete=1).
+ * Always sets the RateLimit and Retry-After response headers; returns false
+ * (with the {"error":"RateLimitExceeded",...} body filled in) when any tier
+ * is empty. */
 bool check_endpoint_rate_limit(wf_rate_limiter *tier_a, wf_rate_limiter *tier_b,
-                               const char *key, wf_xrpc_response *response);
+                               const char *key, unsigned int cost,
+                               wf_xrpc_response *response);
 
 /* The token after "Bearer " in an Authorization header, or NULL when the
  * header is absent or uses a different scheme. */
