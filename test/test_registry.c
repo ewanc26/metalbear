@@ -59,6 +59,12 @@ int main(void) {
                                                  &entry) == WF_OK);
     CHECK(entry != NULL);
     CHECK(strcmp(entry->handle, "bob.example.com") == 0);
+    /* created_at is RFC 3339 (the lexicon's `datetime` format), not
+     * SQLite's own space-separated datetime('now') shape -- 'T' date/time
+     * separator and 'Z' UTC suffix are both required. */
+    CHECK(entry->created_at != NULL);
+    CHECK(strchr(entry->created_at, 'T') != NULL);
+    CHECK(entry->created_at[strlen(entry->created_at) - 1] == 'Z');
     metalbear_account_entry_free(entry);
 
     /* Find nonexistent */
@@ -136,6 +142,11 @@ int main(void) {
         if (strcmp(icode_entries[i].code, code2) == 0) found_c2 = 1;
         if (strcmp(icode_entries[i].code, code3) == 0) found_c3 = 1;
         CHECK(strcmp(icode_entries[i].for_account, "admin") == 0);
+        /* Same RFC 3339 requirement as accounts.created_at above. */
+        CHECK(icode_entries[i].created_at != NULL);
+        CHECK(strchr(icode_entries[i].created_at, 'T') != NULL);
+        size_t len = strlen(icode_entries[i].created_at);
+        CHECK(len > 0 && icode_entries[i].created_at[len - 1] == 'Z');
     }
     CHECK(found_c1 && found_c2 && found_c3);
     metalbear_invite_code_entries_free(icode_entries, icode_count);
@@ -180,6 +191,12 @@ int main(void) {
         if (use_count == 2) {
             CHECK(strcmp(uses[0].used_by, "did:plc:alice") == 0);
             CHECK(strcmp(uses[1].used_by, "did:plc:bob") == 0);
+            /* Same RFC 3339 requirement as accounts.created_at above. */
+            for (size_t i = 0; i < use_count; i++) {
+                CHECK(strchr(uses[i].used_at, 'T') != NULL);
+                size_t len = strlen(uses[i].used_at);
+                CHECK(len > 0 && uses[i].used_at[len - 1] == 'Z');
+            }
         }
         metalbear_invite_code_use_entries_free(uses, use_count);
     }
