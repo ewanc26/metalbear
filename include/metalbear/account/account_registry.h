@@ -18,6 +18,11 @@ typedef struct metalbear_account_entry {
     char *password_hash;
     char *data_directory;
     int active;
+    /* ISO-8601. For accounts created before this field existed, this is the
+     * time the registry was migrated to track it, not the true original
+     * creation time -- an honest lower bound rather than a fabricated
+     * value. */
+    char *created_at;
 } metalbear_account_entry;
 
 typedef struct metalbear_invite_code_entry {
