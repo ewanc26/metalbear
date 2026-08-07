@@ -599,6 +599,83 @@ void metalbear_invite_code_entries_free(metalbear_invite_code_entry *entries,
     std::free(entries);
 }
 
+wf_status metalbear_account_registry_list_invite_codes(
+    metalbear_account_registry *registry, const char *after_created_at,
+    const char *after_code, size_t limit, metalbear_invite_code_entry **out,
+    size_t *out_count) {
+    if (!registry || !out || !out_count || limit == 0)
+        return WF_ERR_INVALID_ARG;
+    *out = nullptr;
+    *out_count = 0;
+    bool has_cursor =
+        after_created_at && after_created_at[0] && after_code && after_code[0];
+    pthread_mutex_lock(&registry->mutex);
+    sqlite3_stmt *stmt = nullptr;
+    wf_status status = WF_OK;
+    size_t capacity = 0;
+    const char *sql =
+        has_cursor
+            ? "SELECT code,for_account,uses_remaining,disabled,created_by,"
+              "created_at FROM invite_code WHERE created_at<? OR "
+              "(created_at=? AND code<?) ORDER BY created_at DESC,code DESC "
+              "LIMIT ?;"
+            : "SELECT code,for_account,uses_remaining,disabled,created_by,"
+              "created_at FROM invite_code ORDER BY created_at DESC,code "
+              "DESC LIMIT ?;";
+    if (sqlite3_prepare_v2(registry->db.get(), sql, -1, &stmt, nullptr) !=
+        SQLITE_OK) {
+        status = WF_ERR_INTERNAL;
+    } else if (has_cursor) {
+        sqlite3_bind_text(stmt, 1, after_created_at, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, after_created_at, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, after_code, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 4, static_cast<sqlite3_int64>(limit));
+    } else {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(limit));
+    }
+    while (status == WF_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        if (*out_count == capacity) {
+            size_t next = capacity ? capacity * 2 : 4;
+            void *resized = std::realloc(*out, next * sizeof(**out));
+            if (!resized) {
+                status = WF_ERR_ALLOC;
+                break;
+            }
+            *out = static_cast<metalbear_invite_code_entry *>(resized);
+            std::memset(*out + capacity, 0, (next - capacity) * sizeof(**out));
+            capacity = next;
+        }
+        metalbear_invite_code_entry *item = &(*out)[*out_count];
+        const char *c0 =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+        const char *c1 =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+        const char *c4 =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
+        const char *c5 =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5));
+        item->code = c0 ? strdup(c0) : nullptr;
+        item->for_account = c1 ? strdup(c1) : nullptr;
+        item->uses_remaining = sqlite3_column_int(stmt, 2);
+        item->disabled = sqlite3_column_int(stmt, 3);
+        item->created_by = c4 ? strdup(c4) : nullptr;
+        item->created_at = c5 ? strdup(c5) : nullptr;
+        if (!item->code || !item->for_account) {
+            status = WF_ERR_ALLOC;
+        } else {
+            (*out_count)++;
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&registry->mutex);
+    if (status != WF_OK) {
+        metalbear_invite_code_entries_free(*out, *out_count);
+        *out = nullptr;
+        *out_count = 0;
+    }
+    return status;
+}
+
 wf_status metalbear_account_registry_get_invite_code_for_account(
     metalbear_account_registry *registry, const char *did, const char *handle,
     metalbear_invite_code_entry **out) {
