@@ -107,9 +107,9 @@ int main(void) {
      * key -- the value a real migration client would (correctly) put in
      * rotationKeys, and the value submitPlcOperation must actually check
      * against. */
-    CHECK(wf_xrpc_query_params(client,
-                               "com.atproto.identity.getRecommendedDidCredentials",
-                               NULL, 0, &response) == WF_OK);
+    CHECK(wf_xrpc_query_params(
+              client, "com.atproto.identity.getRecommendedDidCredentials", NULL,
+              0, &response) == WF_OK);
     CHECK(response.status == 200);
     cJSON *recommended = json_response(&response);
     cJSON *rotation_keys_arr =
@@ -130,15 +130,17 @@ int main(void) {
                  "{\"operation\":{\"type\":\"plc_operation\","
                  "\"rotationKeys\":[\"%s\"]}}",
                  config.service_did);
-        CHECK(wf_xrpc_procedure(client, "com.atproto.identity.submitPlcOperation",
-                                body, &response) == WF_ERR_HTTP);
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.identity.submitPlcOperation", body,
+                                &response) == WF_ERR_HTTP);
         CHECK(response.status == 400);
         cJSON *err = json_response(&response);
-        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(err, "error")->valuestring,
-                     "InvalidRequest") == 0);
-        CHECK(strstr(cJSON_GetObjectItemCaseSensitive(err, "message")
-                         ->valuestring,
-                     "rotation key") != NULL);
+        CHECK(
+            strcmp(cJSON_GetObjectItemCaseSensitive(err, "error")->valuestring,
+                   "InvalidRequest") == 0);
+        CHECK(strstr(
+                  cJSON_GetObjectItemCaseSensitive(err, "message")->valuestring,
+                  "rotation key") != NULL);
         cJSON_Delete(err);
         wf_response_free(&response);
     }
@@ -155,13 +157,15 @@ int main(void) {
                  "{\"operation\":{\"type\":\"plc_operation\","
                  "\"rotationKeys\":[\"%s\"]}}",
                  server_rotation_didkey);
-        CHECK(wf_xrpc_procedure(client, "com.atproto.identity.submitPlcOperation",
-                                body, &response) == WF_ERR_HTTP);
+        CHECK(wf_xrpc_procedure(client,
+                                "com.atproto.identity.submitPlcOperation", body,
+                                &response) == WF_ERR_HTTP);
         CHECK(response.status == 502);
         cJSON *err = json_response(&response);
         CHECK(cJSON_GetObjectItemCaseSensitive(err, "error") != NULL);
-        CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(err, "error")->valuestring,
-                     "InvalidRequest") != 0);
+        CHECK(
+            strcmp(cJSON_GetObjectItemCaseSensitive(err, "error")->valuestring,
+                   "InvalidRequest") != 0);
         cJSON_Delete(err);
         wf_response_free(&response);
     }
