@@ -106,9 +106,12 @@ wf_status admin_get_account_info(void *ctx, const wf_xrpc_request *request,
         }
         free(acct_path);
     }
-    char indexed_at[32];
-    iso_now(indexed_at, sizeof(indexed_at));
-    cJSON_AddStringToObject(root, "indexedAt", indexed_at);
+    /* com.atproto.admin.defs#accountView's indexedAt is the account's own
+     * creation time (getAccountInfo.ts: account.createdAt), not "now" --
+     * using the request time made every call return a different value for
+     * the same account. */
+    cJSON_AddStringToObject(root, "indexedAt",
+                            entry->created_at ? entry->created_at : "");
     metalbear_account_entry_free(entry);
     return set_json(response, root);
 }
@@ -486,9 +489,10 @@ static cJSON *build_account_view(metalbear_server *server,
         }
         free(acct_path);
     }
-    char indexed_at[32];
-    iso_now(indexed_at, sizeof(indexed_at));
-    cJSON_AddStringToObject(obj, "indexedAt", indexed_at);
+    /* Same fix as admin_get_account_info: the account's own creation time,
+     * not the request time. */
+    cJSON_AddStringToObject(obj, "indexedAt",
+                            entry->created_at ? entry->created_at : "");
     return obj;
 }
 
