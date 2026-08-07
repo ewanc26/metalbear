@@ -28,6 +28,7 @@
 #include "metalbear/dns/handle_dns.h"
 #include "metalbear/repo/key_rotation.h"
 #include "metalbear/oauth/oauth.h"
+#include "metalbear/oauth/oauth_account_routes.h"
 #include "metalbear/oauth/oauth_scope.h"
 #include "metalbear/moderation/report.h"
 #include "metalbear/oauth/oauth_routes.h"
@@ -3278,6 +3279,24 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.server.revokeAppPassword",
             revoke_app_password, server) != WF_OK ||
+        /* Not part of the AT Protocol lexicon -- account-management
+         * listings for OAuth state (connected apps, active devices),
+         * registered under a project-scoped nsid the same way "_health"
+         * is, so they still go through the standard authenticate()
+         * callback and resolve_request_context rather than needing their
+         * own auth. */
+        wf_xrpc_server_register_query(server->xrpc,
+                                      "com.metalbear.oauth.listDevices",
+                                      oauth_list_devices, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(
+            server->xrpc, "com.metalbear.oauth.revokeDevice",
+            oauth_revoke_device, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+                                      "com.metalbear.oauth.listGrants",
+                                      oauth_list_grants, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(
+            server->xrpc, "com.metalbear.oauth.revokeGrant", oauth_revoke_grant,
+            server) != WF_OK ||
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.server.deactivateAccount",
             deactivate_account, server) != WF_OK ||
