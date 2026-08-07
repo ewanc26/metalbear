@@ -557,13 +557,38 @@ wf_status get_recommended_did_credentials(void *ctx,
     }
     cJSON_AddStringToObject(verification_methods, "atproto", didkey);
     cJSON_AddItemToObject(root, "verificationMethods", verification_methods);
+    /* rotationKeys names the *server's* PLC rotation key
+     * (server->plc_rotation), not the account's own atproto signing key
+     * above -- these are different keys with different purposes, and
+     * account_routes.c's actual genesis PLC operation already signs with
+     * the server key, never the account's. Recommending the account's own
+     * key here would tell a migrating client to submit a PLC operation the
+     * server's own co-sign step (requestPlcOperationSignature) does not
+     * expect: it looks for its own rotation key already listed, not the
+     * account's. */
+    wf_signing_key server_rotation_key;
+    memset(&server_rotation_key, 0, sizeof(server_rotation_key));
+    char *server_rotation_didkey = NULL;
+    if (metalbear_key_rotation_current_key(server->plc_rotation,
+                                           &server_rotation_key) != WF_OK ||
+        wf_signing_key_public_didkey(&server_rotation_key,
+                                     &server_rotation_didkey) != WF_OK) {
+        cJSON_Delete(root);
+        free(didkey);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not derive server rotation key");
+        return WF_OK;
+    }
     cJSON *rotation_keys = cJSON_CreateArray();
     if (!rotation_keys) {
         cJSON_Delete(root);
         free(didkey);
+        free(server_rotation_didkey);
         return WF_ERR_ALLOC;
     }
-    cJSON_AddItemToArray(rotation_keys, cJSON_CreateString(didkey));
+    cJSON_AddItemToArray(rotation_keys,
+                         cJSON_CreateString(server_rotation_didkey));
+    free(server_rotation_didkey);
     cJSON_AddItemToObject(root, "rotationKeys", rotation_keys);
     cJSON *services = cJSON_CreateObject();
     if (!services) {

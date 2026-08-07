@@ -1272,8 +1272,21 @@ int main(void) {
     cJSON *vms = cJSON_GetObjectItemCaseSensitive(json, "verificationMethods");
     CHECK(cJSON_IsObject(vms) &&
           cJSON_IsString(cJSON_GetObjectItemCaseSensitive(vms, "atproto")));
+    cJSON *rotation_keys =
+        cJSON_GetObjectItemCaseSensitive(json, "rotationKeys");
+    CHECK(cJSON_IsArray(rotation_keys) &&
+          cJSON_GetArraySize(rotation_keys) == 1);
+    /* rotationKeys must name the *server's* PLC rotation key, not the
+     * account's own atproto verification key -- these are different keys
+     * with different purposes (account_routes.c's actual genesis PLC
+     * operation signs with the server key, never the account's), so the
+     * two values in this response must differ. */
+    cJSON *rotation_key0 = cJSON_GetArrayItem(rotation_keys, 0);
     CHECK(
-        cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(json, "rotationKeys")));
+        cJSON_IsString(rotation_key0) &&
+        strcmp(rotation_key0->valuestring,
+               cJSON_GetObjectItemCaseSensitive(vms, "atproto")->valuestring) !=
+            0);
     cJSON *svcs = cJSON_GetObjectItemCaseSensitive(json, "services");
     CHECK(cJSON_IsObject(svcs));
     cJSON_Delete(json);
