@@ -1186,6 +1186,32 @@ int main(void) {
         cJSON_Delete(json_response(&response));
         wf_response_free(&response);
 
+        /* admin.updateAccountHandle rejects a syntactically invalid handle,
+         * same as the self-service update_handle route -- an admin override
+         * must not be able to set a handle the account holder themselves
+         * could never set. */
+        {
+            char bad_hdr[160];
+            char bad_cred[64];
+            int bn = snprintf(bad_cred, sizeof(bad_cred), "admin:%s",
+                              "secret-admin");
+            char bad_b64[128];
+            int blen = EVP_EncodeBlock((unsigned char *)bad_b64,
+                                       (const unsigned char *)bad_cred, bn);
+            bad_b64[blen] = '\0';
+            snprintf(bad_hdr, sizeof(bad_hdr), "Basic %s", bad_b64);
+            wf_http_header bad_auth_hdr = {"Authorization", bad_hdr};
+            char bad_url[256];
+            snprintf(bad_url, sizeof(bad_url),
+                     "%s/xrpc/com.atproto.admin.updateAccountHandle", base);
+            const char *bad_body =
+                "{\"did\":\"did:plc:charlie\",\"handle\":\"not a handle!\"}";
+            CHECK(wf_http_post(client, bad_url, "application/json", bad_body,
+                               &bad_auth_hdr, 1, &response) == WF_ERR_HTTP);
+            CHECK(response.status == 400);
+            wf_response_free(&response);
+        }
+
         /* Admin delete the account. */
         char del_body[256];
         snprintf(del_body, sizeof(del_body), "{\"did\":\"did:plc:charlie\"}");
