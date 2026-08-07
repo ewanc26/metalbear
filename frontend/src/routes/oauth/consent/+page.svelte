@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { authorizeInfo, deviceSessions } from '$lib/pds';
-	import type { AuthorizeInfo } from '$lib/pds';
+	import type { AuthorizeInfo, AuthorizeInfoError } from '$lib/pds';
 	import { humanizeScopes } from '$lib/oauthScopes';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -12,7 +12,37 @@
 	let loading: boolean = $state(true);
 	let confirming: boolean = $state(false);
 	let info: AuthorizeInfo | null = $state(null);
-	let infoFailed: boolean = $state(false);
+	/*
+	 * Which of authorizeInfo's named failure reasons happened, if any --
+	 * distinguishing 'expired' (retrying won't help; go back to the app),
+	 * 'client_mismatch' (also won't self-resolve), and 'server_error'
+	 * (worth a literal retry) is the whole point of #26 item 3: one
+	 * generic "unknown, expired, or no longer valid" message covered all
+	 * three before, even though only one of them actually meant that.
+	 */
+	let infoError: AuthorizeInfoError | null = $state(null);
+
+	const INFO_ERROR_TEXT: Record<AuthorizeInfoError, { heading: string; message: string }> = {
+		expired: {
+			heading: 'This request has expired',
+			message:
+				'Authorization requests are only valid for a few minutes. Go back to the application and try connecting again.'
+		},
+		client_mismatch: {
+			heading: "This link isn't valid",
+			message:
+				"This authorization link doesn't match the application that started it. Go back to the application and try connecting again."
+		},
+		invalid_request: {
+			heading: 'Missing information',
+			message:
+				'This link is missing information needed to continue. Go back to the application and try again.'
+		},
+		server_error: {
+			heading: 'Something went wrong',
+			message: 'The server had a problem loading this request. Try again in a moment.'
+		}
+	};
 	/* True for the brief window between deciding a sign-in is needed and the
 	 * goto() to /login actually navigating away. */
 	let redirecting: boolean = $state(false);
@@ -62,9 +92,20 @@
 			return;
 		}
 
-		info = await authorizeInfo(clientId, requestUri);
-		infoFailed = info === null;
+		const result = await authorizeInfo(clientId, requestUri);
+		if (result.ok) {
+			info = result.info;
+			infoError = null;
+		} else {
+			info = null;
+			infoError = result.error;
+		}
 		loading = false;
+	}
+
+	async function handleRetryInfo() {
+		loading = true;
+		await proceedWithLoginHint();
 	}
 
 	onMount(async () => {
@@ -200,14 +241,19 @@
 		</div>
 	{:else if redirecting}
 		<p class="text-sm text-slate-400">Redirecting to sign in…</p>
-	{:else if infoFailed}
+	{:else if infoError}
 		<div class="rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-			This authorization request is unknown, expired, or no longer valid. Go back to the application
-			and try signing in again.
+			<p class="font-medium">{INFO_ERROR_TEXT[infoError].heading}</p>
+			<p class="mt-1 text-red-300/90">{INFO_ERROR_TEXT[infoError].message}</p>
 		</div>
-		<p class="mt-4 text-center text-sm text-slate-500">
+		<div class="mt-4 flex justify-center gap-4 text-sm">
+			{#if infoError === 'server_error'}
+				<button onclick={handleRetryInfo} class="text-emerald-500 hover:text-emerald-400">
+					Try again
+				</button>
+			{/if}
 			<a href="/" class="text-emerald-500 hover:text-emerald-400">← Back to status</a>
-		</p>
+		</div>
 	{:else}
 		<div class="rounded-lg border border-slate-800 bg-slate-900/30 p-8">
 			<div class="mb-6 flex items-center gap-3">
