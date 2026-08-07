@@ -288,22 +288,69 @@ export async function signInDevice(identifier: string, password: string): Promis
 	return res.json() as Promise<{ did: string }>;
 }
 
+export interface DeviceSessionInfo {
+	/** Every account currently signed in on this browser (a multi-account
+	 *  host can have more than one device session at once). Empty when none. */
+	subjects: string[];
+	/** The most recently signed-in subject, or null if none. */
+	did: string | null;
+	/** Set only when a `loginHint` was passed to deviceSessions(): whether
+	 *  THAT specific account (resolved server-side, so a handle and a DID
+	 *  naming the same account agree) is among `subjects`. Null otherwise. */
+	matchesHint: boolean | null;
+}
+
 /*
- * Whether this browser currently holds a valid OAuth device session (see
+ * What OAuth device sessions this browser currently holds (see
  * signInDevice) -- read-only, no side effects. The consent page uses this to
  * send a user to sign in *before* rendering a consent screen it cannot
  * actually finish, rather than after: a regular JWT session (the `auth`
  * store) is not proof of a device session on its own.
+ *
+ * Passing `loginHint` also asks the server whether THAT specific account is
+ * among the signed-in ones (`matchesHint`) -- checking that, not just
+ * whether ANY session exists, is what actually closes the loop where an
+ * authorize request for account A redirects back to this same consent page
+ * having done nothing because a session for a DIFFERENT account B looked
+ * like "signed in" to a caller that only checked for "any session at all".
  */
-export async function hasDeviceSession(): Promise<boolean> {
+export async function deviceSessions(loginHint?: string): Promise<DeviceSessionInfo> {
+	const empty = (matchesHint: boolean | null): DeviceSessionInfo => ({
+		subjects: [],
+		did: null,
+		matchesHint
+	});
 	try {
-		const res = await fetch(new URL('/oauth/session', window.location.origin), {
-			headers: { accept: 'application/json' }
-		});
-		return res.ok;
+		const url = new URL('/oauth/session', window.location.origin);
+		if (loginHint) url.searchParams.set('login_hint', loginHint);
+		const res = await fetch(url, { headers: { accept: 'application/json' } });
+		if (!res.ok) return empty(loginHint ? false : null);
+		const body = (await res.json()) as {
+			subjects?: string[];
+			did?: string;
+			matches_hint?: boolean;
+		};
+		return {
+			subjects: body.subjects ?? [],
+			did: body.did ?? null,
+			matchesHint: typeof body.matches_hint === 'boolean' ? body.matches_hint : null
+		};
 	} catch {
-		return false;
+		return empty(loginHint ? false : null);
 	}
+}
+
+/*
+ * Sign out of one account's device session (`did` given) or every one of
+ * them (omitted) -- see oauth_signout's doc comment in oauth_routes.c. Used
+ * by the account picker's "not you?" affordance and by a full sign-out.
+ */
+export async function signOutDevice(did?: string): Promise<void> {
+	await fetch(new URL('/oauth/signout', window.location.origin), {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', accept: 'application/json' },
+		body: JSON.stringify(did ? { did } : {})
+	});
 }
 
 export async function getSession(): Promise<SessionResponse> {
