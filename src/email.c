@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "metalbear/email.h"
+#include "email_internal.h"
 
 #include <curl/curl.h>
 #include <stdio.h>
@@ -22,6 +23,42 @@ static size_t discard_response(void *ptr, size_t size, size_t nmemb,
     (void)ptr;
     (void)userdata;
     return size * nmemb;
+}
+
+/* Feeds the message body to curl's SMTP upload a chunk at a time from an
+ * in-memory buffer. NOT the same thing as passing plain libc `fread` as
+ * CURLOPT_READFUNCTION with CURLOPT_READDATA pointing at the body string --
+ * fread's fourth parameter must be a FILE*, and a raw char* is not one;
+ * curl would call fread(buf, size, n, body) and fread would dereference
+ * `body` as if it were a FILE struct, corrupting memory or crashing on
+ * every send. Not static: exercised directly by test_email_internal.c
+ * against curl's actual calling contract (repeated calls with varying
+ * buffer sizes must drain the whole body and then report EOF), which a
+ * live-network test can't easily do without also standing up a real TLS
+ * SMTP server. */
+size_t email_read_body(char *buffer, size_t size, size_t nitems,
+                       void *userdata) {
+    email_body_reader *reader = userdata;
+    size_t capacity = size * nitems;
+    size_t n = reader->remaining < capacity ? reader->remaining : capacity;
+    if (n > 0) {
+        memcpy(buffer, reader->cursor, n);
+        reader->cursor += n;
+        reader->remaining -= n;
+    }
+    return n;
+}
+
+/*
+ * Which URL scheme/security mode to use, per smtp_starttls -- see
+ * send_email's comment for why there is no plaintext-SMTP mode. Not
+ * static, for the same reason as email_read_body: a pure function is
+ * trivial to test directly and a live-network test isn't needed to prove
+ * this is right.
+ */
+void email_build_smtp_url(bool starttls, const char *host, char *out,
+                          size_t out_len) {
+    snprintf(out, out_len, "%s://%s", starttls ? "smtp" : "smtps", host);
 }
 
 wf_status metalbear_email_open(const metalbear_email_config *config,
@@ -79,13 +116,39 @@ static wf_status send_email(metalbear_email *email, const char *to,
     headers = curl_slist_append(headers, "Content-Type: text/plain; "
                                          "charset=utf-8");
     recipients = curl_slist_append(recipients, to);
-    curl_easy_setopt(curl, CURLOPT_URL, email->smtp_host);
+    /*
+     * A bare hostname (no scheme) does NOT make curl guess "smtp" -- with
+     * no CURLOPT_DEFAULT_PROTOCOL set, curl treats a schemeless URL as
+     * http://, so every one of CURLOPT_MAIL_FROM/MAIL_RCPT/UPLOAD below was
+     * silently ignored and the connection just sent an HTTP request at
+     * whatever SMTP server was listening -- confirmed against a real
+     * relay (smtp.resend.com:465), which correctly accepts a TLS
+     * connection but then sits waiting for a plaintext SMTP greeting that
+     * never arrives, since curl sent an HTTP GET instead; every account
+     * operation that sends email (deletion confirmation, password reset,
+     * email verification) was silently never actually delivering.
+     *
+     * smtp_starttls chooses between the two real-world SMTP/TLS
+     * combinations: `smtp://` + CURLOPT_USE_SSL=ALL connects in the clear
+     * and then requires a successful STARTTLS upgrade (the conventional
+     * pairing with port 587), while `smtps://` -- curl's separate scheme
+     * for implicit TLS, always encrypted regardless of CURLOPT_USE_SSL --
+     * matches the conventional pairing with port 465. There is no
+     * supported unencrypted mode; nothing in this project's own docs asks
+     * for one, and defaulting to plaintext SMTP over the public internet
+     * is not a default worth having.
+     */
+    char smtp_url[600];
+    email_build_smtp_url(email->smtp_starttls, email->smtp_host, smtp_url,
+                         sizeof(smtp_url));
+    curl_easy_setopt(curl, CURLOPT_URL, smtp_url);
     curl_easy_setopt(curl, CURLOPT_PORT, (long)email->smtp_port);
     curl_easy_setopt(curl, CURLOPT_MAIL_FROM, from_buf);
     curl_easy_setopt(curl, CURLOPT_MAIL_RCPT, recipients);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_READDATA, body);
-    curl_easy_setopt(curl, CURLOPT_READFUNCTION, (curl_read_callback)fread);
+    email_body_reader reader = {.cursor = body, .remaining = strlen(body)};
+    curl_easy_setopt(curl, CURLOPT_READDATA, &reader);
+    curl_easy_setopt(curl, CURLOPT_READFUNCTION, email_read_body);
     curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
     curl_easy_setopt(
         curl, CURLOPT_USE_SSL,
