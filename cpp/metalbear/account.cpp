@@ -389,6 +389,28 @@ int metalbear_account_is_active(metalbear_account_store *store) {
     return active;
 }
 
+wf_status metalbear_account_get_deactivated_at(metalbear_account_store *store,
+                                               char **out_deactivated_at) {
+    if (!store || !out_deactivated_at) return WF_ERR_INVALID_ARG;
+    *out_deactivated_at = nullptr;
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = nullptr;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(
+            store->db.get(),
+            "SELECT deactivated_at FROM account_state WHERE id=0;", -1, &stmt,
+            nullptr) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *v =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+        if (v) *out_deactivated_at = strdup(v);
+        status = WF_OK;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
 wf_status metalbear_account_deactivate(metalbear_account_store *store,
                                        const char *delete_after) {
     if (!store) return WF_ERR_INVALID_ARG;
