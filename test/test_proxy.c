@@ -69,7 +69,7 @@ static int write_all(int fd, const void *data, size_t length) {
  * capturing each request's raw header block (up to the first blank line) so
  * the test can grep it for X-Forwarded-For, then answers 200 with a small
  * JSON body and closes. */
-#define MOCK_UPSTREAM_REQUESTS 2
+#define MOCK_UPSTREAM_REQUESTS 3
 #define MOCK_CAPTURE_SIZE 4096
 
 typedef struct {
@@ -220,14 +220,28 @@ int main(void) {
             wf_response_free(&feed_response);
 
             /* An NSID nothing registers falls through to the generic
-             * proxy_fallback; drive it anonymously since that path runs
-             * before auth. */
+             * proxy_fallback. It runs before MetalBear's own auth callback,
+             * so an anonymous call still works (no Authorization forwarded
+             * at all). */
             wf_response fallback_response = {0};
             wf_xrpc_client_set_auth(client, NULL);
             CHECK(wf_xrpc_query(client, "app.test.metalbearProxyProbe", NULL,
                                 &fallback_response) == WF_OK);
             CHECK(fallback_response.status == 200);
             wf_response_free(&fallback_response);
+
+            /* An authenticated call through the same unregistered-NSID
+             * fallback must mint its own service-auth JWT for the upstream
+             * (proxy_fallback verifies the caller's session token itself,
+             * since the real auth callback never runs for this path) --
+             * not silently drop the caller's identity and proxy anonymously.
+             */
+            wf_response auth_fallback_response = {0};
+            wf_xrpc_client_set_auth(client, access_token);
+            CHECK(wf_xrpc_query(client, "app.test.metalbearProxyProbe", NULL,
+                                &auth_fallback_response) == WF_OK);
+            CHECK(auth_fallback_response.status == 200);
+            wf_response_free(&auth_fallback_response);
 
             free(access_token);
             wf_xrpc_client_free(client);
@@ -240,6 +254,13 @@ int main(void) {
 
     CHECK(strstr(mock.captured[0], "X-Forwarded-For: 127.0.0.1") != NULL);
     CHECK(strstr(mock.captured[1], "X-Forwarded-For: 127.0.0.1") != NULL);
+    /* Request 1 (anonymous fallback) forwarded no Authorization at all;
+     * request 2 (authenticated fallback) must carry one, and it must be a
+     * freshly minted service-auth JWT, not the caller's own session token
+     * verbatim (the AppView cannot verify a token signed with the PDS's own
+     * session secret). */
+    CHECK(strstr(mock.captured[1], "Authorization:") == NULL);
+    CHECK(strstr(mock.captured[2], "Authorization: Bearer ") != NULL);
 
     rmtree(directory);
     if (failures) fprintf(stderr, "%d test(s) failed\n", failures);

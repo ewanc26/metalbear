@@ -214,7 +214,7 @@ const char *bearer_token(const char *header) {
  * is used only to route the request to the correct account's auth store, which
  * then performs real signature/expiry/scope verification. Returns a
  * caller-owned string, or NULL on any parse failure. */
-static char *jwt_subject(const char *token) {
+char *jwt_subject(const char *token) {
     if (!token) return NULL;
     const char *first = strchr(token, '.');
     if (!first) return NULL;
