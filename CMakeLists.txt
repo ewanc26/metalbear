@@ -283,6 +283,37 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_takedown COMMAND test_metalbear_takedown)
 
+  # Parity-audit fixes: createReport union $type + params lifetime, createAccount
+  # validation, sync/session/repo write semantics, and local getProfile.
+  add_executable(test_metalbear_audit_moderation test/test_audit_moderation.c)
+  target_link_libraries(test_metalbear_audit_moderation
+                        PRIVATE metalbear_core SQLite3::SQLite3)
+  target_include_directories(test_metalbear_audit_moderation
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_audit_moderation
+           COMMAND test_metalbear_audit_moderation)
+
+  add_executable(test_metalbear_audit_account test/test_audit_account.c)
+  target_link_libraries(test_metalbear_audit_account
+                        PRIVATE metalbear_core SQLite3::SQLite3)
+  target_include_directories(test_metalbear_audit_account
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_audit_account COMMAND test_metalbear_audit_account)
+
+  add_executable(test_metalbear_audit_sync test/test_audit_sync.c)
+  target_link_libraries(test_metalbear_audit_sync
+                        PRIVATE metalbear_core SQLite3::SQLite3)
+  target_include_directories(test_metalbear_audit_sync
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_audit_sync COMMAND test_metalbear_audit_sync)
+
+  add_executable(test_metalbear_audit_identity test/test_audit_identity.c)
+  target_link_libraries(test_metalbear_audit_identity
+                        PRIVATE metalbear_core SQLite3::SQLite3)
+  target_include_directories(test_metalbear_audit_identity
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_audit_identity COMMAND test_metalbear_audit_identity)
+
   add_executable(test_metalbear_rate_limits test/test_rate_limits.c)
   target_link_libraries(test_metalbear_rate_limits PRIVATE metalbear_core
                                                            SQLite3::SQLite3)
