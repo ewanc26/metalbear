@@ -669,13 +669,24 @@ int main(void) {
     /* Test lexicon conformance for auth-required email/invite endpoints */
     wf_xrpc_client_set_auth(client, access_token);
 
-    /* getAccountInviteCodes: uses 'codes' field name per lexicon */
+    /* getAccountInviteCodes: uses 'codes' field name per lexicon and full inviteCode schema */
     CHECK(wf_xrpc_query(client, "com.atproto.server.getAccountInviteCodes",
                         NULL, &response) == WF_OK);
     CHECK(response.status == 200);
     json = json_response(&response);
-    CHECK(cJSON_GetObjectItemCaseSensitive(json, "codes") != NULL);
-    CHECK(cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(json, "codes")));
+    cJSON *codes_arr = cJSON_GetObjectItemCaseSensitive(json, "codes");
+    CHECK(codes_arr != NULL);
+    CHECK(cJSON_IsArray(codes_arr));
+    if (cJSON_GetArraySize(codes_arr) > 0) {
+        cJSON *item = cJSON_GetArrayItem(codes_arr, 0);
+        CHECK(cJSON_GetObjectItemCaseSensitive(item, "code") != NULL);
+        CHECK(cJSON_GetObjectItemCaseSensitive(item, "available") != NULL);
+        CHECK(cJSON_GetObjectItemCaseSensitive(item, "disabled") != NULL);
+        CHECK(cJSON_GetObjectItemCaseSensitive(item, "forAccount") != NULL);
+        CHECK(cJSON_GetObjectItemCaseSensitive(item, "createdBy") != NULL);
+        CHECK(cJSON_GetObjectItemCaseSensitive(item, "createdAt") != NULL);
+        CHECK(cJSON_GetObjectItemCaseSensitive(item, "uses") != NULL);
+    }
     cJSON_Delete(json);
     wf_response_free(&response);
 
