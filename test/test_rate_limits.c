@@ -61,12 +61,12 @@ static int failures;
     } while (0)
 
 static char *create_account(wf_xrpc_client *client, const char *handle,
-                            const char *did, const char *password) {
+                            const char *password, char **out_did) {
     char body[512];
     snprintf(body, sizeof(body),
-             "{\"handle\":\"%s\",\"password\":\"%s\",\"did\":\"%s\","
+             "{\"handle\":\"%s\",\"password\":\"%s\","
              "\"email\":\"%s@example.com\"}",
-             handle, password, did, handle);
+             handle, password, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
                           &response) != WF_OK ||
@@ -79,6 +79,10 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
     cJSON *access =
         json ? cJSON_GetObjectItemCaseSensitive(json, "accessJwt") : NULL;
     char *token = cJSON_IsString(access) ? strdup(access->valuestring) : NULL;
+    if (out_did) {
+        cJSON *did = json ? cJSON_GetObjectItemCaseSensitive(json, "did") : NULL;
+        *out_did = cJSON_IsString(did) ? strdup(did->valuestring) : NULL;
+    }
     cJSON_Delete(json);
     wf_response_free(&response);
     return token;
@@ -237,43 +241,52 @@ static int run_update_handle_limit(wf_xrpc_client *client, const char *base,
  * repo_write_rate_limit_cost/apply_writes_rate_limit_cost in server.c.
  */
 static int run_repo_write_smoke(wf_xrpc_client *client, const char *base,
-                                const char *access_jwt) {
+                                const char *access_jwt, const char *account_did) {
     int failures_before = failures;
     wf_response response = {0};
+    char body[512];
 
+    snprintf(body, sizeof(body),
+             "{\"repo\":\"%s\",\"collection\":\"com.example.posts\","
+             "\"rkey\":\"rl-smoke\",\"record\":{\"$type\":\"com.example.posts\","
+             "\"text\":\"hi\"}}",
+             account_did);
     wf_status s = bearer_post_body(
         client, base, "com.atproto.repo.createRecord", access_jwt,
-        "{\"repo\":\"did:plc:quotatest\",\"collection\":\"com.example.posts\","
-        "\"rkey\":\"rl-smoke\",\"record\":{\"$type\":\"com.example.posts\","
-        "\"text\":\"hi\"}}",
-        &response);
+        body, &response);
     CHECK(s == WF_OK && response.status == 200);
     wf_response_free(&response);
 
+    snprintf(body, sizeof(body),
+             "{\"repo\":\"%s\",\"collection\":\"com.example.posts\","
+             "\"rkey\":\"rl-smoke\",\"record\":{\"$type\":\"com.example.posts\","
+             "\"text\":\"hi again\"}}",
+             account_did);
     s = bearer_post_body(
         client, base, "com.atproto.repo.putRecord", access_jwt,
-        "{\"repo\":\"did:plc:quotatest\",\"collection\":\"com.example.posts\","
-        "\"rkey\":\"rl-smoke\",\"record\":{\"$type\":\"com.example.posts\","
-        "\"text\":\"hi again\"}}",
-        &response);
+        body, &response);
     CHECK(s == WF_OK && response.status == 200);
     wf_response_free(&response);
 
+    snprintf(body, sizeof(body),
+             "{\"repo\":\"%s\",\"writes\":[{\"$type\":\"com.atproto."
+             "repo.applyWrites#create\",\"collection\":\"com.example.posts\","
+             "\"rkey\":\"rl-smoke-2\",\"value\":{\"$type\":\"com.example.posts\","
+             "\"text\":\"batch\"}}]}",
+             account_did);
     s = bearer_post_body(
         client, base, "com.atproto.repo.applyWrites", access_jwt,
-        "{\"repo\":\"did:plc:quotatest\",\"writes\":[{\"$type\":\"com.atproto."
-        "repo.applyWrites#create\",\"collection\":\"com.example.posts\","
-        "\"rkey\":\"rl-smoke-2\",\"value\":{\"$type\":\"com.example.posts\","
-        "\"text\":\"batch\"}}]}",
-        &response);
+        body, &response);
     CHECK(s == WF_OK && response.status == 200);
     wf_response_free(&response);
 
+    snprintf(body, sizeof(body),
+             "{\"repo\":\"%s\",\"collection\":\"com.example.posts\","
+             "\"rkey\":\"rl-smoke\"}",
+             account_did);
     s = bearer_post_body(
         client, base, "com.atproto.repo.deleteRecord", access_jwt,
-        "{\"repo\":\"did:plc:quotatest\",\"collection\":\"com.example.posts\","
-        "\"rkey\":\"rl-smoke\"}",
-        &response);
+        body, &response);
     CHECK(s == WF_OK && response.status == 200);
     wf_response_free(&response);
 
@@ -282,9 +295,9 @@ static int run_repo_write_smoke(wf_xrpc_client *client, const char *base,
 
 /* getRepo.ts's 6000/5min IP-keyed budget is likewise too large to exhaust
  * here -- smoke test only, same rationale as run_repo_write_smoke. */
-static int run_get_repo_smoke(wf_xrpc_client *client) {
+static int run_get_repo_smoke(wf_xrpc_client *client, const char *account_did) {
     int failures_before = failures;
-    wf_xrpc_param params[] = {{"did", "did:plc:quotatest"}};
+    wf_xrpc_param params[] = {{"did", account_did}};
     wf_response response = {0};
     wf_status s = wf_xrpc_query_params(client, "com.atproto.sync.getRepo",
                                        params, 1, &response);
@@ -358,10 +371,12 @@ int main(void) {
          * below burns through that route's entire per-IP budget for the
          * rest of this process's life (the window is 300s, longer than this
          * test runs), so nothing else can call it afterward. */
+        char *account_did = NULL;
         char *access_jwt = create_account(client, "quota.example.com",
-                                          "did:plc:quotatest", "quotasecret");
+                                          "quotasecret", &account_did);
         CHECK(access_jwt != NULL);
-        if (access_jwt) {
+        CHECK(account_did != NULL);
+        if (access_jwt && account_did) {
             if (run_request_account_delete_limit(client, base, access_jwt) !=
                 0) {
                 fprintf(stderr,
@@ -371,7 +386,7 @@ int main(void) {
                        "DID-keyed)\n");
             }
 
-            if (run_repo_write_smoke(client, base, access_jwt) != 0) {
+            if (run_repo_write_smoke(client, base, access_jwt, account_did) != 0) {
                 fprintf(stderr, "repo-write rate limit smoke test failed\n");
             } else {
                 printf("PASS: repo-write rate limit smoke test "
@@ -379,7 +394,7 @@ int main(void) {
                        "still succeed)\n");
             }
 
-            if (run_get_repo_smoke(client) != 0) {
+            if (run_get_repo_smoke(client, account_did) != 0) {
                 fprintf(stderr, "getRepo rate limit smoke test failed\n");
             } else {
                 printf("PASS: getRepo rate limit smoke test (still "
@@ -394,6 +409,7 @@ int main(void) {
             }
 
             free(access_jwt);
+            free(account_did);
         }
 
         if (run_create_session_limit(client) != 0) {

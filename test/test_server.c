@@ -191,6 +191,10 @@ static wf_status admin_post(wf_xrpc_client *client, const char *base,
 int main(void) {
     char directory[] = "/tmp/metalbear-test-XXXXXX";
     CHECK(mkdtemp(directory) != NULL);
+    char alice_did[128] = "";
+    char bob_did[128] = "";
+    char dave_did[128] = "";
+    char charlie_did[128] = "";
     metalbear_config config = {
         .listen_address = "127.0.0.1",
         .port = 0,
@@ -226,10 +230,14 @@ int main(void) {
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
                             "{\"handle\":\"alice.example.com\","
                             "\"password\":\"correct horse battery staple\","
-                            "\"did\":\"did:plc:metalbeartest\","
                             "\"email\":\"alice@example.com\"}",
                             &response) == WF_OK);
     CHECK(response.status == 200);
+    cJSON *alice_json = json_response(&response);
+    if (cJSON_IsString(cJSON_GetObjectItemCaseSensitive(alice_json, "did")))
+        snprintf(alice_did, sizeof(alice_did), "%s",
+                 cJSON_GetObjectItemCaseSensitive(alice_json, "did")->valuestring);
+    cJSON_Delete(alice_json);
     wf_response_free(&response);
 
     /*
@@ -267,14 +275,17 @@ int main(void) {
     CHECK(wf_xrpc_procedure(
               client, "com.atproto.server.createAccount",
               "{\"handle\":\"bob.example.com\",\"password\":\"bobsecret\","
-              "\"did\":\"did:plc:bob\",\"email\":\"bob@example.com\"}",
+              "\"email\":\"bob@example.com\"}",
               &response) == WF_OK);
     CHECK(response.status == 200);
     cJSON *create_json = json_response(&response);
+    if (cJSON_IsString(cJSON_GetObjectItemCaseSensitive(create_json, "did")))
+        snprintf(bob_did, sizeof(bob_did), "%s",
+                 cJSON_GetObjectItemCaseSensitive(create_json, "did")->valuestring);
     CHECK(cJSON_IsString(cJSON_GetObjectItemCaseSensitive(create_json, "did")));
     CHECK(strcmp(
               cJSON_GetObjectItemCaseSensitive(create_json, "did")->valuestring,
-              "did:plc:bob") == 0);
+              bob_did) == 0);
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(create_json, "handle")
                      ->valuestring,
                  "bob.example.com") == 0);
@@ -285,24 +296,24 @@ int main(void) {
     cJSON_Delete(create_json);
     wf_response_free(&response);
 
-    /* Missing email should return InvalidEmail */
+    /* Missing email should return InvalidRequest */
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
                             "{\"handle\":\"x.example.com\",\"password\":"
-                            "\"test\",\"did\":\"did:plc:x\"}",
+                            "\"test\"}",
                             &response) == WF_ERR_HTTP);
     CHECK(response.status == 400);
     create_json = json_response(&response);
     CHECK(
         strcmp(
             cJSON_GetObjectItemCaseSensitive(create_json, "error")->valuestring,
-            "InvalidEmail") == 0);
+            "InvalidRequest") == 0);
     cJSON_Delete(create_json);
     wf_response_free(&response);
 
     /* Missing handle should return InvalidHandle */
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
                             "{\"email\":\"x@example.com\",\"password\":"
-                            "\"test\",\"did\":\"did:plc:x\"}",
+                            "\"test\"}",
                             &response) == WF_ERR_HTTP);
     CHECK(response.status == 400);
     create_json = json_response(&response);
@@ -317,7 +328,7 @@ int main(void) {
     CHECK(wf_xrpc_procedure(
               client, "com.atproto.server.createAccount",
               "{\"handle\":\"bob.example.com\",\"password\":\"other\","
-              "\"did\":\"did:plc:bob2\",\"email\":\"other@example.com\"}",
+              "\"email\":\"other@example.com\"}",
               &response) == WF_ERR_HTTP);
     CHECK(response.status == 400);
     create_json = json_response(&response);
@@ -332,7 +343,7 @@ int main(void) {
      * dedicated subdirectory holding the account's own repo/account/auth
      * stores, not just a registry entry. */
     char *bob_dir = NULL;
-    CHECK(metalbear_account_dir_for_did(directory, "did:plc:bob", &bob_dir) ==
+    CHECK(metalbear_account_dir_for_did(directory, bob_did, &bob_dir) ==
               WF_OK &&
           bob_dir);
     struct stat st;
@@ -352,25 +363,28 @@ int main(void) {
     CHECK(wf_xrpc_procedure(
               client, "com.atproto.server.createAccount",
               "{\"handle\":\"dave.example.com\",\"password\":\"davesecret\","
-              "\"did\":\"did:plc:dave\",\"email\":\"dave@example.com\"}",
+              "\"email\":\"dave@example.com\"}",
               &response) == WF_OK);
     CHECK(response.status == 200);
     cJSON *dave_json = json_response(&response);
+    if (cJSON_IsString(cJSON_GetObjectItemCaseSensitive(dave_json, "did")))
+        snprintf(dave_did, sizeof(dave_did), "%s",
+                 cJSON_GetObjectItemCaseSensitive(dave_json, "did")->valuestring);
     CHECK(
         strcmp(cJSON_GetObjectItemCaseSensitive(dave_json, "did")->valuestring,
-               "did:plc:dave") == 0);
+               dave_did) == 0);
     cJSON_Delete(dave_json);
     wf_response_free(&response);
 
     char *dave_dir = NULL;
-    CHECK(metalbear_account_dir_for_did(directory, "did:plc:dave", &dave_dir) ==
+    CHECK(metalbear_account_dir_for_did(directory, dave_did, &dave_dir) ==
               WF_OK &&
           dave_dir);
     CHECK(stat(dave_dir, &st) == 0 && S_ISDIR(st.st_mode));
     snprintf(probe, sizeof(probe), "%s/repo.sqlite3", dave_dir);
     CHECK(stat(probe, &st) == 0 && S_ISREG(st.st_mode));
     char *bob_dir_again = NULL;
-    CHECK(metalbear_account_dir_for_did(directory, "did:plc:bob",
+    CHECK(metalbear_account_dir_for_did(directory, bob_did,
                                         &bob_dir_again) == WF_OK &&
           bob_dir_again);
     CHECK(strcmp(bob_dir_again, dave_dir) != 0);
@@ -403,10 +417,10 @@ int main(void) {
     CHECK(strncmp(response.body, "<!DOCTYPE html>", 15) == 0);
     /* The bootstrap account (alice) must appear. */
     CHECK(body_contains(&response, "alice.example.com"));
-    CHECK(body_contains(&response, "did:plc:metalbeartest"));
+    CHECK(body_contains(&response, alice_did));
     /* A created account (bob) must also appear once it is hosted. */
     CHECK(body_contains(&response, "bob.example.com"));
-    CHECK(body_contains(&response, "did:plc:bob"));
+    CHECK(body_contains(&response, bob_did));
     /* The heading must announce the Wolfram SDK version it is built on,
      * not just MetalBear's own. */
     CHECK(body_contains(&response, "Wolfram " WOLFRAM_VERSION_STRING));
@@ -589,7 +603,7 @@ int main(void) {
                                handle_params, 1, &response) == WF_OK);
     json = json_response(&response);
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "did")->valuestring,
-                 "did:plc:metalbeartest") == 0);
+                 alice_did) == 0);
     cJSON_Delete(json);
     wf_response_free(&response);
 
@@ -731,8 +745,11 @@ int main(void) {
 
     /* reserveSigningKey: public, returns a did:key */
     wf_xrpc_client_set_auth(client, NULL);
+    char reserve_body[256];
+    snprintf(reserve_body, sizeof(reserve_body),
+             "{\"did\":\"%s\"}", alice_did);
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.reserveSigningKey",
-                            "{\"did\":\"did:plc:metalbeartest\"}",
+                            reserve_body,
                             &response) == WF_OK);
     CHECK(response.status == 200);
     json = json_response(&response);
@@ -789,9 +806,12 @@ int main(void) {
     }
 
     /* createInviteCodes: returns per-account code lists */
+    char invite_for_body[256];
+    snprintf(invite_for_body, sizeof(invite_for_body),
+             "{\"codeCount\":3,\"useCount\":2,\"forAccounts\":[\"%s\"]}",
+             alice_did);
     CHECK(admin_post(client, base, "com.atproto.server.createInviteCodes",
-                     "{\"codeCount\":3,\"useCount\":2,"
-                     "\"forAccounts\":[\"did:plc:metalbeartest\"]}",
+                     invite_for_body,
                      &response) == WF_OK);
     CHECK(response.status == 200);
     json = json_response(&response);
@@ -799,7 +819,7 @@ int main(void) {
     CHECK(cJSON_IsArray(codes) && cJSON_GetArraySize(codes) == 1);
     cJSON *acct = cJSON_GetArrayItem(codes, 0);
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(acct, "account")->valuestring,
-                 "did:plc:metalbeartest") == 0);
+                 alice_did) == 0);
     cJSON *acct_codes = cJSON_GetObjectItemCaseSensitive(acct, "codes");
     CHECK(cJSON_IsArray(acct_codes) && cJSON_GetArraySize(acct_codes) == 3);
     cJSON_Delete(json);
@@ -833,7 +853,7 @@ int main(void) {
     char admin_url[160];
     snprintf(admin_url, sizeof(admin_url),
              "%s/xrpc/com.atproto.admin.getAccountInfo?did=%s", base,
-             "did:plc:bob");
+             bob_did);
     /* No Authorization header -> 401 */
     CHECK(wf_http_get_with_headers(client, admin_url, NULL, 0, &response) ==
           WF_ERR_HTTP);
@@ -871,7 +891,7 @@ int main(void) {
         CHECK(response.status == 200);
         json = json_response(&response);
         CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "did")->valuestring,
-                     "did:plc:bob") == 0);
+                     bob_did) == 0);
         CHECK(strcmp(
                   cJSON_GetObjectItemCaseSensitive(json, "handle")->valuestring,
                   "bob.example.com") == 0);
@@ -979,8 +999,6 @@ int main(void) {
      * account's self-granted routine codes — must not touch admin-minted
      * codes (existing or newly gifted). */
     {
-        const char *alice_did = "did:plc:metalbeartest";
-
         /* admin Basic header for the GET checks below; the client's bearer
          * auth must be cleared first or the server sees two Authorization
          * headers and rejects the request. */
@@ -1195,11 +1213,14 @@ int main(void) {
         CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
                                 "{\"handle\":\"charlie.example.com\","
                                 "\"password\":\"charliepw\","
-                                "\"did\":\"did:plc:charlie\",\"email\":"
-                                "\"charlie@example.com\"}",
+                                "\"email\":\"charlie@example.com\"}",
                                 &response) == WF_OK);
         CHECK(response.status == 200);
-        cJSON_Delete(json_response(&response));
+        cJSON *charlie_json = json_response(&response);
+        if (cJSON_IsString(cJSON_GetObjectItemCaseSensitive(charlie_json, "did")))
+            snprintf(charlie_did, sizeof(charlie_did), "%s",
+                     cJSON_GetObjectItemCaseSensitive(charlie_json, "did")->valuestring);
+        cJSON_Delete(charlie_json);
         wf_response_free(&response);
 
         /* admin.updateAccountHandle rejects a syntactically invalid handle,
@@ -1220,8 +1241,9 @@ int main(void) {
             char bad_url[256];
             snprintf(bad_url, sizeof(bad_url),
                      "%s/xrpc/com.atproto.admin.updateAccountHandle", base);
-            const char *bad_body =
-                "{\"did\":\"did:plc:charlie\",\"handle\":\"not a handle!\"}";
+            char bad_body[256];
+            snprintf(bad_body, sizeof(bad_body),
+                     "{\"did\":\"%s\",\"handle\":\"not a handle!\"}", charlie_did);
             CHECK(wf_http_post(client, bad_url, "application/json", bad_body,
                                &bad_auth_hdr, 1, &response) == WF_ERR_HTTP);
             CHECK(response.status == 400);
@@ -1230,7 +1252,7 @@ int main(void) {
 
         /* Admin delete the account. */
         char del_body[256];
-        snprintf(del_body, sizeof(del_body), "{\"did\":\"did:plc:charlie\"}");
+        snprintf(del_body, sizeof(del_body), "{\"did\":\"%s\"}", charlie_did);
         wf_http_header hdr = {"Authorization", admin_hdr};
         char del_url[256];
         snprintf(del_url, sizeof(del_url),
@@ -1306,7 +1328,7 @@ int main(void) {
     CHECK(response.status == 200);
     json = json_response(&response);
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "did")->valuestring,
-                 "did:plc:metalbeartest") == 0);
+                 alice_did) == 0);
     cJSON_Delete(json);
     wf_response_free(&response);
 
@@ -1525,7 +1547,7 @@ int main(void) {
 
     wf_xrpc_client_set_auth(client, NULL);
     wf_xrpc_param blob_params[] = {
-        {"did", "did:plc:metalbeartest"},
+        {"did", alice_did},
         {"cid", blob_cid ? blob_cid : ""},
     };
     CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getBlob", blob_params,
@@ -1535,12 +1557,14 @@ int main(void) {
           memcmp(response.body, blob_data, sizeof(blob_data)) == 0);
     wf_response_free(&response);
 
-    const char *create_body =
-        "{\"repo\":\"did:plc:metalbeartest\","
-        "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"first\","
-        "\"record\":{\"$type\":\"app.bsky.feed.post\","
-        "\"text\":\"hello from MetalBear\","
-        "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}";
+    char create_body[512];
+    snprintf(create_body, sizeof(create_body),
+             "{\"repo\":\"%s\","
+             "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"first\","
+             "\"record\":{\"$type\":\"app.bsky.feed.post\","
+             "\"text\":\"hello from MetalBear\","
+             "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
+             alice_did);
     CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
                             create_body, &response) == WF_ERR_HTTP);
     CHECK(response.status == 401);
@@ -1574,8 +1598,11 @@ int main(void) {
      * responsibility, fed by a labeler's own subscribeLabels firehose.
      * Confirm the honest MethodNotImplemented rather than a fabricated
      * empty result. */
+    char label_uri[256];
+    snprintf(label_uri, sizeof(label_uri),
+             "at://%s/app.bsky.feed.post/first", alice_did);
     wf_xrpc_param query_labels_params[] = {
-        {"uriPatterns", "at://did:plc:metalbeartest/app.bsky.feed.post/first"},
+        {"uriPatterns", label_uri},
     };
     CHECK(wf_xrpc_query_params(client, "com.atproto.label.queryLabels",
                                query_labels_params, 1,
@@ -1595,7 +1622,7 @@ int main(void) {
     /* Anchor the later assertions to where this commit actually landed. */
     int64_t commit_seq = live_event.seq;
     CHECK(commit_seq > seq_base);
-    CHECK(strcmp(live_event.data.commit.did, "did:plc:metalbeartest") == 0);
+    CHECK(strcmp(live_event.data.commit.did, alice_did) == 0);
     CHECK(live_event.data.commit.ops_count == 1);
     if (live_event.data.commit.ops_count == 1) {
         CHECK(strcmp(live_event.data.commit.ops[0].action, "create") == 0);
@@ -1647,7 +1674,7 @@ int main(void) {
     cJSON_Delete(json);
     wf_response_free(&response);
 
-    wf_xrpc_param status_params[] = {{"did", "did:plc:metalbeartest"}};
+    wf_xrpc_param status_params[] = {{"did", alice_did}};
     CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getRepoStatus",
                                status_params, 1, &response) == WF_OK);
     json = json_response(&response);
@@ -1669,7 +1696,7 @@ int main(void) {
 
     /* listBlobs: public, enumerates the uploaded blob for the account */
     wf_xrpc_client_set_auth(client, NULL);
-    wf_xrpc_param list_blobs_params[] = {{"did", "did:plc:metalbeartest"}};
+    wf_xrpc_param list_blobs_params[] = {{"did", alice_did}};
     CHECK(wf_xrpc_query_params(client, "com.atproto.sync.listBlobs",
                                list_blobs_params, 1, &response) == WF_OK);
     CHECK(response.status == 200);
@@ -1700,7 +1727,7 @@ int main(void) {
 
     wf_xrpc_client_set_auth(client, NULL);
     wf_xrpc_param get_params[] = {
-        {"repo", "did:plc:metalbeartest"},
+        {"repo", alice_did},
         {"collection", "app.bsky.feed.post"},
         {"rkey", "first"},
     };
@@ -1715,7 +1742,7 @@ int main(void) {
     cJSON_Delete(json);
     wf_response_free(&response);
 
-    wf_xrpc_param repo_params[] = {{"did", "did:plc:metalbeartest"}};
+    wf_xrpc_param repo_params[] = {{"did", alice_did}};
     CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getRepo", repo_params,
                                1, &response) == WF_OK);
     CHECK(response.status == 200 && response.body_len > 0);
@@ -1727,7 +1754,7 @@ int main(void) {
     wf_response_free(&response);
 
     wf_xrpc_param incremental_params[] = {
-        {"did", "did:plc:metalbeartest"},
+        {"did", alice_did},
         {"since", commit_rev},
     };
     CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getRepo",
@@ -1745,14 +1772,14 @@ int main(void) {
      * already a did:, silently 400ing RepoNotFound for every handle-based
      * read. */
     {
-        wf_xrpc_param describe_by_did[] = {{"repo", "did:plc:metalbeartest"}};
+        wf_xrpc_param describe_by_did[] = {{"repo", alice_did}};
         CHECK(wf_xrpc_query_params(client, "com.atproto.repo.describeRepo",
                                    describe_by_did, 1, &response) == WF_OK);
         CHECK(response.status == 200);
         json = json_response(&response);
         cJSON *did_field = cJSON_GetObjectItemCaseSensitive(json, "did");
         CHECK(cJSON_IsString(did_field) &&
-              strcmp(did_field->valuestring, "did:plc:metalbeartest") == 0);
+              strcmp(did_field->valuestring, alice_did) == 0);
         cJSON_Delete(json);
         wf_response_free(&response);
 
@@ -1763,13 +1790,13 @@ int main(void) {
         json = json_response(&response);
         did_field = cJSON_GetObjectItemCaseSensitive(json, "did");
         CHECK(cJSON_IsString(did_field) &&
-              strcmp(did_field->valuestring, "did:plc:metalbeartest") == 0);
+              strcmp(did_field->valuestring, alice_did) == 0);
         cJSON_Delete(json);
         wf_response_free(&response);
     }
 
     wf_xrpc_param block_params[] = {
-        {"did", "did:plc:metalbeartest"},
+        {"did", alice_did},
         {"cids", commit_cid},
     };
     CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getBlocks",
@@ -1843,10 +1870,14 @@ int main(void) {
     wf_response_free(&response);
 
     /* deleteAccount with wrong token should fail */
+    char del_bad_body[256];
+    snprintf(del_bad_body, sizeof(del_bad_body),
+             "{\"did\":\"%s\",\"password\":"
+             "\"correct horse battery staple\","
+             "\"token\":\"wrongtoken\"}",
+             alice_did);
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.deleteAccount",
-                            "{\"did\":\"did:plc:metalbeartest\",\"password\":"
-                            "\"correct horse battery staple\","
-                            "\"token\":\"wrongtoken\"}",
+                            del_bad_body,
                             &response) == WF_ERR_HTTP);
     CHECK(response.status == 400);
     json = json_response(&response);
@@ -2108,11 +2139,15 @@ int main(void) {
              * report with generated id and timestamps. */
             {
                 wf_xrpc_client_set_auth(client, access_token);
+                char report_body1[256];
+                snprintf(report_body1, sizeof(report_body1),
+                         "{\"reasonType\":\"com.atproto.moderation.defs#"
+                         "reasonSpam\","
+                         "\"subject\":{\"did\":\"%s\"}}",
+                         bob_did);
                 CHECK(wf_xrpc_procedure(
                           client, "com.atproto.moderation.createReport",
-                          "{\"reasonType\":\"com.atproto.moderation.defs#"
-                          "reasonSpam\","
-                          "\"subject\":{\"did\":\"did:plc:bob\"}}",
+                          report_body1,
                           &response) == WF_OK);
                 CHECK(response.status == 200);
                 cJSON *report = json_response(&response);
@@ -2125,7 +2160,7 @@ int main(void) {
                 CHECK(strcmp(
                           cJSON_GetObjectItemCaseSensitive(report, "reportedBy")
                               ->valuestring,
-                          "did:plc:metalbeartest") == 0);
+                          alice_did) == 0);
                 CHECK(cJSON_IsString(
                     cJSON_GetObjectItemCaseSensitive(report, "createdAt")));
                 cJSON *subject =
@@ -2136,14 +2171,17 @@ int main(void) {
                 cJSON_Delete(report);
                 wf_response_free(&response);
 
-                CHECK(wf_xrpc_procedure(client,
-                                        "com.atproto.moderation.createReport",
-                                        "{\"reasonType\":\"com.atproto."
-                                        "moderation.defs#reasonViolation\","
-                                        "\"reason\":\"test report\","
-                                        "\"subject\":{\"uri\":\"at://"
-                                        "did:plc:bob/app.bsky.feed.post/xyz\","
-                                        "\"cid\":\"bafkreid7example\"}}",
+                char report_body2[512];
+                snprintf(report_body2, sizeof(report_body2),
+                         "{\"reasonType\":\"com.atproto."
+                         "moderation.defs#reasonViolation\","
+                         "\"reason\":\"test report\","
+                         "\"subject\":{\"uri\":\"at://"
+                         "%s/app.bsky.feed.post/xyz\","
+                         "\"cid\":\"bafkreid7example\"}}",
+                         bob_did);
+                CHECK(wf_xrpc_procedure(client, "com.atproto.moderation.createReport",
+                                        report_body2,
                                         &response) == WF_OK);
                 CHECK(response.status == 200);
                 report = json_response(&response);
@@ -2159,11 +2197,15 @@ int main(void) {
 
                 /* No auth -> 401 */
                 wf_xrpc_client_set_auth(client, NULL);
+                char report_body3[256];
+                snprintf(report_body3, sizeof(report_body3),
+                         "{\"reasonType\":\"com.atproto.moderation.defs#"
+                         "reasonSpam\","
+                         "\"subject\":{\"did\":\"%s\"}}",
+                         bob_did);
                 CHECK(wf_xrpc_procedure(
                           client, "com.atproto.moderation.createReport",
-                          "{\"reasonType\":\"com.atproto.moderation.defs#"
-                          "reasonSpam\","
-                          "\"subject\":{\"did\":\"did:plc:bob\"}}",
+                          report_body3,
                           &response) == WF_ERR_HTTP);
                 CHECK(response.status == 401);
                 wf_response_free(&response);
@@ -2201,11 +2243,15 @@ int main(void) {
 
             /* Wrong token should be rejected */
             wf_xrpc_client_set_auth(client, final_access);
+            char del_bad_body2[256];
+            snprintf(del_bad_body2, sizeof(del_bad_body2),
+                     "{\"did\":\"%s\","
+                     "\"password\":\"correct horse battery staple\","
+                     "\"token\":\"totallywrong\"}",
+                     alice_did);
             CHECK(wf_xrpc_procedure(
                       client, "com.atproto.server.deleteAccount",
-                      "{\"did\":\"did:plc:metalbeartest\","
-                      "\"password\":\"correct horse battery staple\","
-                      "\"token\":\"totallywrong\"}",
+                      del_bad_body2,
                       &response) == WF_ERR_HTTP);
             CHECK(response.status == 400);
             wf_response_free(&response);
@@ -2213,10 +2259,10 @@ int main(void) {
             /* Correct token should succeed */
             char del_body[512];
             snprintf(del_body, sizeof(del_body),
-                     "{\"did\":\"did:plc:metalbeartest\","
+                     "{\"did\":\"%s\","
                      "\"password\":\"correct horse battery staple\","
                      "\"token\":\"%s\"}",
-                     final_delete_token ? final_delete_token : "");
+                     alice_did, final_delete_token ? final_delete_token : "");
             CHECK(wf_xrpc_procedure(client, "com.atproto.server.deleteAccount",
                                     del_body, &response) == WF_OK);
             CHECK(response.status == 200);
@@ -2302,7 +2348,7 @@ int main(void) {
         wf_xrpc_client_set_auth(client, NULL);
 
         /* Test com.atproto.identity.resolveDid (public) */
-        wf_xrpc_param did_params[] = {{"did", "did:plc:bob"}};
+        wf_xrpc_param did_params[] = {{"did", bob_did}};
         CHECK(wf_xrpc_query_params(client, "com.atproto.identity.resolveDid",
                                    did_params, 1, &response) == WF_OK);
         CHECK(response.status == 200);
@@ -2311,7 +2357,7 @@ int main(void) {
         CHECK(did_doc != NULL);
         cJSON *doc_id = cJSON_GetObjectItemCaseSensitive(did_doc, "id");
         CHECK(cJSON_IsString(doc_id));
-        CHECK(strcmp(doc_id->valuestring, "did:plc:bob") == 0);
+        CHECK(strcmp(doc_id->valuestring, bob_did) == 0);
         cJSON *doc_service =
             cJSON_GetObjectItemCaseSensitive(did_doc, "service");
         CHECK(cJSON_IsArray(doc_service));
@@ -2350,7 +2396,7 @@ int main(void) {
         CHECK(response.status == 200);
         json = json_response(&response);
         CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "did")->valuestring,
-                     "did:plc:bob") == 0);
+                     bob_did) == 0);
         CHECK(strcmp(
                   cJSON_GetObjectItemCaseSensitive(json, "handle")->valuestring,
                   "bob.example.com") == 0);
@@ -2360,7 +2406,7 @@ int main(void) {
 
         /* resolveIdentity by DID: the claimed handle resolves back through
          * the local registry, so it verifies. */
-        wf_xrpc_param id_did_params[] = {{"identifier", "did:plc:bob"}};
+        wf_xrpc_param id_did_params[] = {{"identifier", bob_did}};
         CHECK(wf_xrpc_query_params(client,
                                    "com.atproto.identity.resolveIdentity",
                                    id_did_params, 1, &response) == WF_OK);
@@ -2394,7 +2440,7 @@ int main(void) {
         CHECK(response.status == 200);
         json = json_response(&response);
         CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "did")->valuestring,
-                     "did:plc:bob") == 0);
+                     bob_did) == 0);
         CHECK(cJSON_GetObjectItemCaseSensitive(json, "didDoc") != NULL);
         cJSON_Delete(json);
         wf_response_free(&response);
@@ -2446,7 +2492,7 @@ int main(void) {
         char lmb_body[1024];
         snprintf(
             lmb_body, sizeof(lmb_body),
-            "{\"repo\":\"did:plc:bob\",\"collection\":\"app.bsky.feed.post\","
+            "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
             "\"rkey\":\"img_high\",\"record\":{\"$type\":\"app.bsky.feed."
             "post\","
             "\"text\":\"pic\",\"embed\":{\"$type\":\"app.bsky.embed.images\","
@@ -2454,21 +2500,21 @@ int main(void) {
             "\"ref\":{\"$link\":\"%s\"},\"mimeType\":\"image/"
             "png\",\"size\":4}}]},"
             "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
-            cid_high);
+            bob_did, cid_high);
         CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
                                 lmb_body, &response) == WF_OK);
         CHECK(response.status == 200);
         wf_response_free(&response);
         snprintf(
             lmb_body, sizeof(lmb_body),
-            "{\"repo\":\"did:plc:bob\",\"collection\":\"app.bsky.feed.post\","
+            "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
             "\"rkey\":\"img_low\",\"record\":{\"$type\":\"app.bsky.feed.post\","
             "\"text\":\"pic\",\"embed\":{\"$type\":\"app.bsky.embed.images\","
             "\"images\":[{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
             "\"ref\":{\"$link\":\"%s\"},\"mimeType\":\"image/"
             "png\",\"size\":4}}]},"
             "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
-            cid_low);
+            bob_did, cid_low);
         CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
                                 lmb_body, &response) == WF_OK);
         CHECK(response.status == 200);
@@ -2490,9 +2536,12 @@ int main(void) {
         CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(second_blob, "cid")
                          ->valuestring,
                      cid_high) == 0);
+        char record_uri_low[256];
+        snprintf(record_uri_low, sizeof(record_uri_low),
+                 "at://%s/app.bsky.feed.post/img_low", bob_did);
         CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(first_blob, "recordUri")
                          ->valuestring,
-                     "at://did:plc:bob/app.bsky.feed.post/img_low") == 0);
+                     record_uri_low) == 0);
         CHECK(cJSON_GetObjectItemCaseSensitive(json, "cursor") == NULL);
         cJSON_Delete(json);
         wf_response_free(&response);
@@ -2551,7 +2600,7 @@ int main(void) {
         CHECK(present_cid != NULL);
         snprintf(
             lmb_body, sizeof(lmb_body),
-            "{\"repo\":\"did:plc:bob\",\"collection\":\"app.bsky.feed.post\","
+            "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
             "\"rkey\":\"img_present\",\"record\":{\"$type\":\"app.bsky.feed."
             "post\","
             "\"text\":\"pic\",\"embed\":{\"$type\":\"app.bsky.embed.images\","
@@ -2559,7 +2608,7 @@ int main(void) {
             "\"ref\":{\"$link\":\"%s\"},\"mimeType\":\"image/"
             "png\",\"size\":4}}]},"
             "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
-            present_cid);
+            bob_did, present_cid);
         free(present_cid);
         CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
                                 lmb_body, &response) == WF_OK);

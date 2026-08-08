@@ -29,6 +29,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <netinet/in.h>
+#include <pthread.h>
 #include <unistd.h>
 
 static int failures;
@@ -51,6 +53,74 @@ static void rmtree(const char *path) {
     nftw(path, rmtree_remove_cb, 64, FTW_DEPTH | FTW_PHYS);
 }
 
+/* ------------------------------------------------------------------ */
+/* A stand-in PLC directory: accepts genesis and rotation operations */
+/* ------------------------------------------------------------------ */
+
+static struct {
+    int listen_fd;
+    unsigned short port;
+    pthread_t thread;
+    bool running;
+} mock_plc;
+
+static void *mock_plc_serve(void *arg) {
+    (void)arg;
+    while (mock_plc.running) {
+        int fd = accept(mock_plc.listen_fd, NULL, NULL);
+        if (fd < 0) break;
+
+        char buf[4096];
+        ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
+        if (n > 0) {
+            const char *resp =
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: "
+                "close\r\n\r\n";
+            send(fd, resp, strlen(resp), 0);
+        }
+        close(fd);
+    }
+    return NULL;
+}
+
+static bool start_mock_plc(unsigned short *out_port) {
+    mock_plc.listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (mock_plc.listen_fd < 0) return false;
+    int one = 1;
+    setsockopt(mock_plc.listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    if (bind(mock_plc.listen_fd, (struct sockaddr *)&addr, sizeof(addr)) !=
+        0) {
+        close(mock_plc.listen_fd);
+        return false;
+    }
+    socklen_t len = sizeof(addr);
+    if (getsockname(mock_plc.listen_fd, (struct sockaddr *)&addr, &len) !=
+        0) {
+        close(mock_plc.listen_fd);
+        return false;
+    }
+    *out_port = ntohs(addr.sin_port);
+    if (listen(mock_plc.listen_fd, 4) != 0) {
+        close(mock_plc.listen_fd);
+        return false;
+    }
+    mock_plc.running = true;
+    if (pthread_create(&mock_plc.thread, NULL, mock_plc_serve, NULL) != 0) {
+        close(mock_plc.listen_fd);
+        return false;
+    }
+    return true;
+}
+
+static void stop_mock_plc(void) {
+    mock_plc.running = false;
+    close(mock_plc.listen_fd);
+}
+
 static cJSON *json_response(wf_response *response) {
     return cJSON_ParseWithLength(response->body ? response->body : "",
                                  response->body_len);
@@ -62,6 +132,17 @@ int main(void) {
 
     char directory[] = "/tmp/metalbear-plcop-XXXXXX";
     CHECK(mkdtemp(directory) != NULL);
+
+    unsigned short mock_plc_port = 0;
+    if (!start_mock_plc(&mock_plc_port)) {
+        fprintf(stderr, "could not start mock PLC server\n");
+        rmtree(directory);
+        return 1;
+    }
+    char plc_url[64];
+    snprintf(plc_url, sizeof(plc_url), "http://127.0.0.1:%u",
+             (unsigned)mock_plc_port);
+
     metalbear_config config = {
         .listen_address = "127.0.0.1",
         .port = 0,
@@ -71,14 +152,17 @@ int main(void) {
         .user_domain = ".example.com",
         .invite_required = false,
         .rate_limit = 10000,
-        /* A closed local port: any submission attempt fails fast with a
-         * connection error rather than hanging or reaching a real PLC
-         * directory, while still proving a network call was attempted. */
-        .plc_url = "http://127.0.0.1:1",
+        /* The mock PLC directory accepts the genesis operation so
+         * createAccount can mint a did:plc.  It is stopped immediately
+         * afterward so that submitPlcOperation attempts fail fast with
+         * a connection error, proving the handler actually reaches the
+         * network instead of silently acknowledging. */
+        .plc_url = plc_url,
     };
     metalbear_server *server = metalbear_server_start(&config);
     CHECK(server != NULL);
     if (!server) {
+        stop_mock_plc();
         rmtree(directory);
         return 1;
     }
@@ -92,16 +176,24 @@ int main(void) {
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
                             "{\"handle\":\"alice.example.com\","
                             "\"password\":\"correct horse battery staple\","
-                            "\"did\":\"did:plc:migrationplctest\","
                             "\"email\":\"alice@example.com\"}",
                             &response) == WF_OK);
     CHECK(response.status == 200);
     cJSON *json = json_response(&response);
+    char alice_did[128] = "";
+    cJSON *did_item = cJSON_GetObjectItemCaseSensitive(json, "did");
+    if (cJSON_IsString(did_item))
+        snprintf(alice_did, sizeof(alice_did), "%s", did_item->valuestring);
     char *access_token = strdup(
         cJSON_GetObjectItemCaseSensitive(json, "accessJwt")->valuestring);
     cJSON_Delete(json);
     wf_response_free(&response);
     wf_xrpc_client_set_auth(client, access_token);
+
+    /* Stop the mock PLC directory so that submitPlcOperation attempts
+     * fail with a connection error, proving the handler actually reaches
+     * the network rather than silently acknowledging. */
+    stop_mock_plc();
 
     /* getRecommendedDidCredentials names the server's actual PLC rotation
      * key -- the value a real migration client would (correctly) put in
@@ -174,6 +266,7 @@ int main(void) {
     free(access_token);
     wf_xrpc_client_free(client);
     metalbear_server_free(server);
+    stop_mock_plc();
     rmtree(directory);
 
     printf("\n");
