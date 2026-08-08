@@ -629,6 +629,14 @@ wf_status update_handle(void *ctx, const wf_xrpc_request *request,
     size_t handle_length = strlen(handle->valuestring);
     size_t domain_length =
         server->user_domain ? strlen(server->user_domain) : 0;
+    /* The updateHandle lexicon declares no errors array, so the error name
+     * comes from the reference: normalizeAndValidateHandle reports a handle
+     * that is not on a domain the server will serve as UnsupportedDomain
+     * (account-manager.ts:206-210, "Not a supported handle domain"), and
+     * pds/tests/account.test.ts:343-348 asserts exactly that name. MetalBear
+     * only serves handles under its own configured domain (it does not offer
+     * the reference's external custom-domain resolution), so the same
+     * constraint uses the same name. */
     if (domain_length == 0 || handle_length <= domain_length ||
         strcmp(handle->valuestring + handle_length - domain_length,
                server->user_domain) != 0) {
