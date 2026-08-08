@@ -1158,6 +1158,22 @@ int query_param_int(const cJSON *params, const char *name, int fallback,
     return (int)v;
 }
 
+bool query_param_bool(const cJSON *params, const char *name, bool fallback) {
+    const cJSON *p =
+        params ? cJSON_GetObjectItemCaseSensitive(params, name) : NULL;
+    if (cJSON_IsBool(p)) return cJSON_IsTrue(p);
+    if (cJSON_IsString(p) && p->valuestring[0]) {
+        if (strcmp(p->valuestring, "true") == 0 ||
+            strcmp(p->valuestring, "1") == 0)
+            return true;
+        if (strcmp(p->valuestring, "false") == 0 ||
+            strcmp(p->valuestring, "0") == 0)
+            return false;
+    }
+    return fallback;
+}
+
+
 static wf_status request_account_delete(void *ctx,
                                         const wf_xrpc_request *request,
                                         wf_xrpc_response *response) {
