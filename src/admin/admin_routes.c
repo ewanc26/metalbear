@@ -72,9 +72,10 @@ static cJSON *build_invite_code_json(metalbear_server *server,
                                                : fallback_did);
     cJSON_AddStringToObject(
         obj, "createdBy", entry->created_by ? entry->created_by : fallback_did);
-    cJSON_AddNumberToObject(obj, "available", entry->uses_remaining);
     cJSON_AddBoolToObject(obj, "disabled", entry->disabled != 0);
-    cJSON_AddStringToObject(obj, "createdAt", entry->created_at);
+    cJSON_AddStringToObject(
+        obj, "createdAt",
+        entry->created_at ? entry->created_at : "1970-01-01T00:00:00.000Z");
     cJSON *uses = cJSON_CreateArray();
     if (!uses) {
         cJSON_Delete(obj);
@@ -93,6 +94,8 @@ static cJSON *build_invite_code_json(metalbear_server *server,
         }
         metalbear_invite_code_use_entries_free(use_entries, use_count);
     }
+    cJSON_AddNumberToObject(obj, "available",
+                            entry->uses_remaining + (int)use_count);
     cJSON_AddItemToObject(obj, "uses", uses);
     return obj;
 }

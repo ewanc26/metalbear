@@ -158,6 +158,9 @@ char *join_path(const char *directory, const char *name);
 int query_param_int(const cJSON *params, const char *name, int fallback,
                     int min, int max);
 
+/* Boolean query parameter, defaulting to fallback when absent or not a boolean / string bool. */
+bool query_param_bool(const cJSON *params, const char *name, bool fallback);
+
 /* Split `at://<authority>/<collection>/<rkey>` into its three parts, each
  * copied into the caller's buffer. False unless all three are present and
  * fit. */
