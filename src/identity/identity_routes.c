@@ -604,7 +604,7 @@ wf_status get_recommended_did_credentials(void *ctx,
         return WF_ERR_ALLOC;
     }
     cJSON_AddStringToObject(atproto_pds, "type", "AtprotoPersonalDataServer");
-    cJSON_AddStringToObject(atproto_pds, "serviceEndpoint",
+    cJSON_AddStringToObject(atproto_pds, "endpoint",
                             server->public_url ? server->public_url : "");
     cJSON_AddItemToObject(services, "atproto_pds", atproto_pds);
     cJSON_AddItemToObject(root, "services", services);
