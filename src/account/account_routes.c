@@ -6,6 +6,7 @@
 #include "metalbear/repo/blob_store.h"
 #include "wolfram/crypto.h"
 #include "wolfram/plc.h"
+#include "wolfram/syntax.h"
 
 #include <cJSON.h>
 #include <openssl/rand.h>
@@ -174,9 +175,21 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "email")
             : NULL;
+    cJSON *plcOp = request->params
+                       ? cJSON_GetObjectItemCaseSensitive(request->params,
+                                                          "plcOp")
+                       : NULL;
+    /* Reject the signed-PLC-operation import path: it is an entryway-PDS
+     * feature and this host never accepts it, matching the reference's
+     * validateInputsForLocalPds (createAccount.ts:213-215). */
+    if (plcOp && !cJSON_IsNull(plcOp)) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "Unsupported input: \"plcOp\"");
+        return WF_OK;
+    }
     if (!cJSON_IsString(email) || !email->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidEmail",
-                                   "email is required");
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "Email is required");
         return WF_OK;
     }
     if (!cJSON_IsString(handle) || !handle->valuestring[0]) {
@@ -187,6 +200,14 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
     if (!cJSON_IsString(password) || !password->valuestring[0]) {
         wf_xrpc_response_set_error(response, 400, "InvalidPassword",
                                    "password is required");
+        return WF_OK;
+    }
+    /* Match the reference's NEW_PASSWORD_MAX_LENGTH ceiling
+     * (createAccount.ts:217-221). */
+    if (strlen(password->valuestring) > 64) {
+        wf_xrpc_response_set_error(
+            response, 400, "InvalidRequest",
+            "Password too long. Maximum length is 64 characters.");
         return WF_OK;
     }
     LOG_DEBUG("create_account: attempt handle=%s email=%s did=%s",
@@ -215,6 +236,17 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
             return WF_OK;
         }
     }
+    /* Full handle syntax, not just the domain suffix: the reference runs the
+     * handle through baseNormalizeAndValidate before anything else
+     * (createAccount.ts:238-242). The Wolfram validator enforces RFC-style
+     * labels (letters/digits/hyphens, 1-63 per label, no leading/trailing
+     * hyphen), at least two labels, a letter-led final component, and the
+     * 253-character ceiling. */
+    if (wf_syntax_handle_validate(handle->valuestring) != WF_OK) {
+        wf_xrpc_response_set_error(response, 400, "InvalidHandle",
+                                   "invalid handle syntax");
+        return WF_OK;
+    }
     /* Check if the handle is already registered */
     metalbear_account_entry *existing = NULL;
     if (metalbear_account_registry_find_by_handle(
@@ -222,6 +254,18 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
         metalbear_account_entry_free(existing);
         wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
                                    "Handle is already taken");
+        return WF_OK;
+    }
+
+    /* Reject a second signup on an email already registered to an account
+     * (getAccountByEmail, createAccount.ts:256-258). */
+    if (metalbear_account_registry_find_by_email(
+            server->registry, email->valuestring, &existing) == WF_OK) {
+        metalbear_account_entry_free(existing);
+        char msg[512];
+        snprintf(msg, sizeof(msg), "Email already taken: %s",
+                 email->valuestring);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest", msg);
         return WF_OK;
     }
 
@@ -254,7 +298,60 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
     wf_signing_key minted_key;
     bool have_minted_key = false;
     memset(&minted_key, 0, sizeof(minted_key));
-    if (cJSON_IsString(did) && did->valuestring[0]) {
+    bool imported_did = cJSON_IsString(did) && did->valuestring[0];
+    bool example_did = imported_did &&
+                       strncmp(did->valuestring, "did:example:", 12) == 0;
+    if (imported_did && !example_did) {
+        /* Importing a DID requires proving control of it: the reference
+         * rejects an imported DID unless the requester authenticates as
+         * exactly that identity (createAccount.ts:267-275). createAccount is
+         * a public route, so authenticate() never fills in authed_subject;
+         * verify the bearer token against the named DID's own auth store
+         * here, the same way authenticate() does for an authenticated route.
+         * An unknown DID has no auth store and no access token can speak for
+         * it, so this fails closed as AuthRequired. */
+        const char *provided = bearer_token(request->auth_header);
+        bool owns_did = false;
+        if (provided) {
+            char *sub = jwt_subject(provided);
+            if (sub && sub[0] && strcmp(sub, did->valuestring) == 0) {
+                metalbear_account_context *sub_acct =
+                    context_for_did(server, sub);
+                metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
+                if (sub_acct &&
+                    metalbear_auth_verify_access_scope(sub_acct->auth,
+                                                       provided, &scope) ==
+                    WF_OK)
+                    owns_did = true;
+            }
+            free(sub);
+        }
+        if (!owns_did) {
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                     "Missing auth to create account with did: %s",
+                     did->valuestring);
+            wf_xrpc_response_set_error(response, 401, "AuthRequired", msg);
+            return WF_OK;
+        }
+        /* An access token can only speak for an account this host already
+         * holds, so an authenticated import necessarily names an existing DID.
+         * Reject it here rather than letting the flow below deactivate the
+         * owner's live account and then fail the registry insert on the DID
+         * primary key. */
+        metalbear_account_entry *by_did = NULL;
+        if (metalbear_account_registry_find_by_did(server->registry,
+                                                   did->valuestring,
+                                                   &by_did) == WF_OK) {
+            metalbear_account_entry_free(by_did);
+            char msg[512];
+            snprintf(msg, sizeof(msg), "DID already taken: %s",
+                     did->valuestring);
+            wf_xrpc_response_set_error(response, 400, "InvalidRequest", msg);
+            return WF_OK;
+        }
+    }
+    if (example_did) {
         account_did = strdup(did->valuestring);
         if (!account_did) {
             wf_xrpc_response_set_error(response, 500, "InternalError",
@@ -275,7 +372,7 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
         }
         LOG_INFO("create_account: minted PLC DID=%s for handle=%s", account_did,
                  handle->valuestring);
-    } else {
+    } else if (!imported_did) {
         wf_signing_key key;
         if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &key) != WF_OK ||
             wf_signing_key_public_didkey(&key, &account_did) != WF_OK) {
@@ -283,6 +380,8 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
                                        "Could not generate account DID");
             return WF_OK;
         }
+        minted_key = key;
+        have_minted_key = true;
         LOG_INFO("create_account: generated did:key=%s for handle=%s",
                  account_did, handle->valuestring);
     }
@@ -325,6 +424,19 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
 
+    /* A DID-imported account starts deactivated: control of the DID was
+     * proven, but the account's state is not assumed before identity and
+     * activation work is done (createAccount.ts:267-275, 86-88). */
+    if (imported_did && !example_did &&
+        metalbear_account_deactivate(acct->account, NULL) != WF_OK) {
+        metalbear_account_context_close(acct);
+        free(account_did);
+        free(data_dir);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not deactivate imported account");
+        return WF_OK;
+    }
+
     if (metalbear_account_store_email(acct->account, email->valuestring) !=
         WF_OK) {
         metalbear_account_context_close(acct);
@@ -337,8 +449,9 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
 
     /* Record the account in the shared registry with its absolute data
      * directory so future requests can resolve and reopen it. */
-    status = metalbear_account_registry_add(server->registry, account_did,
-                                            handle->valuestring, "", data_dir);
+    status = metalbear_account_registry_add_with_email(
+        server->registry, account_did, handle->valuestring, "", data_dir,
+        email->valuestring, example_did ? 1 : (imported_did ? 0 : 1));
     if (status == WF_ERR_CONFLICT) {
         metalbear_account_context_close(acct);
         free(account_did);
@@ -357,7 +470,9 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
     }
 
     /*
-     * Announce the new account on the host firehose.
+     * Announce the new account on the host firehose -- unless it was
+     * imported deactivated: upstream sequences no account-creation event for
+     * a deactivated account (createAccount.ts:86-88).
      *
      * The registry row is now durable, so the account exists as far as this
      * PDS is concerned; a relay learns of it only from these events. Emitting
@@ -365,7 +480,8 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
      * the DID to its handle and know it is active — without them the first
      * thing the network sees is a commit for a DID it has never heard of.
      */
-    if (metalbear_sequencer_account_activation(server->sequencer, account_did,
+    if (!imported_did &&
+        metalbear_sequencer_account_activation(server->sequencer, account_did,
                                                handle->valuestring,
                                                acct->repo) != WF_OK) {
         /* Not fatal to account creation: the account is already durable, and
@@ -375,7 +491,6 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
                   "did=%s handle=%s; account exists but is unannounced",
                   account_did, handle->valuestring);
     }
-
     /* Make the handle resolvable. Without a `_atproto` TXT record an AppView
      * shows the account as handle.invalid, which is what every account minted
      * under a wildcard-covered subdomain looked like before this. */
