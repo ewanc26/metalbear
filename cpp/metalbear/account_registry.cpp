@@ -122,6 +122,22 @@ wf_status metalbear_account_registry_open(const char *path,
         }
         if (err) sqlite3_free(err);
     }
+    /* Migrate registries that predate the email column. Same duplicate-column
+     * tolerance as the created_at migration above; a fresh database already
+     * carries the column, and existing rows (which were created before email
+     * was tracked) legitimately read back as NULL/empty. */
+    {
+        char *err = nullptr;
+        sqlite3_exec(reg->db.get(),
+                     "ALTER TABLE accounts ADD COLUMN email TEXT;",
+                     nullptr, nullptr, &err);
+        if (err && !std::strstr(err, "duplicate column name")) {
+            sqlite3_free(err);
+            metalbear_account_registry_free(reg);
+            return WF_ERR_INTERNAL;
+        }
+        if (err) sqlite3_free(err);
+    }
     /* Correct timestamps written with SQLite's own datetime('now') shape
      * ("2026-08-07 00:53:26": space-separated, no timezone) instead of the
      * RFC 3339 the datetime lexicon format requires
@@ -162,6 +178,7 @@ void metalbear_account_entry_free(metalbear_account_entry *entry) {
     std::free(entry->handle);
     std::free(entry->password_hash);
     std::free(entry->data_directory);
+    std::free(entry->email);
     std::free(entry->created_at);
     std::free(entry);
 }
@@ -174,6 +191,7 @@ void metalbear_account_entries_free(metalbear_account_entry *entries,
         std::free(entries[i].handle);
         std::free(entries[i].password_hash);
         std::free(entries[i].data_directory);
+        std::free(entries[i].email);
         std::free(entries[i].created_at);
     }
     std::free(entries);
@@ -188,21 +206,25 @@ static wf_status read_entry(sqlite3_stmt *stmt, metalbear_account_entry *out) {
         reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
     const char *dir =
         reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
-    const char *created_at =
+    const char *email =
         reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5));
+    const char *created_at =
+        reinterpret_cast<const char *>(sqlite3_column_text(stmt, 6));
     if (!did || !handle || !pw || !dir) return WF_ERR_INTERNAL;
     out->did = strdup(did);
     out->handle = strdup(handle);
     out->password_hash = strdup(pw);
     out->data_directory = strdup(dir);
+    out->email = strdup(email ? email : "");
     out->created_at = strdup(created_at ? created_at : "");
     out->active = sqlite3_column_int(stmt, 4);
     if (!out->did || !out->handle || !out->password_hash ||
-        !out->data_directory || !out->created_at) {
+        !out->data_directory || !out->email || !out->created_at) {
         std::free(out->did);
         std::free(out->handle);
         std::free(out->password_hash);
         std::free(out->data_directory);
+        std::free(out->email);
         std::free(out->created_at);
         return WF_ERR_ALLOC;
     }
@@ -213,6 +235,14 @@ wf_status metalbear_account_registry_add(metalbear_account_registry *registry,
                                          const char *did, const char *handle,
                                          const char *password_hash,
                                          const char *data_directory) {
+    return metalbear_account_registry_add_with_email(
+        registry, did, handle, password_hash, data_directory, nullptr, 1);
+}
+
+wf_status metalbear_account_registry_add_with_email(
+    metalbear_account_registry *registry, const char *did, const char *handle,
+    const char *password_hash, const char *data_directory, const char *email,
+    int active) {
     if (!registry || !did || !handle || !password_hash || !data_directory)
         return WF_ERR_INVALID_ARG;
 
@@ -222,12 +252,18 @@ wf_status metalbear_account_registry_add(metalbear_account_registry *registry,
     if (sqlite3_prepare_v2(
             registry->db.get(),
             "INSERT INTO accounts(did,handle,password_hash,data_directory,"
-            "created_at) VALUES(?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
+            "active,email,created_at) "
+            "VALUES(?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'));",
             -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, did, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 2, handle, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 3, password_hash, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 4, data_directory, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 5, active ? 1 : 0);
+        if (email && email[0])
+            sqlite3_bind_text(stmt, 6, email, -1, SQLITE_TRANSIENT);
+        else
+            sqlite3_bind_null(stmt, 6);
         int result = sqlite3_step(stmt);
         status = result == SQLITE_DONE         ? WF_OK
                  : result == SQLITE_CONSTRAINT ? WF_ERR_CONFLICT
@@ -249,7 +285,7 @@ metalbear_account_registry_find_by_handle(metalbear_account_registry *registry,
     wf_status status = WF_ERR_INTERNAL;
     if (sqlite3_prepare_v2(
             registry->db.get(),
-            "SELECT did,handle,password_hash,data_directory,active,"
+            "SELECT did,handle,password_hash,data_directory,active,email,"
             "created_at "
             "FROM accounts WHERE handle=?;",
             -1, &stmt, nullptr) == SQLITE_OK) {
@@ -281,11 +317,43 @@ metalbear_account_registry_find_by_did(metalbear_account_registry *registry,
     wf_status status = WF_ERR_INTERNAL;
     if (sqlite3_prepare_v2(
             registry->db.get(),
-            "SELECT did,handle,password_hash,data_directory,active,"
+            "SELECT did,handle,password_hash,data_directory,active,email,"
             "created_at "
             "FROM accounts WHERE did=?;",
             -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, did, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            *out = static_cast<metalbear_account_entry *>(
+                std::calloc(1, sizeof(**out)));
+            if (*out)
+                status = read_entry(stmt, *out);
+            else
+                status = WF_ERR_ALLOC;
+        } else {
+            status = WF_ERR_NOT_FOUND;
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&registry->mutex);
+    return status;
+}
+
+wf_status
+metalbear_account_registry_find_by_email(metalbear_account_registry *registry,
+                                         const char *email,
+                                         metalbear_account_entry **out) {
+    if (!registry || !email || !email[0] || !out) return WF_ERR_INVALID_ARG;
+    *out = nullptr;
+    pthread_mutex_lock(&registry->mutex);
+    sqlite3_stmt *stmt = nullptr;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(
+            registry->db.get(),
+            "SELECT did,handle,password_hash,data_directory,active,email,"
+            "created_at "
+            "FROM accounts WHERE email=?;",
+            -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, email, -1, SQLITE_TRANSIENT);
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             *out = static_cast<metalbear_account_entry *>(
                 std::calloc(1, sizeof(**out)));
@@ -314,7 +382,7 @@ wf_status metalbear_account_registry_list(metalbear_account_registry *registry,
     size_t capacity = 0;
     if (sqlite3_prepare_v2(
             registry->db.get(),
-            "SELECT did,handle,password_hash,data_directory,active,"
+            "SELECT did,handle,password_hash,data_directory,active,email,"
             "created_at "
             "FROM accounts ORDER BY handle;",
             -1, &stmt, nullptr) != SQLITE_OK) {
@@ -361,7 +429,7 @@ wf_status metalbear_account_registry_list_after(
     size_t capacity = 0;
     if (sqlite3_prepare_v2(
             registry->db.get(),
-            "SELECT did,handle,password_hash,data_directory,active,"
+            "SELECT did,handle,password_hash,data_directory,active,email,"
             "created_at "
             "FROM accounts WHERE did > ? ORDER BY did LIMIT ?;",
             -1, &stmt, nullptr) != SQLITE_OK) {

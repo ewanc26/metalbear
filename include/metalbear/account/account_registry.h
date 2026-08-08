@@ -18,6 +18,10 @@ typedef struct metalbear_account_entry {
     char *password_hash;
     char *data_directory;
     int active;
+    /* Login email, used to reject a second signup on the same address
+     * (mirrors the reference's getAccountByEmail). Empty for accounts
+     * created before the column existed. */
+    char *email;
     /* ISO-8601. For accounts created before this field existed, this is the
      * time the registry was migrated to track it, not the true original
      * creation time -- an honest lower bound rather than a fabricated
@@ -44,17 +48,32 @@ wf_status metalbear_account_registry_open(const char *path,
                                           metalbear_account_registry **out);
 void metalbear_account_registry_free(metalbear_account_registry *registry);
 
-/* Register a new account. Returns WF_ERR_CONFLICT if handle is taken. */
+/* Register a new account. Returns WF_ERR_CONFLICT if handle is taken. The
+ * account is stored active with no email -- see the _with_email variant. */
 wf_status metalbear_account_registry_add(metalbear_account_registry *registry,
                                          const char *did, const char *handle,
                                          const char *password_hash,
                                          const char *data_directory);
+
+/* Register a new account, recording its login email and initial active
+ * state (DID-imported accounts are created deactivated). Returns
+ * WF_ERR_CONFLICT if handle is taken. `email` may be NULL/empty. */
+wf_status metalbear_account_registry_add_with_email(
+    metalbear_account_registry *registry, const char *did, const char *handle,
+    const char *password_hash, const char *data_directory, const char *email,
+    int active);
 
 /* Look up an account by handle. Caller must free the returned entry. */
 wf_status
 metalbear_account_registry_find_by_handle(metalbear_account_registry *registry,
                                           const char *handle,
                                           metalbear_account_entry **out);
+
+/* Look up an account by email. Caller must free the returned entry. */
+wf_status
+metalbear_account_registry_find_by_email(metalbear_account_registry *registry,
+                                         const char *email,
+                                         metalbear_account_entry **out);
 
 /* Look up an account by DID. Caller must free the returned entry. */
 wf_status
