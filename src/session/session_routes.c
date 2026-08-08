@@ -199,11 +199,43 @@ wf_status refresh_session(void *ctx, const wf_xrpc_request *request,
                                    "Account has been taken down");
         return WF_OK;
     }
+    /* The account context is resolved from the token's *unverified* `sub`
+     * claim (see authenticate()'s refresh_route path in server.c), so a NULL
+     * context means the token was not even a JWT naming a hosted account: it
+     * failed verification outright, which the reference reports as
+     * InvalidToken rather than ExpiredToken. */
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Malformed token");
+        return WF_OK;
+    }
     metalbear_session_tokens tokens = {0};
-    if (!acct ||
-        metalbear_auth_rotate_refresh(acct->auth, token, &tokens) != WF_OK) {
-        wf_xrpc_response_set_error(response, 401, "ExpiredToken",
-                                   "Refresh token is expired or revoked");
+    wf_status rotate_status =
+        metalbear_auth_rotate_refresh(acct->auth, token, &tokens);
+    if (rotate_status != WF_OK) {
+        if (rotate_status == WF_ERR_PERMISSION) {
+            /* rotate_refresh reports one collapsed WF_ERR_PERMISSION for
+             * both a token that fails signature/claim verification and a
+             * genuine token that was revoked or expired. The public
+             * signature check that can tell them apart is
+             * metalbear_auth_revoke_refresh, whose verification step accepts
+             * expired tokens: a WF_OK probe means the token is authentic but
+             * dead (ExpiredToken), anything else means it failed verification
+             * (InvalidToken). Probing only tokens that already failed to
+             * rotate, so revoking a genuinely live token is impossible. */
+            if (metalbear_auth_revoke_refresh(acct->auth, token) != WF_OK)
+                wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                           "Malformed token");
+            else
+                wf_xrpc_response_set_error(response, 401, "ExpiredToken",
+                                           "Refresh token is expired or revoked");
+        } else if (rotate_status == WF_ERR_INVALID_ARG) {
+            wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                       "Malformed token");
+        } else {
+            wf_xrpc_response_set_error(response, 500, "InternalError",
+                                       "Could not rotate refresh token");
+        }
         return WF_OK;
     }
     wf_status status = set_json(response, session_json(server, acct, &tokens));
