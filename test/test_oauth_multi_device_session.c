@@ -69,12 +69,12 @@ static cJSON *json_response(wf_response *response) {
 }
 
 static char *create_account(wf_xrpc_client *client, const char *handle,
-                            const char *did, const char *password) {
+                            const char *password, char *out_did,
+                            size_t out_did_len) {
     char body[512];
     snprintf(body, sizeof(body),
-             "{\"handle\":\"%s\",\"password\":\"%s\",\"did\":\"%s\","
-             "\"email\":\"%s@example.com\"}",
-             handle, password, did, handle);
+             "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":\"%s@example.com\"}",
+             handle, password, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
                           &response) != WF_OK ||
@@ -85,6 +85,9 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
     cJSON *json = json_response(&response);
     cJSON *access = cJSON_GetObjectItemCaseSensitive(json, "accessJwt");
     char *token = cJSON_IsString(access) ? strdup(access->valuestring) : NULL;
+    cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
+    if (out_did && out_did_len && cJSON_IsString(did))
+        snprintf(out_did, out_did_len, "%s", did->valuestring);
     cJSON_Delete(json);
     wf_response_free(&response);
     return token;
@@ -238,10 +241,14 @@ int main(void) {
     wf_xrpc_client *client = wf_xrpc_client_new(base);
     CHECK(client != NULL);
 
-    char *tok_a = create_account(client, "alice.example.com", "did:plc:alice",
-                                 "alice-secret-pw");
-    char *tok_b = create_account(client, "bob.example.com", "did:plc:bob",
-                                 "bob-secret-pw");
+    char alice_did[128] = "";
+    char bob_did[128] = "";
+    char *tok_a = create_account(client, "alice.example.com",
+                                 "alice-secret-pw", alice_did,
+                                 sizeof(alice_did));
+    char *tok_b = create_account(client, "bob.example.com",
+                                 "bob-secret-pw", bob_did,
+                                 sizeof(bob_did));
     CHECK(tok_a != NULL);
     CHECK(tok_b != NULL);
     free(tok_a);
@@ -269,11 +276,11 @@ int main(void) {
         CHECK(response.status == 200);
         cJSON *json = json_response(&response);
         cJSON *subjects = cJSON_GetObjectItemCaseSensitive(json, "subjects");
-        CHECK(subjects_contains(subjects, "did:plc:alice"));
-        CHECK(subjects_contains(subjects, "did:plc:bob"));
+        CHECK(subjects_contains(subjects, alice_did));
+        CHECK(subjects_contains(subjects, bob_did));
         cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
         CHECK(cJSON_IsString(did) &&
-              strcmp(did->valuestring, "did:plc:bob") == 0);
+              strcmp(did->valuestring, bob_did) == 0);
         cJSON_Delete(json);
         wf_response_free(&response);
     }
@@ -334,8 +341,10 @@ int main(void) {
     if (cookie_ab) {
         wf_http_header hdr = {"Cookie", cookie_ab};
         wf_response response = {0};
+        char signout_body[128];
+        snprintf(signout_body, sizeof(signout_body), "{\"did\":\"%s\"}", alice_did);
         CHECK(oauth_post(client, base, "/oauth/signout",
-                         "{\"did\":\"did:plc:alice\"}", &hdr, 1,
+                         signout_body, &hdr, 1,
                          &response) == WF_OK);
         CHECK(response.status == 200);
         CHECK(response.set_cookie != NULL);
@@ -352,13 +361,13 @@ int main(void) {
     /* ---- (e): the cap evicts the oldest session -------------------------*/
     {
         char *chain = NULL;
-        const char *first_did = "did:plc:cap0";
+        char cap_dids[6][128];
         for (int i = 0; i < 6; i++) {
-            char handle[64], did[32], password[32];
+            char handle[64], password[32];
             snprintf(handle, sizeof(handle), "cap%d.example.com", i);
-            snprintf(did, sizeof(did), "did:plc:cap%d", i);
             snprintf(password, sizeof(password), "cap%d-secret-pw", i);
-            char *t = create_account(client, handle, did, password);
+            char *t = create_account(client, handle, password, cap_dids[i],
+                                     sizeof(cap_dids[i]));
             CHECK(t != NULL);
             free(t);
             char *next = sign_in(client, base, handle, password, chain);
@@ -379,9 +388,9 @@ int main(void) {
             CHECK(cJSON_IsArray(subjects) && cJSON_GetArraySize(subjects) == 5);
             /* The first account signed in (cap0) was evicted; the five most
              * recent (cap1..cap5) remain. */
-            CHECK(!subjects_contains(subjects, first_did));
-            CHECK(subjects_contains(subjects, "did:plc:cap5"));
-            CHECK(subjects_contains(subjects, "did:plc:cap1"));
+            CHECK(!subjects_contains(subjects, cap_dids[0]));
+            CHECK(subjects_contains(subjects, cap_dids[5]));
+            CHECK(subjects_contains(subjects, cap_dids[1]));
             cJSON_Delete(json);
             wf_response_free(&response);
         }

@@ -191,7 +191,6 @@ int main(void) {
                       client, "com.atproto.server.createAccount",
                       "{\"handle\":\"alice.example.com\","
                       "\"password\":\"correct horse battery staple\","
-                      "\"did\":\"did:plc:metalbearproxytest\","
                       "\"email\":\"alice@example.com\"}",
                       &create_response) == WF_OK);
             CHECK(create_response.status == 200);
