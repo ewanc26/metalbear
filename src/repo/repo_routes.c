@@ -1,4 +1,5 @@
 #include "repo_store_internal.h"
+#include "../server_internal.h"
 
 #include "metalbear/repo/blob_store.h"
 
@@ -234,39 +235,7 @@ static void free_owned_strings(char **arr, size_t count) {
  * falls back to the default. `?limit=1&reverse=true` was being served as
  * limit=50, reverse=false.
  */
-static int query_param_int(const cJSON *params, const char *name, int fallback,
-                           int min, int max) {
-    const cJSON *p =
-        params ? cJSON_GetObjectItemCaseSensitive(params, name) : NULL;
-    long v = fallback;
-    if (cJSON_IsNumber(p)) {
-        v = (long)p->valuedouble;
-    } else if (cJSON_IsString(p) && p->valuestring[0]) {
-        char *end = NULL;
-        long parsed = strtol(p->valuestring, &end, 10);
-        if (*end != '\0') return fallback;
-        v = parsed;
-    }
-    if (v < min) v = min;
-    if (v > max) v = max;
-    return (int)v;
-}
 
-static bool query_param_bool(const cJSON *params, const char *name,
-                             bool fallback) {
-    const cJSON *p =
-        params ? cJSON_GetObjectItemCaseSensitive(params, name) : NULL;
-    if (cJSON_IsBool(p)) return cJSON_IsTrue(p);
-    if (cJSON_IsString(p) && p->valuestring[0]) {
-        if (strcmp(p->valuestring, "true") == 0 ||
-            strcmp(p->valuestring, "1") == 0)
-            return true;
-        if (strcmp(p->valuestring, "false") == 0 ||
-            strcmp(p->valuestring, "0") == 0)
-            return false;
-    }
-    return fallback;
-}
 
 /*
  * Run a write's record through the lexicon corpus and report the outcome the

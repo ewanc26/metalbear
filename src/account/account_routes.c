@@ -898,7 +898,6 @@ wf_status reset_password(void *ctx, const wf_xrpc_request *request,
 
 wf_status get_account_invite_codes(void *ctx, const wf_xrpc_request *request,
                                    wf_xrpc_response *response) {
-    (void)request;
     metalbear_server *server = ctx;
     /* The auth callback resolves the DID into authed_subject; use it
      * to look up the account's invite codes. */
@@ -910,19 +909,63 @@ wf_status get_account_invite_codes(void *ctx, const wf_xrpc_request *request,
         cJSON_Delete(codes);
         return WF_ERR_ALLOC;
     }
+    bool include_used = query_param_bool(request->params, "includeUsed", true);
+
     if (did && server->registry) {
         metalbear_invite_code_entry *entries = NULL;
         size_t count = 0;
         if (metalbear_account_registry_get_invite_codes(
                 server->registry, did, &entries, &count) == WF_OK) {
             for (size_t i = 0; i < count; i++) {
+                metalbear_invite_code_use_entry *use_entries = NULL;
+                size_t use_count = 0;
+                metalbear_account_registry_get_invite_code_uses(
+                    server->registry, entries[i].code, &use_entries,
+                    &use_count);
+
+                int available = entries[i].uses_remaining + (int)use_count;
+                if (!include_used && (int)use_count >= available) {
+                    metalbear_invite_code_use_entries_free(use_entries,
+                                                           use_count);
+                    continue;
+                }
+
                 cJSON *obj = cJSON_CreateObject();
-                if (!obj) continue;
+                if (!obj) {
+                    metalbear_invite_code_use_entries_free(use_entries,
+                                                           use_count);
+                    continue;
+                }
                 cJSON_AddStringToObject(obj, "code", entries[i].code);
-                cJSON_AddNumberToObject(obj, "usesAvailable",
-                                        entries[i].uses_remaining);
-                if (entries[i].disabled)
-                    cJSON_AddBoolToObject(obj, "disabled", true);
+                cJSON_AddNumberToObject(obj, "available", available);
+                cJSON_AddBoolToObject(obj, "disabled",
+                                      entries[i].disabled != 0);
+                cJSON_AddStringToObject(
+                    obj, "forAccount",
+                    entries[i].for_account ? entries[i].for_account : did);
+                cJSON_AddStringToObject(
+                    obj, "createdBy",
+                    entries[i].created_by ? entries[i].created_by : "admin");
+                cJSON_AddStringToObject(
+                    obj, "createdAt",
+                    entries[i].created_at ? entries[i].created_at
+                                          : "1970-01-01T00:00:00.000Z");
+
+                cJSON *uses = cJSON_CreateArray();
+                if (uses) {
+                    for (size_t k = 0; k < use_count; k++) {
+                        cJSON *use = cJSON_CreateObject();
+                        if (!use) continue;
+                        cJSON_AddStringToObject(use, "usedBy",
+                                                use_entries[k].used_by);
+                        cJSON_AddStringToObject(use, "usedAt",
+                                                use_entries[k].used_at);
+                        cJSON_AddItemToArray(uses, use);
+                    }
+                }
+                metalbear_invite_code_use_entries_free(use_entries, use_count);
+                cJSON_AddItemToObject(obj, "uses",
+                                      uses ? uses : cJSON_CreateArray());
                 cJSON_AddItemToArray(codes, obj);
             }
             metalbear_invite_code_entries_free(entries, count);
