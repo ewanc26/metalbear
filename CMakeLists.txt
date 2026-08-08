@@ -101,7 +101,7 @@ add_library(
   src/account/account_cache.c
   src/oauth/auth.c
   src/repo/backup.c
-  src/email.c
+  src/email.cpp
   src/oauth/oauth.c
   src/oauth/oauth_routes.c
   src/oauth/oauth_account_routes.c
