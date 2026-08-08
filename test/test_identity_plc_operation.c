@@ -92,14 +92,12 @@ static bool start_mock_plc(unsigned short *out_port) {
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = 0;
-    if (bind(mock_plc.listen_fd, (struct sockaddr *)&addr, sizeof(addr)) !=
-        0) {
+    if (bind(mock_plc.listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         close(mock_plc.listen_fd);
         return false;
     }
     socklen_t len = sizeof(addr);
-    if (getsockname(mock_plc.listen_fd, (struct sockaddr *)&addr, &len) !=
-        0) {
+    if (getsockname(mock_plc.listen_fd, (struct sockaddr *)&addr, &len) != 0) {
         close(mock_plc.listen_fd);
         return false;
     }
@@ -251,14 +249,12 @@ int main(void) {
                  "\"rotationKeys\":[\"%s\"]}}",
                  server_rotation_didkey);
         wf_status submit_st = wf_xrpc_procedure(
-            client, "com.atproto.identity.submitPlcOperation", body,
-            &response);
+            client, "com.atproto.identity.submitPlcOperation", body, &response);
         CHECK(submit_st != WF_OK);
         if (response.status >= 400) {
             cJSON *err = json_response(&response);
             if (err) {
-                CHECK(
-                    cJSON_GetObjectItemCaseSensitive(err, "error") != NULL);
+                CHECK(cJSON_GetObjectItemCaseSensitive(err, "error") != NULL);
                 cJSON_Delete(err);
             }
         }
