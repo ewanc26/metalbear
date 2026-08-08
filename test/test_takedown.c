@@ -140,12 +140,12 @@ static long set_account_takedown(wf_xrpc_client *client, const char *base,
 }
 
 static char *create_account(wf_xrpc_client *client, const char *handle,
-                            const char *did, const char *password) {
+                            const char *password, char *out_did,
+                            size_t out_did_len) {
     char body[512];
     snprintf(body, sizeof(body),
-             "{\"handle\":\"%s\",\"password\":\"%s\",\"did\":\"%s\","
-             "\"email\":\"%s@example.com\"}",
-             handle, password, did, handle);
+             "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":\"%s@example.com\"}",
+             handle, password, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
                           &response) != WF_OK ||
@@ -156,6 +156,9 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
     cJSON *json = json_response(&response);
     cJSON *access = cJSON_GetObjectItemCaseSensitive(json, "accessJwt");
     char *token = cJSON_IsString(access) ? strdup(access->valuestring) : NULL;
+    cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
+    if (out_did && out_did_len && cJSON_IsString(did))
+        snprintf(out_did, out_did_len, "%s", did->valuestring);
     cJSON_Delete(json);
     wf_response_free(&response);
     return token;
@@ -269,12 +272,13 @@ int main(void) {
     wf_xrpc_client *client = wf_xrpc_client_new(base);
     CHECK(client != NULL);
 
-    const char *mallory_did = "did:plc:mallory";
-    const char *victim_did = "did:plc:victim";
-    char *mallory = create_account(client, "mallory.example.com", mallory_did,
-                                   "mallorysecret");
-    char *victim = create_account(client, "victim.example.com", victim_did,
-                                  "victimsecret");
+    char mallory_did[128] = "";
+    char victim_did[128] = "";
+    char *mallory = create_account(client, "mallory.example.com",
+                                   "mallorysecret", mallory_did,
+                                   sizeof(mallory_did));
+    char *victim = create_account(client, "victim.example.com", "victimsecret",
+                                  victim_did, sizeof(victim_did));
     CHECK(mallory != NULL);
     CHECK(victim != NULL);
     if (!mallory || !victim) goto done;

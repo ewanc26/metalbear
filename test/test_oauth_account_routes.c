@@ -62,12 +62,11 @@ static cJSON *json_response(wf_response *response) {
 }
 
 static char *create_account(wf_xrpc_client *client, const char *handle,
-                            const char *did, const char *password) {
+                            const char *password) {
     char body[512];
     snprintf(body, sizeof(body),
-             "{\"handle\":\"%s\",\"password\":\"%s\",\"did\":\"%s\","
-             "\"email\":\"%s@example.com\"}",
-             handle, password, did, handle);
+             "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":\"%s@example.com\"}",
+             handle, password, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
                           &response) != WF_OK ||
@@ -249,9 +248,8 @@ int main(void) {
     CHECK(client != NULL);
 
     char *alice_tok = create_account(client, "alice.example.com",
-                                     "did:plc:alice", "alice-secret-pw");
-    char *bob_tok = create_account(client, "bob.example.com", "did:plc:bob",
-                                   "bob-secret-pw");
+                                     "alice-secret-pw");
+    char *bob_tok = create_account(client, "bob.example.com", "bob-secret-pw");
     CHECK(alice_tok != NULL);
     CHECK(bob_tok != NULL);
 
