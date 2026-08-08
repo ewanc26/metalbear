@@ -147,8 +147,16 @@ wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
     metalbear_account_context *acct =
         cJSON_IsString(did) ? resolve_request_context(server, request) : NULL;
     if (!assert_repo_available(server, acct, request, response)) return WF_OK;
-    /* 'since' is accepted for lexicon compatibility; MetalBear's blob store
-     * does not track per-blob revisions, so all available blobs are listed. */
+    /* `since` is a repo revision TID; the store records each blob's first-seen
+     * rev, so only the blobs seen after it are listed. */
+    cJSON *since_param =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "since")
+            : NULL;
+    const char *since = (cJSON_IsString(since_param) &&
+                         since_param->valuestring[0])
+                            ? since_param->valuestring
+                            : NULL;
     int limit = query_param_int(request->params, "limit", 500, 1, 1000);
     cJSON *cursor_param =
         request->params
@@ -164,7 +172,11 @@ wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
 
     char **all = NULL;
     size_t count = 0;
-    if (metalbear_blob_store_list(acct->blobs, &all, &count) != WF_OK) {
+    wf_status list_status =
+        since ? metalbear_blob_store_list_since(acct->blobs, since, &all,
+                                                &count)
+              : metalbear_blob_store_list(acct->blobs, &all, &count);
+    if (list_status != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not enumerate blobs");
         return WF_OK;

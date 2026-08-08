@@ -342,6 +342,36 @@ static void overlay_local_profile(cJSON *view, const cJSON *record) {
     }
 }
 
+/* Copy the fields an app.bsky.actor.profile record carries onto a locally
+ * served profile view, preserving each one's structure exactly as the record
+ * stores it. Per profile.json: avatar/banner are #blob objects
+ * ({$type, ref:{$link}, mimeType, size}); labels is the record's selfLabels
+ * union; joinedViaStarterPack/pinnedPost are strongRefs. The view's own
+ * $type is deliberately not written — the AppView serves profile views
+ * without one (Un$Typed), and copying the record's $type would be wrong. */
+static void append_profile_record_fields(cJSON *view, const cJSON *record) {
+    if (!cJSON_IsObject(view) || !cJSON_IsObject(record)) return;
+    static const char *const strings[] = {
+        "displayName", "description", "pronouns", "website", "createdAt",
+    };
+    for (size_t i = 0; i < sizeof(strings) / sizeof(strings[0]); i++) {
+        const cJSON *v = cJSON_GetObjectItemCaseSensitive(record, strings[i]);
+        if (!cJSON_IsString(v)) continue;
+        cJSON_DeleteItemFromObjectCaseSensitive(view, strings[i]);
+        cJSON_AddStringToObject(view, strings[i], v->valuestring);
+    }
+    static const char *const objects[] = {
+        "avatar", "banner", "labels", "joinedViaStarterPack", "pinnedPost",
+    };
+    for (size_t i = 0; i < sizeof(objects) / sizeof(objects[0]); i++) {
+        const cJSON *v = cJSON_GetObjectItemCaseSensitive(record, objects[i]);
+        if (!cJSON_IsObject(v)) continue;
+        cJSON_DeleteItemFromObjectCaseSensitive(view, objects[i]);
+        cJSON *copy = cJSON_Duplicate(v, 1);
+        if (copy) cJSON_AddItemToObject(view, objects[i], copy);
+    }
+}
+
 /*
  * Patch `body` with the requester's records newer than `repo_rev`. Returns a
  * heap-allocated replacement body, or NULL to send the upstream response
@@ -871,7 +901,23 @@ wf_status appview_get_profile(void *ctx, const wf_xrpc_request *req,
                 cJSON_AddStringToObject(root, "did", provided_did);
                 cJSON_AddStringToObject(
                     root, "handle", acct->handle ? acct->handle : "unknown");
-                // Add other local profile fields as needed
+                // Enrich from the account's app.bsky.actor.profile record
+                // (literal key "self" per profile.json). An account with no
+                // profile record still gets a valid bare {did, handle} view.
+                char *record_json = NULL, *record_cid = NULL;
+                if (acct->repo &&
+                    metalbear_repo_store_get_record(
+                        acct->repo, "app.bsky.actor.profile", "self",
+                        &record_json, &record_cid) == WF_OK &&
+                    record_json) {
+                    cJSON *record = cJSON_Parse(record_json);
+                    if (record) {
+                        append_profile_record_fields(root, record);
+                        cJSON_Delete(record);
+                    }
+                    free(record_json);
+                }
+                free(record_cid);
 
                 return set_json(resp, root);
             }

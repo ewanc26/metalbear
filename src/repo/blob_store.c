@@ -7,6 +7,8 @@
 
 #include "metalbear/repo/blob_store.h"
 
+#include "wolfram/tid.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -20,6 +22,10 @@ typedef struct metalbear_blob_node {
     size_t len;
     char **refs; /* owned array of owned record URI strings */
     size_t ref_count;
+    /* TID (from wf_tid_now, same process clock as repo commit revs) at which
+     * this blob was first seen; empty when unknown. Sorts by creation order
+     * via strcmp, which is how listBlobs' `since` filter compares. */
+    char rev[15];
     struct metalbear_blob_node *next;
 } metalbear_blob_node;
 
@@ -44,9 +50,17 @@ static char *blob_path(const char *dir, const char *name) {
     return out;
 }
 
-/* Append a node to the store's in-memory index (takes ownership of args). */
+/* Mint the next process TID into `rev`, or clear it on failure. */
+static void blob_tid_now(char rev[15]) {
+    rev[0] = '\0';
+    if (wf_tid_now(rev) != WF_OK) rev[0] = '\0';
+}
+
+/* Append a node to the store's in-memory index (takes ownership of args).
+ * `rev` (may be NULL) is copied into the node's fixed first-seen field. */
 static wf_status blob_node_push(metalbear_blob_store *store, char *cid,
-                                char *mime, unsigned char *data, size_t len) {
+                                char *mime, unsigned char *data, size_t len,
+                                const char *rev) {
     metalbear_blob_node *node = (metalbear_blob_node *)calloc(1, sizeof(*node));
     if (!node) {
         free(cid);
@@ -58,6 +72,7 @@ static wf_status blob_node_push(metalbear_blob_store *store, char *cid,
     node->mime = mime;
     node->data = data;
     node->len = len;
+    if (rev) snprintf(node->rev, sizeof(node->rev), "%s", rev);
     node->next = store->head;
     store->head = node;
     return WF_OK;
@@ -164,6 +179,54 @@ static void load_refs(metalbear_blob_store *store, metalbear_blob_node *n) {
     fclose(f);
 }
 
+/* Path to a blob's first-seen rev sidecar (file-backed stores only). Caller
+ * frees. Returns NULL on allocation failure. */
+static char *blob_rev_path(const char *dir, const char *cid) {
+    char *p = blob_path(dir, cid);
+    if (!p) return NULL;
+    size_t plen = strlen(p);
+    char *grown = (char *)realloc(p, plen + 6); /* ".rev\0" */
+    if (!grown) {
+        free(p);
+        return NULL;
+    }
+    memcpy(grown + plen, ".rev", 5);
+    return grown;
+}
+
+/* Rewrite a node's first-seen rev sidecar to match its in-memory state, or
+ * leave nothing behind when the node has none. Best-effort, like persist_refs.
+ */
+static void persist_rev(metalbear_blob_store *store, metalbear_blob_node *n) {
+    if (!store->file_backed || n->rev[0] == '\0') return;
+    char *path = blob_rev_path(store->dir, n->cid);
+    if (!path) return;
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        fprintf(f, "%s\n", n->rev);
+        fclose(f);
+    }
+    free(path);
+}
+
+/* Load a node's first-seen rev sidecar, if present. Leaves `rev` empty when
+ * the sidecar is absent (a store that predates the tracking). */
+static void load_rev(metalbear_blob_store *store, metalbear_blob_node *n) {
+    char *path = blob_rev_path(store->dir, n->cid);
+    if (!path) return;
+    FILE *f = fopen(path, "rb");
+    free(path);
+    if (!f) return;
+    char line[16];
+    if (fgets(line, sizeof(line), f)) {
+        size_t l = strlen(line);
+        while (l > 0 && (line[l - 1] == '\n' || line[l - 1] == '\r'))
+            line[--l] = '\0';
+        if (l > 0) snprintf(n->rev, sizeof(n->rev), "%s", line);
+    }
+    fclose(f);
+}
+
 /* Read an entire file into a heap buffer (caller frees). Returns WF_OK and sets
  * the output buffer and length; WF_ERR_NOT_FOUND if unopenable; WF_ERR_ALLOC on
  * OOM. */
@@ -239,6 +302,7 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path) {
                 if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
                 if (blob_ends_with(name, ".mime")) continue;
                 if (blob_ends_with(name, ".refs")) continue;
+                if (blob_ends_with(name, ".rev")) continue;
                 if (!blob_cid_is_valid(name)) continue;
 
                 char *datap = blob_path(store->dir, name);
@@ -300,8 +364,11 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path) {
                     continue;
                 }
                 /* Best-effort index load; ignore failures. */
-                if (blob_node_push(store, cid, mime, data, dlen) == WF_OK)
+                if (blob_node_push(store, cid, mime, data, dlen, NULL) ==
+                    WF_OK) {
                     load_refs(store, store->head); /* push inserts at head */
+                    load_rev(store, store->head);
+                }
 
                 free(datap);
                 free(mimep);
@@ -354,13 +421,24 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
             n->data = data_copy;
             n->len = len;
             free(cid_copy);
+            /* A re-upload of a blob whose first-seen rev was never recorded
+             * (e.g. loaded from a store created before rev tracking) records
+             * this upload as its first-seen moment. */
+            if (n->rev[0] == '\0') {
+                blob_tid_now(n->rev);
+                persist_rev(store, n);
+            }
             goto persist;
         }
     }
 
-    if (blob_node_push(store, cid_copy, mime_copy, data_copy, len) != WF_OK) {
+    char rev[15];
+    blob_tid_now(rev);
+    if (blob_node_push(store, cid_copy, mime_copy, data_copy, len, rev) !=
+        WF_OK) {
         return WF_ERR_ALLOC;
     }
+    persist_rev(store, store->head); /* push inserts at head */
 
 persist:
     if (store->file_backed) {
@@ -503,6 +581,11 @@ wf_status metalbear_blob_store_delete(metalbear_blob_store *store,
             remove(refsp);
             free(refsp);
         }
+        char *revp = blob_rev_path(store->dir, cid);
+        if (revp) {
+            remove(revp);
+            free(revp);
+        }
     }
 
     metalbear_blob_node *node = *link;
@@ -549,6 +632,41 @@ void metalbear_blob_store_list_free(char **cids, size_t count) {
     free(cids);
 }
 
+wf_status metalbear_blob_store_list_since(metalbear_blob_store *store,
+                                          const char *since,
+                                          char ***out_cids, size_t *out_count) {
+    if (!store || !since || !out_cids || !out_count) return WF_ERR_INVALID_ARG;
+    *out_cids = NULL;
+    *out_count = 0;
+
+    size_t count = 0;
+    for (metalbear_blob_node *n = store->head; n; n = n->next)
+        if (n->rev[0] != '\0' && strcmp(n->rev, since) > 0) count++;
+    if (count == 0) return WF_OK;
+
+    char **cids = (char **)calloc(count, sizeof(*cids));
+    if (!cids) return WF_ERR_ALLOC;
+    size_t i = 0;
+    wf_status status = WF_OK;
+    for (metalbear_blob_node *n = store->head; n && status == WF_OK;
+         n = n->next) {
+        if (n->rev[0] == '\0' || strcmp(n->rev, since) <= 0) continue;
+        cids[i] = strdup(n->cid);
+        if (!cids[i])
+            status = WF_ERR_ALLOC;
+        else
+            i++;
+    }
+    if (status != WF_OK) {
+        for (size_t j = 0; j < i; j++) free(cids[j]);
+        free(cids);
+        return status;
+    }
+    *out_cids = cids;
+    *out_count = count;
+    return WF_OK;
+}
+
 void metalbear_blob_walk_refs(const cJSON *node,
                               void (*cb)(const char *cid, void *ctx),
                               void *ctx) {
@@ -593,6 +711,12 @@ wf_status metalbear_blob_store_associate(metalbear_blob_store *store,
         return WF_ERR_INVALID_ARG;
     metalbear_blob_node *n = blob_node_find(store, cid);
     if (!n) return WF_ERR_NOT_FOUND;
+    if (n->rev[0] == '\0') {
+        /* First association of a blob that predates rev tracking: record
+         * this association as its first-seen moment. */
+        blob_tid_now(n->rev);
+        persist_rev(store, n);
+    }
     if (refs_index_of(n, record_uri) != n->ref_count)
         return WF_OK; /* already associated */
     wf_status st = refs_append(n, record_uri);

@@ -20,6 +20,12 @@
  * mirroring the reference PDS's record_blob bookkeeping. A file-backed
  * store persists associations in a "<cid>.refs" sidecar.
  *
+ * Each blob also records the TID at which it was first seen — uploaded, or
+ * first associated with a record when the store predates the tracking — so
+ * com.atproto.sync.listBlobs' `since` filter can list only the blobs whose
+ * first-seen rev sorts after a given repo revision (metalbear_blob_store_list_since).
+ * A file-backed store persists the rev in a "<cid>.rev" sidecar.
+ *
  * Ownership: outputs from metalbear_blob_store_get (out_data, out_mime) are
  * heap-allocated and freed with free() by the caller. The CID is the caller's
  * string (e.g. the canonical raw multicodec CID from metalbear_cid_of_bytes).
@@ -86,6 +92,19 @@ wf_status metalbear_blob_store_list(metalbear_blob_store *store,
 /** Free a CID array returned by metalbear_blob_store_list. Safe to call with
  * NULL. */
 void metalbear_blob_store_list_free(char **cids, size_t count);
+
+/*
+ * Enumerate the stored blob CIDs whose first-seen rev sorts strictly after
+ * `since`, a repo revision TID (the value a client passes to
+ * com.atproto.sync.listBlobs as `since`). Blobs with no recorded rev (loaded
+ * from a store created before rev tracking) are never returned here; the
+ * plain metalbear_blob_store_list still returns them. Same ownership and
+ * allocation contract as metalbear_blob_store_list, and the order of CIDs is
+ * unspecified.
+ */
+wf_status metalbear_blob_store_list_since(metalbear_blob_store *store,
+                                          const char *since,
+                                          char ***out_cids, size_t *out_count);
 
 /*
  * Recursively find blob references within a record's JSON value and invoke

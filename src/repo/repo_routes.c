@@ -276,8 +276,9 @@ static bool query_param_bool(const cJSON *params, const char *name,
  * schema and violates it, or when the caller passed validate:true for a
  * collection with no schema. Returns 1 to continue, with *out_status set to
  * the value that belongs in the response's validationStatus and *out_report
- * telling the caller whether to emit that field at all — validate:false means
- * nothing was checked, so the field is omitted rather than guessed.
+ * telling the caller whether to emit that field at all. The field is always
+ * emitted: validate:false means nothing was checked, so it reports "unknown"
+ * rather than omitting the field.
  */
 static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
                         const char *collection, const char *record_json,
@@ -294,7 +295,7 @@ static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
                                    strcmp(validate->valuestring, "true") == 0);
 
     *out_status = METALBEAR_VALIDATION_UNKNOWN;
-    *out_report = !explicit_off;
+    *out_report = true;
     if (explicit_off) return 1;
 
     /* The $type, when present, must name the collection being written to. */
