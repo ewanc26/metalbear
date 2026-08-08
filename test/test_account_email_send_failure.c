@@ -98,7 +98,6 @@ int main(void) {
     CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
                             "{\"handle\":\"alice.example.com\","
                             "\"password\":\"correct horse battery staple\","
-                            "\"did\":\"did:plc:emailfailtest\","
                             "\"email\":\"alice@example.com\"}",
                             &response) == WF_OK);
     CHECK(response.status == 200);

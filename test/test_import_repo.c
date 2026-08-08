@@ -67,13 +67,14 @@ static cJSON *json_response(wf_response *response) {
 }
 
 static wf_status create_test_account(wf_xrpc_client *client,
-                                     char **out_access_token) {
+                                     char **out_access_token,
+                                     char *out_did,
+                                     size_t out_did_len) {
     wf_response response = {0};
     wf_status st =
         wf_xrpc_procedure(client, "com.atproto.server.createAccount",
                           "{\"handle\":\"alice.example.com\","
                           "\"password\":\"correct horse battery staple\","
-                          "\"did\":\"did:plc:metalbeartest\","
                           "\"email\":\"alice@example.com\"}",
                           &response);
     CHECK(st == WF_OK);
@@ -82,6 +83,10 @@ static wf_status create_test_account(wf_xrpc_client *client,
     cJSON *access = cJSON_GetObjectItemCaseSensitive(json, "accessJwt");
     *out_access_token =
         cJSON_IsString(access) ? strdup(access->valuestring) : NULL;
+    cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
+    if (cJSON_IsString(did) && out_did && out_did_len > 0) {
+        snprintf(out_did, out_did_len, "%s", did->valuestring);
+    }
     cJSON_Delete(json);
     wf_response_free(&response);
     return *out_access_token ? WF_OK : WF_ERR_INVALID_ARG;
@@ -119,22 +124,27 @@ int main(void) {
             wf_response response = {0};
 
             char *access_token = NULL;
-            CHECK(create_test_account(client, &access_token) == WF_OK);
+            char did[128] = {0};
+            CHECK(create_test_account(client, &access_token, did, sizeof(did)) == WF_OK);
 
             wf_xrpc_client_set_auth(client, access_token);
+            char create_record_body[256];
+            snprintf(create_record_body, sizeof(create_record_body),
+                     "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
+                     "\"rkey\":\"first\","
+                     "\"record\":{\"$type\":\"app.bsky.feed.post\","
+                     "\"text\":\"hello from import test\","
+                     "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
+                     did);
             CHECK(
                 wf_xrpc_procedure(
                     client, "com.atproto.repo.createRecord",
-                    "{\"repo\":\"did:plc:metalbeartest\","
-                    "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"first\","
-                    "\"record\":{\"$type\":\"app.bsky.feed.post\","
-                    "\"text\":\"hello from import test\","
-                    "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
+                    create_record_body,
                     &response) == WF_OK);
             CHECK(response.status == 200);
             wf_response_free(&response);
 
-            wf_xrpc_param repo_params[] = {{"did", "did:plc:metalbeartest"}};
+            wf_xrpc_param repo_params[] = {{"did", did}};
             CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getRepo",
                                        repo_params, 1, &response) == WF_OK);
             CHECK(response.status == 200 && response.body_len > 0);
@@ -211,7 +221,7 @@ int main(void) {
 
                 /* The record is still readable after the import. */
                 wf_xrpc_param rec_params[] = {
-                    {"repo", "did:plc:metalbeartest"},
+                    {"repo", did},
                     {"collection", "app.bsky.feed.post"},
                     {"rkey", "first"},
                 };
@@ -229,14 +239,17 @@ int main(void) {
                  * verbatim -- so "second" is deleted, "first" survives
                  * untouched, and the head's rev advances past both the
                  * pre-import head and CAR_A's own rev. */
+                char create_second_body[256];
+                snprintf(create_second_body, sizeof(create_second_body),
+                         "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
+                         "\"rkey\":\"second\","
+                         "\"record\":{\"$type\":\"app.bsky.feed.post\","
+                         "\"text\":\"a second post, post-export\","
+                         "\"createdAt\":\"2026-07-19T00:01:00.000Z\"}}",
+                         did);
                 CHECK(wf_xrpc_procedure(
                           client, "com.atproto.repo.createRecord",
-                          "{\"repo\":\"did:plc:metalbeartest\","
-                          "\"collection\":\"app.bsky.feed.post\","
-                          "\"rkey\":\"second\","
-                          "\"record\":{\"$type\":\"app.bsky.feed.post\","
-                          "\"text\":\"a second post, post-export\","
-                          "\"createdAt\":\"2026-07-19T00:01:00.000Z\"}}",
+                          create_second_body,
                           &response) == WF_OK);
                 CHECK(response.status == 200);
                 wf_response_free(&response);
@@ -266,7 +279,7 @@ int main(void) {
 
                 /* "second" (absent from the re-imported CAR_A) is gone. */
                 wf_xrpc_param second_params[] = {
-                    {"repo", "did:plc:metalbeartest"},
+                    {"repo", did},
                     {"collection", "app.bsky.feed.post"},
                     {"rkey", "second"},
                 };
@@ -366,7 +379,8 @@ int main(void) {
             wf_response response = {0};
 
             char *access_token = NULL;
-            CHECK(create_test_account(client, &access_token) == WF_OK);
+            char did[128] = {0};
+            CHECK(create_test_account(client, &access_token, did, sizeof(did)) == WF_OK);
 
             const unsigned char body[] = {0x00, 0x01, 0x02, 0x03};
             wf_xrpc_client_set_auth(client, access_token);
@@ -418,7 +432,8 @@ int main(void) {
             wf_response response = {0};
 
             char *access_token = NULL;
-            CHECK(create_test_account(client, &access_token) == WF_OK);
+            char did[128] = {0};
+            CHECK(create_test_account(client, &access_token, did, sizeof(did)) == WF_OK);
 
             const unsigned char body[] = {0x00, 0x01, 0x02, 0x03};
             CHECK(sizeof(body) > 3);
@@ -493,24 +508,29 @@ int main(void) {
             wf_response response = {0};
 
             char *src_access = NULL;
-            CHECK(create_test_account(src_client, &src_access) == WF_OK);
+            char src_did[128] = {0};
+            CHECK(create_test_account(src_client, &src_access, src_did, sizeof(src_did)) == WF_OK);
             wf_xrpc_client_set_auth(src_client, src_access);
 
             /* getRepo on a headless account with no commits yet fails with
              * RepoNotFound, so give it one record to export first. */
+            char create_src_record_body[256];
+            snprintf(create_src_record_body, sizeof(create_src_record_body),
+                     "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
+                     "\"rkey\":\"first\","
+                     "\"record\":{\"$type\":\"app.bsky.feed.post\","
+                     "\"text\":\"hello from migration bootstrap test\","
+                     "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
+                     src_did);
             CHECK(
                 wf_xrpc_procedure(
                     src_client, "com.atproto.repo.createRecord",
-                    "{\"repo\":\"did:plc:metalbeartest\","
-                    "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"first\","
-                    "\"record\":{\"$type\":\"app.bsky.feed.post\","
-                    "\"text\":\"hello from migration bootstrap test\","
-                    "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
+                    create_src_record_body,
                     &response) == WF_OK);
             CHECK(response.status == 200);
             wf_response_free(&response);
 
-            wf_xrpc_param repo_params[] = {{"did", "did:plc:metalbeartest"}};
+            wf_xrpc_param repo_params[] = {{"did", src_did}};
             CHECK(wf_xrpc_query_params(src_client, "com.atproto.sync.getRepo",
                                        repo_params, 1, &response) == WF_OK);
             CHECK(response.status == 200 && response.body_len > 0);

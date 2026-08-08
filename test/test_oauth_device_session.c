@@ -78,12 +78,12 @@ static bool body_has(const wf_response *response, const char *needle) {
 }
 
 static char *create_account(wf_xrpc_client *client, const char *handle,
-                            const char *did, const char *password) {
+                            const char *password, char *out_did,
+                            size_t out_did_len) {
     char body[512];
     snprintf(body, sizeof(body),
-             "{\"handle\":\"%s\",\"password\":\"%s\",\"did\":\"%s\","
-             "\"email\":\"%s@example.com\"}",
-             handle, password, did, handle);
+             "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":\"%s@example.com\"}",
+             handle, password, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
                           &response) != WF_OK ||
@@ -94,6 +94,9 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
     cJSON *json = json_response(&response);
     cJSON *access = cJSON_GetObjectItemCaseSensitive(json, "accessJwt");
     char *token = cJSON_IsString(access) ? strdup(access->valuestring) : NULL;
+    cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
+    if (out_did && out_did_len && cJSON_IsString(did))
+        snprintf(out_did, out_did_len, "%s", did->valuestring);
     cJSON_Delete(json);
     wf_response_free(&response);
     return token;
@@ -181,12 +184,14 @@ int main(void) {
     wf_xrpc_client *client = wf_xrpc_client_new(base);
     CHECK(client != NULL);
 
-    const char *victim_did = "did:plc:victim";
-    const char *other_did = "did:plc:other";
+    char victim_did[128] = "";
+    char other_did[128] = "";
     char *victim_token = create_account(client, "victim.example.com",
-                                        victim_did, "victim-secret-pw");
-    char *other_token = create_account(client, "other.example.com", other_did,
-                                       "other-secret-pw");
+                                        "victim-secret-pw", victim_did,
+                                        sizeof(victim_did));
+    char *other_token = create_account(client, "other.example.com",
+                                       "other-secret-pw", other_did,
+                                       sizeof(other_did));
     CHECK(victim_token != NULL);
     CHECK(other_token != NULL);
     if (!victim_token || !other_token) goto done;
@@ -288,7 +293,7 @@ int main(void) {
         CHECK(response.set_cookie != NULL);
         CHECK(response.set_cookie && strstr(response.set_cookie, "mb_device="));
         CHECK(response.set_cookie && strstr(response.set_cookie, "HttpOnly"));
-        CHECK(body_has(&response, "\"did\":\"did:plc:victim\""));
+        CHECK(body_has(&response, victim_did));
         device_cookie = extract_cookie_pair(response.set_cookie);
         wf_response_free(&response);
     }
