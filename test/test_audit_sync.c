@@ -80,10 +80,10 @@ static bool json_array_has(const cJSON *arr, const char *s) {
 /* Create an account and copy its access and refresh JWTs out. Returns the
  * HTTP status (200 on success). */
 static long create_account(wf_xrpc_client *client, const char *handle,
-                            const char *password,
-                            char *out_access, size_t access_len,
-                            char *out_refresh, size_t refresh_len,
-                            char *out_did, size_t out_did_len) {
+                           const char *password, char *out_access,
+                           size_t access_len, char *out_refresh,
+                           size_t refresh_len, char *out_did,
+                           size_t out_did_len) {
     char body[256];
     snprintf(body, sizeof(body),
              "{\"handle\":\"%s\",\"password\":\"%s\","
@@ -246,9 +246,9 @@ int main(void) {
     char did_buf[128] = "";
     char access[2048] = "";
     char refresh[2048] = "";
-    CHECK(create_account(client, "audit.example.com", "auditsecret",
-                         access, sizeof(access), refresh, sizeof(refresh),
-                         did_buf, sizeof(did_buf)) == 200);
+    CHECK(create_account(client, "audit.example.com", "auditsecret", access,
+                         sizeof(access), refresh, sizeof(refresh), did_buf,
+                         sizeof(did_buf)) == 200);
     const char *did = did_buf;
     CHECK(access[0] != '\0');
     CHECK(refresh[0] != '\0');
@@ -267,8 +267,8 @@ int main(void) {
     /* The first record is written while only blob1 exists: the blob store
      * first-saw blob1 (its upload TID) strictly before this commit's rev. */
     char rev1[64] = "";
-    CHECK(put_record_with_blob(client, did, "one", cid1, rev1,
-                               sizeof(rev1)) == 200);
+    CHECK(put_record_with_blob(client, did, "one", cid1, rev1, sizeof(rev1)) ==
+          200);
     CHECK(rev1[0] != '\0');
 
     /* Blob2 is uploaded after commit 1, so its first-seen TID sorts after
@@ -279,8 +279,8 @@ int main(void) {
     CHECK(strcmp(cid1, cid2) != 0);
 
     char rev2[64] = "";
-    CHECK(put_record_with_blob(client, did, "two", cid2, rev2,
-                               sizeof(rev2)) == 200);
+    CHECK(put_record_with_blob(client, did, "two", cid2, rev2, sizeof(rev2)) ==
+          200);
     CHECK(rev2[0] != '\0');
 
     /* Without `since`, both blobs are listed. */
@@ -397,10 +397,12 @@ int main(void) {
     /* createRecord: known-schema collection, no validate input. */
     {
         char body[512];
-        snprintf(body, sizeof(body),
+        snprintf(
+            body, sizeof(body),
             "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
             "\"record\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"hello\","
-            "\"createdAt\":\"2026-08-08T00:00:00.000Z\"}}", did);
+            "\"createdAt\":\"2026-08-08T00:00:00.000Z\"}}",
+            did);
         CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord", body,
                                 &response) == WF_OK);
         CHECK(response.status == 200);
@@ -413,7 +415,8 @@ int main(void) {
      * (nothing was checked). */
     {
         char body[512];
-        snprintf(body, sizeof(body),
+        snprintf(
+            body, sizeof(body),
             "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
             "\"record\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"hello\","
             "\"createdAt\":\"2026-08-08T00:00:00.000Z\"},\"validate\":false}",
@@ -430,11 +433,13 @@ int main(void) {
     /* putRecord with validate:false. */
     {
         char body[512];
-        snprintf(body, sizeof(body),
+        snprintf(
+            body, sizeof(body),
             "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
             "\"rkey\":\"pv1\",\"record\":{\"$type\":\"app.bsky.feed.post\","
             "\"text\":\"put\",\"createdAt\":\"2026-08-08T00:00:00.000Z\"},"
-            "\"validate\":false}", did);
+            "\"validate\":false}",
+            did);
         CHECK(wf_xrpc_procedure(client, "com.atproto.repo.putRecord", body,
                                 &response) == WF_OK);
         CHECK(response.status == 200);
@@ -447,20 +452,21 @@ int main(void) {
     /* applyWrites: every create/update result carries the field. */
     {
         char body[512];
-        snprintf(body, sizeof(body),
+        snprintf(
+            body, sizeof(body),
             "{\"repo\":\"%s\",\"writes\":["
             "{\"$type\":\"com.atproto.repo.applyWrites#create\","
             "\"collection\":\"com.example.audit\",\"rkey\":\"aw1\","
             "\"value\":{\"$type\":\"com.example.audit\",\"note\":\"one\"}}],"
-            "\"validate\":false}", did);
+            "\"validate\":false}",
+            did);
         CHECK(wf_xrpc_procedure(client, "com.atproto.repo.applyWrites", body,
                                 &response) == WF_OK);
         CHECK(response.status == 200);
         cJSON *json = json_response(&response);
         cJSON *results = cJSON_GetObjectItemCaseSensitive(json, "results");
         cJSON *entry = cJSON_GetArrayItem(results, 0);
-        cJSON *vs =
-            cJSON_GetObjectItemCaseSensitive(entry, "validationStatus");
+        cJSON *vs = cJSON_GetObjectItemCaseSensitive(entry, "validationStatus");
         CHECK(cJSON_IsString(vs) && strcmp(vs->valuestring, "unknown") == 0);
         cJSON_Delete(json);
         wf_response_free(&response);
@@ -469,19 +475,19 @@ int main(void) {
     {
         char body[512];
         snprintf(body, sizeof(body),
-            "{\"repo\":\"%s\",\"writes\":["
-            "{\"$type\":\"com.atproto.repo.applyWrites#create\","
-            "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"aw2\","
-            "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"two\","
-            "\"createdAt\":\"2026-08-08T00:00:00.000Z\"}}]}", did);
+                 "{\"repo\":\"%s\",\"writes\":["
+                 "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+                 "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"aw2\","
+                 "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"two\","
+                 "\"createdAt\":\"2026-08-08T00:00:00.000Z\"}}]}",
+                 did);
         CHECK(wf_xrpc_procedure(client, "com.atproto.repo.applyWrites", body,
                                 &response) == WF_OK);
         CHECK(response.status == 200);
         cJSON *json = json_response(&response);
         cJSON *results = cJSON_GetObjectItemCaseSensitive(json, "results");
         cJSON *entry = cJSON_GetArrayItem(results, 0);
-        cJSON *vs =
-            cJSON_GetObjectItemCaseSensitive(entry, "validationStatus");
+        cJSON *vs = cJSON_GetObjectItemCaseSensitive(entry, "validationStatus");
         CHECK(cJSON_IsString(vs));
         if (cJSON_IsString(vs))
             CHECK(strcmp(vs->valuestring, "valid") == 0 ||
