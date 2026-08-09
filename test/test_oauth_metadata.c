@@ -203,6 +203,44 @@ static int run(void) {
         WF_CHECK(cJSON_GetArraySize(dpop_algs) == 1);
         WF_CHECK(array_contains_string(dpop_algs, "ES256"));
 
+        /* Fields matching the reference oauth-provider's buildMetadata(): */
+        cJSON *display =
+            cJSON_GetObjectItemCaseSensitive(root, "display_values_supported");
+        WF_CHECK(cJSON_IsArray(display));
+        WF_CHECK(array_contains_string(display, "page"));
+        WF_CHECK(array_contains_string(display, "popup"));
+        WF_CHECK(array_contains_string(display, "touch"));
+
+        cJSON *prompts =
+            cJSON_GetObjectItemCaseSensitive(root, "prompt_values_supported");
+        WF_CHECK(cJSON_IsArray(prompts));
+        WF_CHECK(array_contains_string(prompts, "none"));
+        WF_CHECK(array_contains_string(prompts, "login"));
+        WF_CHECK(array_contains_string(prompts, "consent"));
+        WF_CHECK(array_contains_string(prompts, "select_account"));
+        WF_CHECK(array_contains_string(prompts, "create"));
+
+        cJSON *req_obj_algs = cJSON_GetObjectItemCaseSensitive(
+            root, "request_object_signing_alg_values_supported");
+        WF_CHECK(cJSON_IsArray(req_obj_algs));
+        WF_CHECK(array_contains_string(req_obj_algs, "ES256"));
+        WF_CHECK(array_contains_string(req_obj_algs, "none"));
+
+        cJSON *req_obj_enc_algs = cJSON_GetObjectItemCaseSensitive(
+            root, "request_object_encryption_alg_values_supported");
+        WF_CHECK(cJSON_IsArray(req_obj_enc_algs));
+        WF_CHECK(cJSON_GetArraySize(req_obj_enc_algs) == 0);
+
+        cJSON *req_obj_enc_enc = cJSON_GetObjectItemCaseSensitive(
+            root, "request_object_encryption_enc_values_supported");
+        WF_CHECK(cJSON_IsArray(req_obj_enc_enc));
+        WF_CHECK(cJSON_GetArraySize(req_obj_enc_enc) == 0);
+
+        cJSON *protected =
+            cJSON_GetObjectItemCaseSensitive(root, "protected_resources");
+        WF_CHECK(cJSON_IsArray(protected));
+        WF_CHECK(array_contains_string(protected, "https://pds.example.com"));
+
         cJSON *issuer = cJSON_GetObjectItemCaseSensitive(root, "issuer");
         WF_CHECK(cJSON_IsString(issuer) &&
                  strcmp(issuer->valuestring, "https://pds.example.com") == 0);
@@ -224,6 +262,15 @@ static int run(void) {
             cJSON_GetObjectItemCaseSensitive(pr_root, "resource_documentation");
         WF_CHECK(cJSON_IsString(docs) &&
                  strcmp(docs->valuestring, "https://atproto.com") == 0);
+
+        /* scopes_supported must be an empty array (matching reference PDS's
+         * auth-routes.ts), not ["atproto"]. The "atproto" scope is
+         * advertised in the authorization server metadata instead. */
+        cJSON *pr_scopes =
+            cJSON_GetObjectItemCaseSensitive(pr_root, "scopes_supported");
+        WF_CHECK(cJSON_IsArray(pr_scopes));
+        WF_CHECK(cJSON_GetArraySize(pr_scopes) == 0);
+
         cJSON_Delete(pr_root);
     }
     free(pr_body);
