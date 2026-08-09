@@ -103,7 +103,11 @@
 					/>
 				</div>
 				<label class="flex items-center gap-2 pb-2 text-sm text-slate-300">
-					<input type="checkbox" bind:checked={newPrivileged} class="rounded border-slate-600 bg-slate-800" />
+					<input
+						type="checkbox"
+						bind:checked={newPrivileged}
+						class="rounded border-slate-600 bg-slate-800"
+					/>
 					Privileged
 				</label>
 				<button
@@ -117,7 +121,9 @@
 		</form>
 
 		{#if createError}
-			<p class="mt-4 rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-2.5 text-sm text-red-300">
+			<p
+				class="mt-4 rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-2.5 text-sm text-red-300"
+			>
 				{createError}
 			</p>
 		{/if}
@@ -128,7 +134,9 @@
 			>
 				<p class="mb-2 font-medium">App password created — copy it now, you won't see it again.</p>
 				<div class="flex items-center gap-2">
-					<code class="flex-1 break-all rounded bg-slate-800 px-3 py-1.5 font-mono text-sm text-white">
+					<code
+						class="flex-1 rounded bg-slate-800 px-3 py-1.5 font-mono text-sm break-all text-white"
+					>
 						{createdPassword}
 					</code>
 					<button
