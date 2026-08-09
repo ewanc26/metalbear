@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 /*
  * test_oauth_authorize_info.c — offline coverage for the distinct error
  * codes GET /oauth/authorize/info returns (issue #26 item 3).

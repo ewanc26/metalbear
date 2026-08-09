@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 /*
  * test_oauth_multi_device_session.c — offline coverage for holding more
  * than one signed-in account's device session in the same browser.
