@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 /*
  * test_account_email_send_failure.c — regression coverage for
  * request_email_confirmation and request_email_update silently reporting

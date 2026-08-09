@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 /*
  * test_auth_unknown_subject.c — regression coverage for a NULL-deref crash
  * in authenticate() (src/server.c).

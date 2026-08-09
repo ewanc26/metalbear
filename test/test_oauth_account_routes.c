@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 /*
  * test_oauth_account_routes.c — offline coverage for the account-management
  * listings added for issue #26 item 4: com.metalbear.oauth.listDevices /

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 /*
  * test_audit_moderation.c — offline end-to-end coverage for
  * com.atproto.moderation.createReport, the audit/report trail MetalBear

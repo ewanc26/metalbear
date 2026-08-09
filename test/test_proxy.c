@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 /*
  * test_proxy.c — proves the AppView-proxied request paths (proxy_appview
  * and its generic sibling proxy_fallback, both in server.c) actually put
