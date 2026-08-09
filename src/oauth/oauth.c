@@ -209,18 +209,18 @@ wf_status metalbear_oauth_store_open(const char *path, const char *issuer,
                            "request_uri TEXT PRIMARY KEY,client_id TEXT NOT "
                            "NULL,redirect_uri TEXT NOT NULL,"
                            "scope TEXT NOT NULL,state TEXT,code_challenge TEXT "
-                           "NOT NULL,dpop_jkt TEXT NOT NULL,"
+                           "NOT NULL,dpop_jkt TEXT,"
                            "expires_at INTEGER NOT NULL);"
                            "CREATE TABLE IF NOT EXISTS oauth_code("
                            "code_hash BLOB PRIMARY KEY,client_id TEXT NOT "
                            "NULL,redirect_uri TEXT NOT NULL,"
                            "scope TEXT NOT NULL,code_challenge TEXT NOT "
-                           "NULL,dpop_jkt TEXT NOT NULL,"
+                           "NULL,dpop_jkt TEXT,"
                            "subject TEXT NOT NULL,expires_at INTEGER NOT NULL);"
                            "CREATE TABLE IF NOT EXISTS oauth_refresh("
                            "token_hash BLOB PRIMARY KEY,client_id TEXT NOT "
                            "NULL,scope TEXT NOT NULL,"
-                           "dpop_jkt TEXT NOT NULL,subject TEXT NOT "
+                           "dpop_jkt TEXT,subject TEXT NOT "
                            "NULL,expires_at INTEGER NOT NULL);"
                            "CREATE TABLE IF NOT EXISTS device_session("
                            "token_hash BLOB PRIMARY KEY,subject TEXT NOT NULL,"
@@ -273,9 +273,10 @@ static bool valid_request(const metalbear_oauth_request *request) {
     if (!request || !request->client_id || !request->client_id[0] ||
         !request->redirect_uri || !request->redirect_uri[0] ||
         !request->scope || !request->scope[0] || !request->code_challenge ||
-        strlen(request->code_challenge) != 43 || !request->dpop_jkt ||
-        strlen(request->dpop_jkt) != 43)
+        strlen(request->code_challenge) != 43)
         return false;
+
+    if (request->dpop_jkt && strlen(request->dpop_jkt) != 43) return false;
 
     /* The "atproto" scope token is required for all OAuth flows.
      * Check for it as a space-separated token, not a substring. */
@@ -449,7 +450,7 @@ wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
         state = column_copy(stmt, 3);
         challenge = column_copy(stmt, 4);
         jkt = column_copy(stmt, 5);
-        if (!stored_client || !redirect || !scope || !challenge || !jkt)
+        if (!stored_client || !redirect || !scope || !challenge)
             status = WF_ERR_ALLOC;
         else if (strcmp(stored_client, client_id) != 0)
             status = WF_ERR_PERMISSION;
@@ -626,7 +627,7 @@ wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
                                         const char *dpop_jkt,
                                         metalbear_oauth_grant *out) {
     if (!store || !code || !client_id || !redirect_uri || !code_verifier ||
-        !dpop_jkt || !out)
+        !out)
         return WF_ERR_INVALID_ARG;
     unsigned char hash[32];
     token_hash(code, hash);
@@ -658,11 +659,12 @@ wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
         jkt = column_copy(stmt, 4);
         subject = column_copy(stmt, 5);
         if (!stored_client || !stored_redirect || !scope || !challenge ||
-            !jkt || !subject)
+            !subject)
             status = WF_ERR_ALLOC;
         else if (strcmp(stored_client, client_id) ||
                  strcmp(stored_redirect, redirect_uri) ||
-                 strcmp(challenge, pkce.challenge) || strcmp(jkt, dpop_jkt))
+                 strcmp(challenge, pkce.challenge) ||
+                 (dpop_jkt && (!jkt || strcmp(jkt, dpop_jkt) != 0)))
             status = WF_ERR_PERMISSION;
     }
     sqlite3_finalize(stmt);
@@ -695,7 +697,7 @@ wf_status metalbear_oauth_refresh(metalbear_oauth_store *store,
                                   const char *refresh_token,
                                   const char *client_id, const char *dpop_jkt,
                                   metalbear_oauth_grant *out) {
-    if (!store || !refresh_token || !client_id || !dpop_jkt || !out)
+    if (!store || !refresh_token || !client_id || !out)
         return WF_ERR_INVALID_ARG;
     unsigned char hash[32];
     token_hash(refresh_token, hash);
@@ -721,9 +723,10 @@ wf_status metalbear_oauth_refresh(metalbear_oauth_store *store,
         scope = column_copy(stmt, 1);
         jkt = column_copy(stmt, 2);
         subject = column_copy(stmt, 3);
-        if (!stored_client || !scope || !jkt || !subject)
+        if (!stored_client || !scope || !subject)
             status = WF_ERR_ALLOC;
-        else if (strcmp(stored_client, client_id) || strcmp(jkt, dpop_jkt))
+        else if (strcmp(stored_client, client_id) ||
+                 (dpop_jkt && (!jkt || strcmp(jkt, dpop_jkt) != 0)))
             status = WF_ERR_PERMISSION;
     }
     sqlite3_finalize(stmt);
