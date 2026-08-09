@@ -3,7 +3,6 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import { auth } from '$lib/stores/auth';
 	import { deleteSession } from '$lib/pds';
-	import { page } from '$app/stores';
 
 	let { children } = $props();
 
@@ -29,14 +28,6 @@
 		<a href="/" class="text-sm font-semibold text-white hover:text-emerald-400">
 			MetalBear
 		</a>
-		<div class="hidden items-center gap-4 sm:flex">
-			<a
-				href="/"
-				class="text-sm {$page.url.pathname === '/' ? 'text-emerald-400' : 'text-slate-400 hover:text-slate-200'}"
-			>
-				Status
-			</a>
-		</div>
 	</div>
 
 	<div class="flex items-center gap-4">
