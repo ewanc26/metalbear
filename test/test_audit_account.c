@@ -95,16 +95,16 @@ static long create_account(wf_xrpc_client *client, const char *handle,
                            const char *token, char *err, size_t err_len,
                            char *message, size_t message_len) {
     char body[1400];
-    int off = snprintf(body, sizeof(body), "{\"handle\":\"%s\","
-                                           "\"password\":\"%s\"",
+    int off = snprintf(body, sizeof(body),
+                       "{\"handle\":\"%s\","
+                       "\"password\":\"%s\"",
                        handle, password);
     if (email)
         off += snprintf(body + off, sizeof(body) - off, ",\"email\":\"%s\"",
                         email);
     if (did)
         off += snprintf(body + off, sizeof(body) - off, ",\"did\":\"%s\"", did);
-    if (extra)
-        off += snprintf(body + off, sizeof(body) - off, ",%s", extra);
+    if (extra) off += snprintf(body + off, sizeof(body) - off, ",%s", extra);
     snprintf(body + off, sizeof(body) - off, "}");
     wf_xrpc_client_set_auth(client, token);
     wf_response response = {0};
@@ -127,8 +127,8 @@ static bool create_account_session(wf_xrpc_client *client, const char *handle,
     *out_did = NULL;
     char body[512];
     snprintf(body, sizeof(body),
-             "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":\"%s\"}",
-             handle, password, email);
+             "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":\"%s\"}", handle,
+             password, email);
     wf_response response = {0};
     bool ok = wf_xrpc_procedure(client, "com.atproto.server.createAccount",
                                 body, &response) == WF_OK &&
@@ -228,23 +228,23 @@ int main(void) {
     {
         /* a space inside a label */
         CHECK(create_account(client, "bad label.example.com", "secret123",
-                             "x@example.com", NULL, NULL, NULL, err, sizeof(err),
-                             message, sizeof(message)) == 400);
+                             "x@example.com", NULL, NULL, NULL, err,
+                             sizeof(err), message, sizeof(message)) == 400);
         CHECK(strcmp(err, "InvalidHandle") == 0);
         /* a label cannot lead with a hyphen */
         CHECK(create_account(client, "-alice.example.com", "secret123",
-                             "x@example.com", NULL, NULL, NULL, err, sizeof(err),
-                             message, sizeof(message)) == 400);
+                             "x@example.com", NULL, NULL, NULL, err,
+                             sizeof(err), message, sizeof(message)) == 400);
         CHECK(strcmp(err, "InvalidHandle") == 0);
         /* an empty label */
         CHECK(create_account(client, "alice..example.com", "secret123",
-                             "x@example.com", NULL, NULL, NULL, err, sizeof(err),
-                             message, sizeof(message)) == 400);
+                             "x@example.com", NULL, NULL, NULL, err,
+                             sizeof(err), message, sizeof(message)) == 400);
         CHECK(strcmp(err, "InvalidHandle") == 0);
         /* one bare label is not a handle */
         CHECK(create_account(client, "singlelabel", "secret123",
-                             "x@example.com", NULL, NULL, NULL, err, sizeof(err),
-                             message, sizeof(message)) == 400);
+                             "x@example.com", NULL, NULL, NULL, err,
+                             sizeof(err), message, sizeof(message)) == 400);
         CHECK(strcmp(err, "InvalidHandle") == 0);
     }
 
@@ -252,7 +252,8 @@ int main(void) {
     char *alice_token = NULL;
     char *alice_did = NULL;
     CHECK(create_account_session(client, "alice.example.com", "secret123",
-                                 "alice@example.com", &alice_token, &alice_did));
+                                 "alice@example.com", &alice_token,
+                                 &alice_did));
     CHECK(alice_did != NULL);
     {
         char pw64[65];
@@ -273,29 +274,32 @@ int main(void) {
                              "alice@example.com", NULL, NULL, NULL, err,
                              sizeof(err), message, sizeof(message)) == 400);
         CHECK(strcmp(err, "InvalidRequest") == 0);
-        CHECK(strstr(message, "Email already taken: alice@example.com") != NULL);
+        CHECK(strstr(message, "Email already taken: alice@example.com") !=
+              NULL);
 
         /* ---- (f) DID import demands authentication ----------------------- */
         /* no auth at all */
         CHECK(create_account(client, "dave.example.com", "secret123",
                              "dave@example.com", "did:plc:imported", NULL, NULL,
-                             err, sizeof(err), message, sizeof(message)) == 401);
+                             err, sizeof(err), message,
+                             sizeof(message)) == 401);
         CHECK(strcmp(err, "AuthRequired") == 0);
-        CHECK(strstr(message,
-                     "Missing auth to create account with did: "
-                     "did:plc:imported") != NULL);
+        CHECK(strstr(message, "Missing auth to create account with did: "
+                              "did:plc:imported") != NULL);
 
         /* someone else's identity */
         CHECK(create_account(client, "erin.example.com", "secret123",
-                             "erin@example.com", alice_did, NULL, bob_token, err,
-                             sizeof(err), message, sizeof(message)) == 401);
+                             "erin@example.com", alice_did, NULL, bob_token,
+                             err, sizeof(err), message,
+                             sizeof(message)) == 401);
         CHECK(strcmp(err, "AuthRequired") == 0);
 
         /* the right identity importing a DID this host already holds is
          * refused, and the owner's account is left untouched. */
         CHECK(create_account(client, "frank.example.com", "secret123",
                              "frank@example.com", alice_did, NULL, alice_token,
-                             err, sizeof(err), message, sizeof(message)) == 400);
+                             err, sizeof(err), message,
+                             sizeof(message)) == 400);
         CHECK(strcmp(err, "InvalidRequest") == 0);
         CHECK(strstr(message, "DID already taken") != NULL);
 
@@ -318,8 +322,7 @@ int main(void) {
     }
     {
         char seq_path[512];
-        snprintf(seq_path, sizeof(seq_path), "%s/sequencer.sqlite3",
-                 directory);
+        snprintf(seq_path, sizeof(seq_path), "%s/sequencer.sqlite3", directory);
         CHECK(count_events_mentioning(seq_path, alice_did) >= 1);
     }
 

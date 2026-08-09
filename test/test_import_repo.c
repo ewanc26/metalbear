@@ -68,8 +68,7 @@ static cJSON *json_response(wf_response *response) {
 }
 
 static wf_status create_test_account(wf_xrpc_client *client,
-                                     char **out_access_token,
-                                     char *out_did,
+                                     char **out_access_token, char *out_did,
                                      size_t out_did_len) {
     wf_response response = {0};
     wf_status st =
@@ -126,7 +125,8 @@ int main(void) {
 
             char *access_token = NULL;
             char did[128] = {0};
-            CHECK(create_test_account(client, &access_token, did, sizeof(did)) == WF_OK);
+            CHECK(create_test_account(client, &access_token, did,
+                                      sizeof(did)) == WF_OK);
 
             wf_xrpc_client_set_auth(client, access_token);
             char create_record_body[256];
@@ -137,11 +137,8 @@ int main(void) {
                      "\"text\":\"hello from import test\","
                      "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
                      did);
-            CHECK(
-                wf_xrpc_procedure(
-                    client, "com.atproto.repo.createRecord",
-                    create_record_body,
-                    &response) == WF_OK);
+            CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                                    create_record_body, &response) == WF_OK);
             CHECK(response.status == 200);
             wf_response_free(&response);
 
@@ -241,17 +238,17 @@ int main(void) {
                  * untouched, and the head's rev advances past both the
                  * pre-import head and CAR_A's own rev. */
                 char create_second_body[256];
-                snprintf(create_second_body, sizeof(create_second_body),
-                         "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
-                         "\"rkey\":\"second\","
-                         "\"record\":{\"$type\":\"app.bsky.feed.post\","
-                         "\"text\":\"a second post, post-export\","
-                         "\"createdAt\":\"2026-07-19T00:01:00.000Z\"}}",
-                         did);
-                CHECK(wf_xrpc_procedure(
-                          client, "com.atproto.repo.createRecord",
-                          create_second_body,
-                          &response) == WF_OK);
+                snprintf(
+                    create_second_body, sizeof(create_second_body),
+                    "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
+                    "\"rkey\":\"second\","
+                    "\"record\":{\"$type\":\"app.bsky.feed.post\","
+                    "\"text\":\"a second post, post-export\","
+                    "\"createdAt\":\"2026-07-19T00:01:00.000Z\"}}",
+                    did);
+                CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                                        create_second_body,
+                                        &response) == WF_OK);
                 CHECK(response.status == 200);
                 wf_response_free(&response);
 
@@ -381,7 +378,8 @@ int main(void) {
 
             char *access_token = NULL;
             char did[128] = {0};
-            CHECK(create_test_account(client, &access_token, did, sizeof(did)) == WF_OK);
+            CHECK(create_test_account(client, &access_token, did,
+                                      sizeof(did)) == WF_OK);
 
             const unsigned char body[] = {0x00, 0x01, 0x02, 0x03};
             wf_xrpc_client_set_auth(client, access_token);
@@ -434,7 +432,8 @@ int main(void) {
 
             char *access_token = NULL;
             char did[128] = {0};
-            CHECK(create_test_account(client, &access_token, did, sizeof(did)) == WF_OK);
+            CHECK(create_test_account(client, &access_token, did,
+                                      sizeof(did)) == WF_OK);
 
             const unsigned char body[] = {0x00, 0x01, 0x02, 0x03};
             CHECK(sizeof(body) > 3);
@@ -510,7 +509,8 @@ int main(void) {
 
             char *src_access = NULL;
             char src_did[128] = {0};
-            CHECK(create_test_account(src_client, &src_access, src_did, sizeof(src_did)) == WF_OK);
+            CHECK(create_test_account(src_client, &src_access, src_did,
+                                      sizeof(src_did)) == WF_OK);
             wf_xrpc_client_set_auth(src_client, src_access);
 
             /* getRepo on a headless account with no commits yet fails with
@@ -523,11 +523,9 @@ int main(void) {
                      "\"text\":\"hello from migration bootstrap test\","
                      "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
                      src_did);
-            CHECK(
-                wf_xrpc_procedure(
-                    src_client, "com.atproto.repo.createRecord",
-                    create_src_record_body,
-                    &response) == WF_OK);
+            CHECK(wf_xrpc_procedure(src_client, "com.atproto.repo.createRecord",
+                                    create_src_record_body,
+                                    &response) == WF_OK);
             CHECK(response.status == 200);
             wf_response_free(&response);
 
