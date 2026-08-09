@@ -509,7 +509,7 @@ static int run(void) {
                       "application/x-www-form-urlencoded", form, &body, &len,
                       &status) == 0);
     WF_CHECK(status == 200);
-    WF_CHECK(body && has_bytes(body, len, "\"access_token\"") != NULL);
+    WF_CHECK(body && has_bytes(body, len, "\"access_token\"") != 0);
     free(body);
     body = NULL;
     free(form);
@@ -570,7 +570,7 @@ static int run(void) {
                       "application/x-www-form-urlencoded", form, &body, &len,
                       &status) == 0);
     WF_CHECK(status == 400);
-    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
     body = NULL;
     free(form);
@@ -598,7 +598,7 @@ static int run(void) {
                       "application/x-www-form-urlencoded", form, &body, &len,
                       &status) == 0);
     WF_CHECK(status == 400);
-    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
     body = NULL;
     free(form);
@@ -627,7 +627,7 @@ static int run(void) {
                       "application/x-www-form-urlencoded", form, &body, &len,
                       &status) == 0);
     WF_CHECK(status == 400);
-    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
     body = NULL;
     free(form);
@@ -655,7 +655,7 @@ static int run(void) {
                       "application/x-www-form-urlencoded", form, &body, &len,
                       &status) == 0);
     WF_CHECK(status == 400);
-    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
     body = NULL;
     free(form);
@@ -681,7 +681,7 @@ static int run(void) {
                       "application/x-www-form-urlencoded", form, &body, &len,
                       &status) == 0);
     WF_CHECK(status == 400);
-    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
     body = NULL;
     free(form);
@@ -711,7 +711,7 @@ static int run(void) {
                       "application/x-www-form-urlencoded", form, &body, &len,
                       &status) == 0);
     WF_CHECK(status == 400);
-    WF_CHECK(body && has_bytes(body, len, "invalid_client") != NULL);
+    WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
     body = NULL;
     free(form);
