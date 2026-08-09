@@ -265,9 +265,10 @@ static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
 
     *out_status = METALBEAR_VALIDATION_UNKNOWN;
     *out_report = true;
-    if (explicit_off) return 1;
 
-    /* The $type, when present, must name the collection being written to. */
+    /* The $type, when present, must name the collection being written to.
+     * This check applies regardless of validate: the reference enforces it
+     * even when the caller passes validate:false. */
     cJSON *parsed = cJSON_Parse(record_json);
     cJSON *type =
         parsed ? cJSON_GetObjectItemCaseSensitive(parsed, "$type") : NULL;
@@ -280,6 +281,11 @@ static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
         return 0;
     }
     cJSON_Delete(parsed);
+
+    if (explicit_off) {
+        *out_report = false;
+        return 1;
+    }
 
     /* The reference reports every record problem as a plain InvalidRequest
      * carrying a descriptive message — its InvalidRecordError is an internal
@@ -458,11 +464,10 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
      * can be dissociated afterward — putRecord upserts by rkey and there is
      * no other way to learn the prior value once the store has overwritten
      * it. Absent (WF_ERR_NOT_FOUND) simply means this is a create. */
-    char *old_json = NULL, *old_cid_unused = NULL;
+    char *old_json = NULL, *old_cid = NULL;
     (void)metalbear_repo_store_get_record(s, collection->valuestring,
                                           rkey->valuestring, &old_json,
-                                          &old_cid_unused);
-    free(old_cid_unused);
+                                          &old_cid);
 
     char *uri = NULL, *cid = NULL;
     wf_status st = metalbear_repo_store_put_record(
@@ -485,11 +490,15 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
     if (report_status)
         cJSON_AddStringToObject(out, "validationStatus",
                                 validation_status_text(vstatus));
-    add_commit_meta(s, out);
+    /* No-op putRecord: the reference omits `commit` when the new CID is
+     * identical to the existing one. */
+    if (!old_cid || !cid || strcmp(old_cid, cid) != 0)
+        add_commit_meta(s, out);
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
     free(uri);
     free(cid);
+    free(old_cid);
     if (!js) return WF_ERR_ALLOC;
     wf_xrpc_response_set_body(resp, js, strlen(js));
     free(js);
