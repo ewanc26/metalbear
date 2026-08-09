@@ -158,7 +158,8 @@ char *join_path(const char *directory, const char *name);
 int query_param_int(const cJSON *params, const char *name, int fallback,
                     int min, int max);
 
-/* Boolean query parameter, defaulting to fallback when absent or not a boolean / string bool. */
+/* Boolean query parameter, defaulting to fallback when absent or not a boolean
+ * / string bool. */
 bool query_param_bool(const cJSON *params, const char *name, bool fallback);
 
 /* Split `at://<authority>/<collection>/<rkey>` into its three parts, each
@@ -192,6 +193,12 @@ const char *account_status_string(metalbear_server *server,
 
 /* Serialize `root` (consumed) into `response` as the XRPC JSON body. */
 wf_status set_json(wf_xrpc_response *response, cJSON *root);
+
+/* Parse HTTP Basic `admin:<password>` from the Authorization header and
+ * compare it (constant-time) against the configured admin password. True
+ * only when a password is configured AND the header matches exactly. Gates
+ * /metrics and /_debug/health in src/ops/status.c. */
+bool admin_authenticated(metalbear_server *server, const wf_xrpc_request *req);
 
 /* Resolve an XRPC request's bearer token to its account context. Owned by
  * the cache, never freed by the caller. NULL when unauthenticated or the
