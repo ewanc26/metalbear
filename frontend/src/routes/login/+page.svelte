@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
+	import AuthShell from '$lib/components/AuthShell.svelte';
 
 	let identifier = $state('');
 	let password = $state('');
@@ -22,15 +23,6 @@
 		return unsub;
 	});
 
-	/*
-	 * The consent screen's "Approve" step needs an OAuth device-session
-	 * cookie (see signInDevice's doc comment), which this regular JWT login
-	 * never establishes on its own -- so when this sign-in exists to get
-	 * back to /oauth/consent, sign in for a device session too, with the
-	 * same credentials, before leaving this page. Skipping this silently
-	 * would work right up until the user clicks Approve, where it would
-	 * loop back to the consent page with nothing having actually happened.
-	 */
 	function isOauthRedirect(target: string): boolean {
 		return target.startsWith('/oauth/consent');
 	}
@@ -69,12 +61,10 @@
 	<title>Sign in — MetalBear</title>
 </svelte:head>
 
-<main class="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
-	<h1 class="mb-2 text-2xl font-semibold text-white">Sign in</h1>
-	<p class="mb-8 text-sm text-slate-400">
-		Use your account handle or email and an app password to sign in.
-	</p>
-
+<AuthShell
+	title="Sign in"
+	subtitle="Use your account handle or email and an app password to sign in."
+>
 	<form onsubmit={handleSubmit} class="flex flex-col gap-5">
 		<div>
 			<label for="identifier" class="mb-1.5 block text-sm font-medium text-slate-300"
@@ -128,7 +118,7 @@
 		</button>
 	</form>
 
-	<p class="mt-6 text-center text-sm text-slate-500">
+	<p class="mt-4 text-center text-sm text-slate-500">
 		<a href="/" class="text-emerald-500 hover:text-emerald-400">← Back to status</a>
 	</p>
-</main>
+</AuthShell>
