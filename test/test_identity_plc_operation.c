@@ -26,7 +26,9 @@
 #include "wolfram/xrpc.h"
 
 #include <cJSON.h>
+#include <errno.h>
 #include <ftw.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,6 +70,14 @@ static struct {
 static void *mock_plc_serve(void *arg) {
     (void)arg;
     while (mock_plc.running) {
+        /* Poll with a timeout instead of blocking in accept(): on Linux a
+         * close() from another thread does not reliably wake a blocking
+         * accept(), which would wedge stop_mock_plc's pthread_join. */
+        struct pollfd pfd = {.fd = mock_plc.listen_fd, .events = POLLIN};
+        int pr = poll(&pfd, 1, 50);
+        if (pr < 0 && errno == EINTR) continue;
+        if (pr <= 0 || !mock_plc.running) continue;
+
         int fd = accept(mock_plc.listen_fd, NULL, NULL);
         if (fd < 0) break;
 
