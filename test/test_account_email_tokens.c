@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 /*
  * test_account_email_tokens.c — coverage for the email-token bulk-deletion
  * helpers added for admin.updateAccountEmail/updateAccountPassword parity:

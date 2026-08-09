@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 #include "metalbear/oauth/oauth_routes.h"
 #include "metalbear/repo/key_rotation.h"
 #include "wolfram/crypto.h"
