@@ -82,9 +82,10 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
                             const char *password, char *out_did,
                             size_t out_did_len) {
     char body[512];
-    snprintf(body, sizeof(body),
-             "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":\"%s@example.com\"}",
-             handle, password, handle);
+    snprintf(
+        body, sizeof(body),
+        "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":\"%s@example.com\"}",
+        handle, password, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
                           &response) != WF_OK ||
@@ -187,12 +188,12 @@ int main(void) {
 
     char victim_did[128] = "";
     char other_did[128] = "";
-    char *victim_token = create_account(client, "victim.example.com",
-                                        "victim-secret-pw", victim_did,
-                                        sizeof(victim_did));
-    char *other_token = create_account(client, "other.example.com",
-                                       "other-secret-pw", other_did,
-                                       sizeof(other_did));
+    char *victim_token =
+        create_account(client, "victim.example.com", "victim-secret-pw",
+                       victim_did, sizeof(victim_did));
+    char *other_token =
+        create_account(client, "other.example.com", "other-secret-pw",
+                       other_did, sizeof(other_did));
     CHECK(victim_token != NULL);
     CHECK(other_token != NULL);
     if (!victim_token || !other_token) goto done;

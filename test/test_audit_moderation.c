@@ -75,8 +75,8 @@ static void error_name(wf_response *response, char *out, size_t out_len) {
 }
 
 static char *create_account(wf_xrpc_client *client, const char *handle,
-                            const char *password,
-                            char *out_did, size_t out_did_len) {
+                            const char *password, char *out_did,
+                            size_t out_did_len) {
     char body[512];
     snprintf(body, sizeof(body),
              "{\"handle\":\"%s\",\"password\":\"%s\","
@@ -142,8 +142,9 @@ int main(void) {
     CHECK(client != NULL);
 
     char reporter_did[256] = {0};
-    char *reporter = create_account(client, "reporter.example.com", "reportersecret",
-                                    reporter_did, sizeof(reporter_did));
+    char *reporter =
+        create_account(client, "reporter.example.com", "reportersecret",
+                       reporter_did, sizeof(reporter_did));
     CHECK(reporter != NULL);
     if (!reporter) goto done;
     wf_xrpc_client_set_auth(client, reporter);
@@ -219,10 +220,11 @@ int main(void) {
     /* ---- (c) unknown reasonType ----------------------------------------- */
     {
         char body[512];
-        snprintf(body, sizeof(body),
-                 "{\"reasonType\":\"com.atproto.moderation.defs#reasonTotallyFake\","
-                 "\"subject\":{\"did\":\"%s\"}}",
-                 reporter_did);
+        snprintf(
+            body, sizeof(body),
+            "{\"reasonType\":\"com.atproto.moderation.defs#reasonTotallyFake\","
+            "\"subject\":{\"did\":\"%s\"}}",
+            reporter_did);
         CHECK(create_report(client, body, &response) == 400);
         error_name(&response, err, sizeof(err));
         CHECK(strcmp(err, "InvalidRequest") == 0);
@@ -237,7 +239,8 @@ int main(void) {
      * touches it. */
     {
         char body[512];
-        snprintf(body, sizeof(body), "{\"subject\":{\"did\":\"%s\"}}", reporter_did);
+        snprintf(body, sizeof(body), "{\"subject\":{\"did\":\"%s\"}}",
+                 reporter_did);
         CHECK(create_report(client, body, &response) == 400);
         error_name(&response, err, sizeof(err));
         CHECK(strcmp(err, "InvalidRequest") == 0);
