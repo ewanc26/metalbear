@@ -66,7 +66,7 @@ jobs:
       - name: Install clang-format
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-format
+          sudo apt-get install -y --no-install-recommends clang-format-18
 
       - name: Determine diff base
         id: base
@@ -91,7 +91,10 @@ jobs:
           # failing the job with no diagnostic. The whole tree is fully
           # clang-format-clean as of the repo-wide reformat, so checking a
           # changed file in full is equivalent to checking just its changed
-          # lines and needs no wrapper script at all.
+          # lines and needs no wrapper script at all. The version is pinned
+          # to clang-format-18 because ubuntu-latest's unpinned clang-format
+          # drifts: a newer one re-flags pre-existing lines in files that only
+          # picked up a small edit, failing CI on content nobody touched.
           CHANGED="$(git diff --name-only --diff-filter=d "$BASE" -- '*.c' '*.h' '*.cpp' '*.hpp' '*.cc')"
           if [ -z "$CHANGED" ]; then
             echo "No C/C++ files changed."
@@ -101,7 +104,7 @@ jobs:
           FAIL=0
           while IFS= read -r f; do
             [ -f "$f" ] || continue
-            clang-format --dry-run --Werror -style=file "$f" || FAIL=1
+            clang-format-18 --dry-run --Werror -style=file "$f" || FAIL=1
           done <<< "$CHANGED"
           if [ "$FAIL" -ne 0 ]; then
             echo "::error::One or more changed files are not clang-format clean (see errors above). Run: clang-format -i <file>, review, and commit the result."
