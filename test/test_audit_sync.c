@@ -218,6 +218,13 @@ static void expect_validation_status(wf_response *response, char *out,
     cJSON_Delete(json);
 }
 
+static void expect_no_validation_status(wf_response *response) {
+    cJSON *json = json_response(response);
+    cJSON *vs = cJSON_GetObjectItemCaseSensitive(json, "validationStatus");
+    CHECK(vs == NULL);
+    cJSON_Delete(json);
+}
+
 int main(void) {
     char directory[] = "/tmp/metalbear-audit-sync-XXXXXX";
     CHECK(mkdtemp(directory) != NULL);
@@ -411,8 +418,8 @@ int main(void) {
         wf_response_free(&response);
     }
 
-    /* createRecord with validate:false still reports the field, as "unknown"
-     * (nothing was checked). */
+    /* createRecord with validate:false omits the field (reference behaviour):
+     * nothing was checked, so there is no status to report. */
     {
         char body[512];
         snprintf(
@@ -424,9 +431,7 @@ int main(void) {
         CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord", body,
                                 &response) == WF_OK);
         CHECK(response.status == 200);
-        char vs[16];
-        expect_validation_status(&response, vs, sizeof(vs));
-        CHECK(strcmp(vs, "unknown") == 0);
+        expect_no_validation_status(&response);
         wf_response_free(&response);
     }
 
@@ -443,13 +448,12 @@ int main(void) {
         CHECK(wf_xrpc_procedure(client, "com.atproto.repo.putRecord", body,
                                 &response) == WF_OK);
         CHECK(response.status == 200);
-        char vs[16];
-        expect_validation_status(&response, vs, sizeof(vs));
-        CHECK(strcmp(vs, "unknown") == 0);
+        expect_no_validation_status(&response);
         wf_response_free(&response);
     }
 
-    /* applyWrites: every create/update result carries the field. */
+    /* applyWrites with validate:false: every create/update result omits the
+     * field. */
     {
         char body[512];
         snprintf(
@@ -467,7 +471,7 @@ int main(void) {
         cJSON *results = cJSON_GetObjectItemCaseSensitive(json, "results");
         cJSON *entry = cJSON_GetArrayItem(results, 0);
         cJSON *vs = cJSON_GetObjectItemCaseSensitive(entry, "validationStatus");
-        CHECK(cJSON_IsString(vs) && strcmp(vs->valuestring, "unknown") == 0);
+        CHECK(vs == NULL);
         cJSON_Delete(json);
         wf_response_free(&response);
     }
