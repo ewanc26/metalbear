@@ -90,37 +90,34 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
     return token;
 }
 
-/* createAccount's route-specific budget is 100/300s, IP-keyed — shared with
- * whatever real account creations this same test process already made.
- * `already_spent` is how many of those 100 tokens are already gone by the
- * time this runs, so it must run last, after every real createAccount call
- * this test needs. An invalid body (no handle/password/etc.) reaches the
- * handler and gets a 400 — the rate limiter runs before that, so it is
- * charged all the same. */
-static int run_create_account_limit(wf_xrpc_client *client, int already_spent) {
+/* createAccount's route-specific budget is 100/300s, IP-keyed. An invalid
+ * body (no handle/password/etc.) reaches the handler and gets a 400 — the
+ * rate limiter runs before that, so it is charged all the same. The token
+ * bucket refills 0.33/s, so on a slow runner the budget takes a few extra
+ * requests to bottom out; loop until the limiter actually rejects rather
+ * than assuming the exact 100-request count exhausts it. */
+static int run_create_account_limit(wf_xrpc_client *client) {
     int failures_before = failures;
     wf_response response = {0};
-    int last_status = 0;
-    int remaining = 100 - already_spent;
+    bool reached_handler = false;
+    wf_status s = WF_OK;
+    int attempts = 0;
 
-    for (int i = 0; i < remaining; i++) {
+    for (; attempts < 400; attempts++) {
         wf_response_free(&response);
-        wf_status s = wf_xrpc_procedure(
-            client, "com.atproto.server.createAccount", "{}", &response);
-        last_status = (int)response.status;
+        s = wf_xrpc_procedure(client, "com.atproto.server.createAccount", "{}",
+                              &response);
+        if (s == WF_ERR_HTTP && response.status == 429) break;
         if (s != WF_OK && s != WF_ERR_HTTP) {
             fprintf(stderr,
-                    "FAIL createAccount attempt %d: transport error %d\n", i,
-                    (int)s);
+                    "FAIL createAccount attempt %d: transport error %d\n",
+                    attempts, (int)s);
             failures++;
         }
+        if (s == WF_ERR_HTTP && response.status == 400) reached_handler = true;
     }
-    CHECK(last_status == 400); /* the last one still reached the handler */
-
-    wf_response_free(&response);
-    wf_status s = wf_xrpc_procedure(client, "com.atproto.server.createAccount",
-                                    "{}", &response);
     CHECK(s == WF_ERR_HTTP && response.status == 429);
+    CHECK(reached_handler);
     cJSON *body = cJSON_ParseWithLength(response.body ? response.body : "",
                                         response.body_len);
     cJSON *err = body ? cJSON_GetObjectItemCaseSensitive(body, "error") : NULL;
@@ -423,7 +420,7 @@ int main(void) {
                    "identifier+IP-keyed)\n");
         }
 
-        if (run_create_account_limit(client, 1) != 0) {
+        if (run_create_account_limit(client) != 0) {
             fprintf(stderr, "createAccount rate limit test failed\n");
         } else {
             printf("PASS: createAccount rate limit (100/300s, IP-keyed)\n");
