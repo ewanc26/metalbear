@@ -484,16 +484,22 @@ static wf_status parse_form_body(const wf_xrpc_request *req, cJSON **out) {
         if (!equals || equals == start ||
             (status = form_decode(start, (size_t)(equals - start), &key)) !=
                 WF_OK ||
-            !key[0] || cJSON_GetObjectItemCaseSensitive(form, key) ||
+            !key[0] ||
             (status = form_decode(equals + 1,
                                   pair_len - (size_t)(equals - start) - 1,
-                                  &value)) != WF_OK ||
-            !cJSON_AddStringToObject(form, key, value)) {
-            if (status == WF_OK) status = WF_ERR_ALLOC;
+                                  &value)) != WF_OK) {
             free(key);
             free(value);
             cJSON_Delete(form);
             return status;
+        }
+        cJSON *existing = cJSON_GetObjectItemCaseSensitive(form, key);
+        if (existing) cJSON_DeleteItemFromObject(form, key);
+        if (!cJSON_AddStringToObject(form, key, value)) {
+            free(key);
+            free(value);
+            cJSON_Delete(form);
+            return WF_ERR_ALLOC;
         }
         free(key);
         free(value);
@@ -523,8 +529,7 @@ static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
     cJSON *dpop_jkt = cJSON_GetObjectItemCaseSensitive(body, "dpop_jkt");
 
     if (!cJSON_IsString(client_id) || !cJSON_IsString(redirect_uri) ||
-        !cJSON_IsString(scope) || !cJSON_IsString(code_challenge) ||
-        !cJSON_IsString(dpop_jkt)) {
+        !cJSON_IsString(scope) || !cJSON_IsString(code_challenge)) {
         cJSON_Delete(body);
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                    "Missing required parameters");
@@ -554,13 +559,36 @@ static wf_status oauth_par(void *ctx, const wf_xrpc_request *req,
         }
     }
 
+    char parsed_dpop_jkt[64] = {0};
+    if (!cJSON_IsString(dpop_jkt) || !dpop_jkt->valuestring[0]) {
+        if (req->dpop_header) {
+            char htu[512];
+            int n = snprintf(htu, sizeof(htu), "%s/oauth/par",
+                             rctx->public_url ? rctx->public_url : "");
+            if (n > 0 && (size_t)n < sizeof(htu)) {
+                wf_oauth_verified_token *dpop_verified = NULL;
+                wf_status dpop_st = wf_oauth_verify_dpop(
+                    req->dpop_header, NULL, "POST", htu, NULL, &dpop_verified);
+                if (dpop_st == WF_OK && dpop_verified &&
+                    dpop_verified->dpop_jkt) {
+                    strncpy(parsed_dpop_jkt, dpop_verified->dpop_jkt,
+                            sizeof(parsed_dpop_jkt) - 1);
+                }
+                wf_oauth_verified_token_free(dpop_verified);
+            }
+        }
+    } else {
+        strncpy(parsed_dpop_jkt, dpop_jkt->valuestring,
+                sizeof(parsed_dpop_jkt) - 1);
+    }
+
     metalbear_oauth_request request = {
         .client_id = client_id->valuestring,
         .redirect_uri = redirect_uri->valuestring,
         .scope = scope->valuestring,
         .state = cJSON_IsString(state) ? state->valuestring : NULL,
         .code_challenge = code_challenge->valuestring,
-        .dpop_jkt = dpop_jkt->valuestring,
+        .dpop_jkt = parsed_dpop_jkt[0] ? parsed_dpop_jkt : NULL,
     };
 
     char *request_uri = NULL;
@@ -1202,8 +1230,7 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
         cJSON *jkt = cJSON_GetObjectItemCaseSensitive(body, "dpop_jkt");
 
         if (!cJSON_IsString(code) || !cJSON_IsString(cid) ||
-            !cJSON_IsString(redir) || !cJSON_IsString(verifier) ||
-            !cJSON_IsString(jkt)) {
+            !cJSON_IsString(redir) || !cJSON_IsString(verifier)) {
             cJSON_Delete(body);
             wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                        "Missing required parameters");
@@ -1212,25 +1239,24 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
         status = metalbear_oauth_exchange_code(
             rctx->store, code->valuestring,
             auth_client_id ? auth_client_id : cid->valuestring,
-            redir->valuestring, verifier->valuestring, jkt->valuestring,
-            &grant);
+            redir->valuestring, verifier->valuestring,
+            cJSON_IsString(jkt) ? jkt->valuestring : NULL, &grant);
     } else if (strcmp(grant_type->valuestring, "refresh_token") == 0) {
         cJSON *refresh =
             cJSON_GetObjectItemCaseSensitive(body, "refresh_token");
         cJSON *cid = cJSON_GetObjectItemCaseSensitive(body, "client_id");
         cJSON *jkt = cJSON_GetObjectItemCaseSensitive(body, "dpop_jkt");
 
-        if (!cJSON_IsString(refresh) || !cJSON_IsString(cid) ||
-            !cJSON_IsString(jkt)) {
+        if (!cJSON_IsString(refresh) || !cJSON_IsString(cid)) {
             cJSON_Delete(body);
             wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                        "Missing required parameters");
             return WF_OK;
         }
-        status = metalbear_oauth_refresh(rctx->store, refresh->valuestring,
-                                         auth_client_id ? auth_client_id
-                                                        : cid->valuestring,
-                                         jkt->valuestring, &grant);
+        status = metalbear_oauth_refresh(
+            rctx->store, refresh->valuestring,
+            auth_client_id ? auth_client_id : cid->valuestring,
+            cJSON_IsString(jkt) ? jkt->valuestring : NULL, &grant);
     }
 
     cJSON_Delete(body);
