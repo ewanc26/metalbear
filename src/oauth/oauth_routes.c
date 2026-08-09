@@ -303,6 +303,48 @@ static wf_status oauth_metadata(void *ctx, const wf_xrpc_request *req,
         root, "authorization_response_iss_parameter_supported", true);
     cJSON_AddBoolToObject(root, "client_id_metadata_document_supported", true);
 
+    /* Fields matching the reference oauth-provider's buildMetadata(): */
+    cJSON *display_values = cJSON_CreateArray();
+    cJSON_AddItemToArray(display_values, cJSON_CreateString("page"));
+    cJSON_AddItemToArray(display_values, cJSON_CreateString("popup"));
+    cJSON_AddItemToArray(display_values, cJSON_CreateString("touch"));
+    cJSON_AddItemToObject(root, "display_values_supported", display_values);
+
+    cJSON *prompt_values = cJSON_CreateArray();
+    cJSON_AddItemToArray(prompt_values, cJSON_CreateString("none"));
+    cJSON_AddItemToArray(prompt_values, cJSON_CreateString("login"));
+    cJSON_AddItemToArray(prompt_values, cJSON_CreateString("consent"));
+    cJSON_AddItemToArray(prompt_values, cJSON_CreateString("select_account"));
+    cJSON_AddItemToArray(prompt_values, cJSON_CreateString("create"));
+    cJSON_AddItemToObject(root, "prompt_values_supported", prompt_values);
+
+    /* Request object signing: ES256 (what Wolfram verifies) + "none"
+     * (unsigned request objects), matching the reference's
+     * [...VERIFY_ALGOS, "none"] pattern. Only ES256 is listed because
+     * Wolfram's verify.c only accepts ES256; advertising algorithms we
+     * cannot verify would break interop. */
+    cJSON *req_obj_algs = cJSON_CreateArray();
+    cJSON_AddItemToArray(req_obj_algs, cJSON_CreateString("ES256"));
+    cJSON_AddItemToArray(req_obj_algs, cJSON_CreateString("none"));
+    cJSON_AddItemToObject(root, "request_object_signing_alg_values_supported",
+                          req_obj_algs);
+
+    /* No request object encryption is supported (matches reference). */
+    cJSON *req_obj_enc_algs = cJSON_CreateArray();
+    cJSON_AddItemToObject(root,
+                          "request_object_encryption_alg_values_supported",
+                          req_obj_enc_algs);
+
+    cJSON *req_obj_enc_enc = cJSON_CreateArray();
+    cJSON_AddItemToObject(root,
+                          "request_object_encryption_enc_values_supported",
+                          req_obj_enc_enc);
+
+    /* Protected resources: this server is its own resource server. */
+    cJSON *protected_resources = cJSON_CreateArray();
+    cJSON_AddItemToArray(protected_resources, cJSON_CreateString(issuer));
+    cJSON_AddItemToObject(root, "protected_resources", protected_resources);
+
     return json_response(resp, root, "max-age=300");
 }
 
@@ -327,8 +369,10 @@ static wf_status protected_resource_metadata(void *ctx,
     cJSON_AddItemToArray(auth_servers, cJSON_CreateString(resource));
     cJSON_AddItemToObject(root, "authorization_servers", auth_servers);
 
+    /* Empty array matches the reference PDS's auth-routes.ts
+     * (scopes_supported: []). The "atproto" scope is advertised in the
+     * authorization server metadata instead. */
     cJSON *scopes = cJSON_CreateArray();
-    cJSON_AddItemToArray(scopes, cJSON_CreateString("atproto"));
     cJSON_AddItemToObject(root, "scopes_supported", scopes);
 
     cJSON *methods = cJSON_CreateArray();
