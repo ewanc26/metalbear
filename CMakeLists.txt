@@ -124,6 +124,7 @@ add_library(
   src/repo/blob_store.c
   src/repo/blob_store_server.c
   src/ops/update_watcher.c
+  src/ops/status.c
   cpp/metalbear/config_file.cpp
   cpp/metalbear/log.cpp
   cpp/metalbear/account.cpp)
