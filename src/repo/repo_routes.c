@@ -236,7 +236,6 @@ static void free_owned_strings(char **arr, size_t count) {
  * limit=50, reverse=false.
  */
 
-
 /*
  * Run a write's record through the lexicon corpus and report the outcome the
  * way the reference PDS does.
@@ -331,11 +330,16 @@ static const char *validation_status_text(metalbear_validation_status s) {
 
 /*
  * Report a repo-write failure using the names the lexicon actually defines.
- * The only write error com.atproto.repo.{create,put,delete}Record and
- * applyWrites declare is `InvalidSwap`, which clients branch on to retry an
- * optimistic write; a missing record is `RecordNotFound`, and everything else
- * falls back to the generic `InvalidRequest`. Invented names such as
- * `CreationFailed` are invisible to a client matching on the lexicon.
+ * The write lexicons — com.atproto.repo.{create,put,delete}Record and
+ * applyWrites — declare only `InvalidSwap`, which clients branch on to retry
+ * an optimistic write.  Every other failure, including an internal NOT_FOUND
+ * from an uninitialised repo head, falls back to the generic `InvalidRequest`
+ * with the descriptive `context` message.  `RecordNotFound` is only declared
+ * by com.atproto.repo.getRecord and the sync endpoints, not by the write
+ * endpoints, so returning it here would be an invented name invisible to any
+ * lexicon-aware client.  The reference PDS uses plain InvalidRequestError for
+ * all non-swap write failures (createRecord.ts, putRecord.ts, deleteRecord.ts,
+ * applyWrites.ts).
  */
 static void set_write_error(wf_xrpc_response *resp, wf_status st,
                             const char *context) {
@@ -343,10 +347,6 @@ static void set_write_error(wf_xrpc_response *resp, wf_status st,
         case WF_ERR_CONFLICT:
             wf_xrpc_response_set_error(resp, 400, "InvalidSwap",
                                        "swap CID did not match current value");
-            return;
-        case WF_ERR_NOT_FOUND:
-            wf_xrpc_response_set_error(resp, 400, "RecordNotFound",
-                                       "record not found");
             return;
         default:
             wf_xrpc_response_set_error(resp, 400, "InvalidRequest", context);
@@ -465,9 +465,8 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
      * no other way to learn the prior value once the store has overwritten
      * it. Absent (WF_ERR_NOT_FOUND) simply means this is a create. */
     char *old_json = NULL, *old_cid = NULL;
-    (void)metalbear_repo_store_get_record(s, collection->valuestring,
-                                          rkey->valuestring, &old_json,
-                                          &old_cid);
+    (void)metalbear_repo_store_get_record(
+        s, collection->valuestring, rkey->valuestring, &old_json, &old_cid);
 
     char *uri = NULL, *cid = NULL;
     wf_status st = metalbear_repo_store_put_record(
@@ -492,8 +491,7 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
                                 validation_status_text(vstatus));
     /* No-op putRecord: the reference omits `commit` when the new CID is
      * identical to the existing one. */
-    if (!old_cid || !cid || strcmp(old_cid, cid) != 0)
-        add_commit_meta(s, out);
+    if (!old_cid || !cid || strcmp(old_cid, cid) != 0) add_commit_meta(s, out);
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
     free(uri);
