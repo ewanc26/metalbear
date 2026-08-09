@@ -194,6 +194,49 @@ int main(void) {
         free(token_b);
     }
 
+    /* dpop_jkt is optional for PAR and token exchange (loopback clients). */
+    {
+        metalbear_oauth_request no_jkt = {
+            .client_id = "https://client.example/metadata2.json",
+            .redirect_uri = "https://client.example/callback2",
+            .scope = "atproto",
+            .state = "state-no-jkt",
+            .code_challenge = pkce.challenge,
+            .dpop_jkt = NULL,
+        };
+        char *request_uri2 = NULL;
+        int64_t expires2 = 0;
+        CHECK(metalbear_oauth_create_par(store, &no_jkt, &request_uri2,
+                                         &expires2) == WF_OK);
+        CHECK(request_uri2 != NULL);
+
+        char *code2 = NULL, *redirect2 = NULL, *state2 = NULL;
+        CHECK(metalbear_oauth_authorize(store, request_uri2, no_jkt.client_id,
+                                        "did:plc:alice", &code2, &redirect2,
+                                        &state2) == WF_OK);
+        CHECK(code2 && code2[0]);
+
+        metalbear_oauth_grant grant2 = {0};
+        CHECK(metalbear_oauth_exchange_code(store, code2, no_jkt.client_id,
+                                            no_jkt.redirect_uri, pkce.verifier,
+                                            NULL, &grant2) == WF_OK);
+        CHECK(grant2.access_token && grant2.access_token[0]);
+        CHECK(grant2.refresh_token && grant2.refresh_token[0]);
+
+        metalbear_oauth_grant rotated2 = {0};
+        CHECK(metalbear_oauth_refresh(store, grant2.refresh_token,
+                                      no_jkt.client_id, NULL,
+                                      &rotated2) == WF_OK);
+        CHECK(rotated2.access_token && rotated2.access_token[0]);
+
+        free(request_uri2);
+        free(code2);
+        free(redirect2);
+        free(state2);
+        metalbear_oauth_grant_free(&grant2);
+        metalbear_oauth_grant_free(&rotated2);
+    }
+
     metalbear_oauth_store_free(store);
     unlink(path);
     char sidecar[256];
