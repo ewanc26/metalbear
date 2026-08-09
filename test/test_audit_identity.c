@@ -194,9 +194,8 @@ int main(void) {
 
     char alice_did[64] = "";
     char bob_did[64] = "";
-    char *alice =
-        create_account(client, "alice.example.com", alice_did,
-                       sizeof(alice_did), "alicesecret");
+    char *alice = create_account(client, "alice.example.com", alice_did,
+                                 sizeof(alice_did), "alicesecret");
     char *bob = create_account(client, "bob.example.com", bob_did,
                                sizeof(bob_did), "bobsecret");
     CHECK(alice != NULL);

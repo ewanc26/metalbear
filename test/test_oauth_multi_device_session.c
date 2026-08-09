@@ -73,9 +73,10 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
                             const char *password, char *out_did,
                             size_t out_did_len) {
     char body[512];
-    snprintf(body, sizeof(body),
-             "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":\"%s@example.com\"}",
-             handle, password, handle);
+    snprintf(
+        body, sizeof(body),
+        "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":\"%s@example.com\"}",
+        handle, password, handle);
     wf_response response = {0};
     if (wf_xrpc_procedure(client, "com.atproto.server.createAccount", body,
                           &response) != WF_OK ||
@@ -244,12 +245,10 @@ int main(void) {
 
     char alice_did[128] = "";
     char bob_did[128] = "";
-    char *tok_a = create_account(client, "alice.example.com",
-                                 "alice-secret-pw", alice_did,
-                                 sizeof(alice_did));
-    char *tok_b = create_account(client, "bob.example.com",
-                                 "bob-secret-pw", bob_did,
-                                 sizeof(bob_did));
+    char *tok_a = create_account(client, "alice.example.com", "alice-secret-pw",
+                                 alice_did, sizeof(alice_did));
+    char *tok_b = create_account(client, "bob.example.com", "bob-secret-pw",
+                                 bob_did, sizeof(bob_did));
     CHECK(tok_a != NULL);
     CHECK(tok_b != NULL);
     free(tok_a);
@@ -280,8 +279,7 @@ int main(void) {
         CHECK(subjects_contains(subjects, alice_did));
         CHECK(subjects_contains(subjects, bob_did));
         cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
-        CHECK(cJSON_IsString(did) &&
-              strcmp(did->valuestring, bob_did) == 0);
+        CHECK(cJSON_IsString(did) && strcmp(did->valuestring, bob_did) == 0);
         cJSON_Delete(json);
         wf_response_free(&response);
     }
@@ -343,9 +341,9 @@ int main(void) {
         wf_http_header hdr = {"Cookie", cookie_ab};
         wf_response response = {0};
         char signout_body[128];
-        snprintf(signout_body, sizeof(signout_body), "{\"did\":\"%s\"}", alice_did);
-        CHECK(oauth_post(client, base, "/oauth/signout",
-                         signout_body, &hdr, 1,
+        snprintf(signout_body, sizeof(signout_body), "{\"did\":\"%s\"}",
+                 alice_did);
+        CHECK(oauth_post(client, base, "/oauth/signout", signout_body, &hdr, 1,
                          &response) == WF_OK);
         CHECK(response.status == 200);
         CHECK(response.set_cookie != NULL);

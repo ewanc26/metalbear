@@ -73,7 +73,8 @@ static bool body_contains(const wf_response *response, const char *needle) {
 /* Create an account and return its access token (caller frees).
  * Server-minted DID is written to out_did (out_did_len bytes). */
 static char *create_account(wf_xrpc_client *client, const char *handle,
-                            const char *password, char *out_did, size_t out_did_len) {
+                            const char *password, char *out_did,
+                            size_t out_did_len) {
     char body[512];
     snprintf(body, sizeof(body),
              "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":"
@@ -100,7 +101,8 @@ static char *create_account(wf_xrpc_client *client, const char *handle,
 
 static bool create_session(wf_xrpc_client *client, const char *identifier,
                            const char *password, const char *expected_handle,
-                           const char *expected_did, char **out_access, char **out_refresh) {
+                           const char *expected_did, char **out_access,
+                           char **out_refresh) {
     *out_access = NULL;
     *out_refresh = NULL;
     char body[512];
@@ -327,15 +329,16 @@ int main(void) {
     char did_carol[128] = {0};
     char did_dave[128] = {0};
     char did_aaron[128] = {0};
-    char *token_alice =
-        create_account(client, "alice.example.com", "correct horse battery staple",
-                       did_alice, sizeof(did_alice));
+    char *token_alice = create_account(client, "alice.example.com",
+                                       "correct horse battery staple",
+                                       did_alice, sizeof(did_alice));
     CHECK(token_alice != NULL);
     free(token_alice);
-    char *token_bob =
-        create_account(client, "bob.example.com", "bobsecret", did_bob, sizeof(did_bob));
-    char *token_carol = create_account(client, "carol.example.com",
-                                       "carolsecret", did_carol, sizeof(did_carol));
+    char *token_bob = create_account(client, "bob.example.com", "bobsecret",
+                                     did_bob, sizeof(did_bob));
+    char *token_carol =
+        create_account(client, "carol.example.com", "carolsecret", did_carol,
+                       sizeof(did_carol));
     CHECK(token_bob != NULL);
     CHECK(token_carol != NULL);
 
@@ -352,8 +355,7 @@ int main(void) {
         CHECK(cJSON_IsString(handle) &&
               strcmp(handle->valuestring, "bob.example.com") == 0);
         CHECK(cJSON_IsString(did));
-        CHECK(cJSON_IsString(did) &&
-              strcmp(did->valuestring, did_bob) == 0);
+        CHECK(cJSON_IsString(did) && strcmp(did->valuestring, did_bob) == 0);
         cJSON_Delete(json);
         wf_response_free(&response);
     }
@@ -361,7 +363,8 @@ int main(void) {
     char *login_access = NULL;
     char *login_refresh = NULL;
     CHECK(create_session(client, "bob.example.com", "bobsecret",
-                         "bob.example.com", did_bob, &login_access, &login_refresh));
+                         "bob.example.com", did_bob, &login_access,
+                         &login_refresh));
     if (login_refresh) {
         wf_xrpc_client_set_auth(client, login_refresh);
         wf_response response = {0};
@@ -373,8 +376,7 @@ int main(void) {
         cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
         CHECK(cJSON_IsString(handle) &&
               strcmp(handle->valuestring, "bob.example.com") == 0);
-        CHECK(cJSON_IsString(did) &&
-              strcmp(did->valuestring, did_bob) == 0);
+        CHECK(cJSON_IsString(did) && strcmp(did->valuestring, did_bob) == 0);
         cJSON_Delete(json);
         wf_response_free(&response);
     }
@@ -402,8 +404,7 @@ int main(void) {
         CHECK(response.status == 200);
         cJSON *json = json_response(&response);
         cJSON *did = cJSON_GetObjectItemCaseSensitive(json, "did");
-        CHECK(cJSON_IsString(did) &&
-              strcmp(did->valuestring, did_bob) == 0);
+        CHECK(cJSON_IsString(did) && strcmp(did->valuestring, did_bob) == 0);
         cJSON_Delete(json);
         wf_response_free(&response);
     }
@@ -443,7 +444,8 @@ int main(void) {
     login_access = NULL;
     login_refresh = NULL;
     CHECK(create_session(client, "robert.example.com", "bobsecret",
-                         "robert.example.com", did_bob, &login_access, &login_refresh));
+                         "robert.example.com", did_bob, &login_access,
+                         &login_refresh));
     free(login_access);
     free(login_refresh);
 
@@ -629,12 +631,11 @@ int main(void) {
     /* (b) Isolation: a record written as bob must live only in bob's repo. */
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);
-        CHECK(create_record(client, did_bob, "isolated",
-                            "bob-only-secret") == 200);
+        CHECK(create_record(client, did_bob, "isolated", "bob-only-secret") ==
+              200);
     }
     char text[256] = {0};
-    CHECK(get_record(client, did_bob, "isolated", text, sizeof(text)) ==
-          200);
+    CHECK(get_record(client, did_bob, "isolated", text, sizeof(text)) == 200);
     CHECK(strcmp(text, "bob-only-secret") == 0);
     /* The same record key must NOT resolve under carol's repository. */
     CHECK(get_record(client, did_carol, "isolated", NULL, 0) == 404);
@@ -644,12 +645,10 @@ int main(void) {
      * repository, never carol's. */
     if (token_bob) {
         wf_xrpc_client_set_auth(client, token_bob);
-        CHECK(create_record(client, did_carol, "spoof", "still-bobs") ==
-              200);
+        CHECK(create_record(client, did_carol, "spoof", "still-bobs") == 200);
     }
     text[0] = '\0';
-    CHECK(get_record(client, did_bob, "spoof", text, sizeof(text)) ==
-          200);
+    CHECK(get_record(client, did_bob, "spoof", text, sizeof(text)) == 200);
     CHECK(strcmp(text, "still-bobs") == 0);
     CHECK(get_record(client, did_carol, "spoof", NULL, 0) == 404);
 
@@ -659,12 +658,12 @@ int main(void) {
     int commits_before = count_commit_events(shared_seq);
     if (token_carol) {
         wf_xrpc_client_set_auth(client, token_carol);
-        CHECK(create_record(client, did_carol, "carolpost",
-                            "carol-only") == 200);
+        CHECK(create_record(client, did_carol, "carolpost", "carol-only") ==
+              200);
     }
     text[0] = '\0';
-    CHECK(get_record(client, did_carol, "carolpost", text,
-                     sizeof(text)) == 200);
+    CHECK(get_record(client, did_carol, "carolpost", text, sizeof(text)) ==
+          200);
     CHECK(strcmp(text, "carol-only") == 0);
     CHECK(get_record(client, did_bob, "carolpost", NULL, 0) == 404);
 
@@ -751,13 +750,14 @@ int main(void) {
             /* A new account appears mid-walk. Its DID sorts first, so an
              * offset cursor would shift every unread row by one. */
             if (page == 0) {
-                char *token = create_account(client, "aaron.example.com",
-                                             "aaronsecret", did_aaron, sizeof(did_aaron));
+                char *token =
+                    create_account(client, "aaron.example.com", "aaronsecret",
+                                   did_aaron, sizeof(did_aaron));
                 CHECK(token != NULL);
                 if (token) {
                     wf_xrpc_client_set_auth(client, token);
-                    CHECK(create_record(client, did_aaron, "hello",
-                                        "hi") == 200);
+                    CHECK(create_record(client, did_aaron, "hello", "hi") ==
+                          200);
                     wf_xrpc_client_set_auth(client, NULL);
                 }
                 free(token);
@@ -803,9 +803,8 @@ int main(void) {
                  "\"value\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"b3\","
                  "\"createdAt\":\"2026-07-20T00:00:00.000Z\"}}]}",
                  did_carol);
-        CHECK(wf_xrpc_procedure(
-                  client, "com.atproto.repo.applyWrites", apply_body,
-                  &batch) == WF_OK);
+        CHECK(wf_xrpc_procedure(client, "com.atproto.repo.applyWrites",
+                                apply_body, &batch) == WF_OK);
         CHECK(batch.status == 200);
         wf_response_free(&batch);
         CHECK(count_commit_events(shared_seq) == commits_pre + 1);
@@ -887,8 +886,9 @@ int main(void) {
      * that simply went quiet.
      */
     {
-        char *token_dave = create_account(client, "dave.example.com",
-                                          "davesecret", did_dave, sizeof(did_dave));
+        char *token_dave =
+            create_account(client, "dave.example.com", "davesecret", did_dave,
+                           sizeof(did_dave));
         CHECK(token_dave != NULL);
         if (token_dave) {
             wf_xrpc_client_set_auth(client, token_dave);
@@ -916,9 +916,8 @@ int main(void) {
             wf_http_header hdr = {"Authorization", auth};
             char del_body[128];
             snprintf(del_body, sizeof(del_body), "{\"did\":\"%s\"}", did_dave);
-            CHECK(wf_http_post(client, url, "application/json",
-                               del_body, &hdr, 1,
-                               &response) == WF_OK);
+            CHECK(wf_http_post(client, url, "application/json", del_body, &hdr,
+                               1, &response) == WF_OK);
             CHECK(response.status == 200);
             wf_response_free(&response);
 
