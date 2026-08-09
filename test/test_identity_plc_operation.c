@@ -19,8 +19,9 @@
  */
 
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 #include "metalbear/server.h"
 #include "wolfram/xrpc.h"
 

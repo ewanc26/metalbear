@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 /*
  * test_oauth_device_session.c — offline end-to-end coverage for the
  * device-session gate on GET /oauth/authorize.

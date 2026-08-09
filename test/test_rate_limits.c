@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 /*
  * test_rate_limits.c — the endpoint-specific rate limits server.c wires up
  * to mirror the reference PDS actually reject requests, not just compile.

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
 #define _DARWIN_C_SOURCE
-
+#endif
 /*
  * test_email_internal.c — regression coverage for two bugs in
  * src/email.c's SMTP send path, both found in the same audit pass:
