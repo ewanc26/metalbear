@@ -539,7 +539,7 @@ static wf_status proxy_appview(metalbear_server *server,
         }
     }
 
-    char target[1024];
+    char target[8192];
     int n = snprintf(target, sizeof(target), "%s/xrpc/%s%s%s", upstream,
                      req->nsid ? req->nsid : "",
                      req->raw_query && req->raw_query[0] ? "?" : "",
@@ -547,7 +547,7 @@ static wf_status proxy_appview(metalbear_server *server,
     free(upstream);
     if (n < 0 || (size_t)n >= sizeof(target)) {
         wf_xrpc_response_set_error(resp, 414, "UriTooLong",
-                                   "Proxied URI exceeds limit");
+                                   "Proxied URI exceeds 8KB limit");
         return WF_OK;
     }
 
@@ -707,7 +707,7 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
-    char target[1024];
+    char target[8192];
     int n = snprintf(target, sizeof(target), "%s/xrpc/%s%s%s", upstream,
                      req->nsid ? req->nsid : "",
                      req->raw_query && req->raw_query[0] ? "?" : "",
@@ -715,7 +715,7 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
     free(upstream);
     if (n < 0 || (size_t)n >= sizeof(target)) {
         wf_xrpc_response_set_error(resp, 414, "UriTooLong",
-                                   "Proxied URI exceeds limit");
+                                   "Proxied URI exceeds 8KB limit");
         return WF_OK;
     }
 
