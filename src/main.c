@@ -184,7 +184,7 @@ int main(int argc, char **argv) {
     metalbear_config config = {
         .listen_address = "127.0.0.1",
         .port = 2583,
-        .thread_count = 4,
+        .thread_count = 0,
         .data_directory = "data",
         .smtp_starttls = true,
         /* The reference PDS requires invite codes unless told otherwise;
