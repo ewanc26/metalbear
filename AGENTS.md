@@ -4,6 +4,8 @@ MetalBear is a C23-first AT Protocol PDS built on the sibling Wolfram SDK.
 
 The project is implemented primarily in C23. C++ is permitted for complex or sensitive components where C is insufficient — specifically RAII-based resource management (e.g. sqlite3, OpenSSL), performance-critical code, and third-party library integrations that have no C equivalent. All C++ usage must follow strict isolation via `extern "C"` modules. Public headers, exported APIs, protocol handlers, and the core server architecture remain C23. C++ components must expose a C ABI (`extern "C"` where required), and exceptions must never cross the C/C++ boundary. Default to C for new code; introduce C++ only when the complexity, resource management, or performance requirements justify it.
 
+The server runs on a multithreaded model: libmicrohttpd serves requests from a thread pool (default 4 threads, configurable via `thread_count`), and each WebSocket subscription runs on its own pthread. All shared state — the route table, sequencer, account cache, repo store, blob store, OAuth store, and report store — must be guarded by a mutex. New code must document its locking discipline and use the `_locked` internal-variant pattern to avoid recursive-lock deadlocks.
+
 It provides a runnable PDS foundation, supporting multi-account hosting.
 
 ## Read first and architecture
@@ -417,6 +419,9 @@ it locally.
   the same path a real client takes.
 - Every server route must have an offline end-to-end test in `test/test_server.c`
   or a dedicated test file covering success, auth failure, and schema conformance.
+  Concurrency-critical paths must also have a parallel-requests test
+  (`test_xrpc_server_parallel` or equivalent) that issues concurrent requests
+  against the thread pool and verifies response integrity.
 - Test cleanup must remove all SQLite files (repo, auth, account, sequence,
   registry) plus blob directories.
 - A green local suite does not prove federation. For identity or repo-format
