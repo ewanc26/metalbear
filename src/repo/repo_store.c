@@ -1040,8 +1040,9 @@ void emit_commit_event_ops(metalbear_repo_store *s, const wf_cid *old_head,
     int has_previous = parse_commit_at(s, old_head, &previous);
     unsigned char *blocks = NULL;
     size_t blocks_len = 0;
-    if (metalbear_repo_store_export(s, has_previous ? previous.rev : NULL,
-                                    &blocks, &blocks_len) != WF_OK)
+    if (metalbear_repo_store_export_locked(s,
+                                            has_previous ? previous.rev : NULL,
+                                            &blocks, &blocks_len) != WF_OK)
         return;
     metalbear_repo_store_event event = {
         .kind = METALBEAR_REPO_STORE_EVENT_COMMIT,
@@ -2206,16 +2207,14 @@ wf_status metalbear_repo_store_get_head(metalbear_repo_store *s, char **out_rev,
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_export(metalbear_repo_store *s,
-                                      const char *since,
-                                      unsigned char **out_data,
-                                      size_t *out_len) {
+wf_status metalbear_repo_store_export_locked(metalbear_repo_store *s,
+                                             const char *since,
+                                             unsigned char **out_data,
+                                             size_t *out_len) {
     if (!s || !out_data || !out_len) return WF_ERR_INVALID_ARG;
     *out_data = NULL;
     *out_len = 0;
     if (s->head.len == 0) return WF_ERR_NOT_FOUND;
-
-    pthread_mutex_lock(&s->mutex);
 
     const char *sql =
         since && since[0]
@@ -2256,6 +2255,18 @@ wf_status metalbear_repo_store_export(metalbear_repo_store *s,
     sqlite3_finalize(stmt);
     if (status == WF_OK) status = wf_car_write(&export_car, out_data, out_len);
     free(export_car.blocks);
+    return status;
+}
+
+wf_status metalbear_repo_store_export(metalbear_repo_store *s,
+                                      const char *since,
+                                      unsigned char **out_data,
+                                      size_t *out_len) {
+    if (!s || !out_data || !out_len) return WF_ERR_INVALID_ARG;
+    if (s->head.len == 0) return WF_ERR_NOT_FOUND;
+    pthread_mutex_lock(&s->mutex);
+    wf_status status =
+        metalbear_repo_store_export_locked(s, since, out_data, out_len);
     pthread_mutex_unlock(&s->mutex);
     return status;
 }

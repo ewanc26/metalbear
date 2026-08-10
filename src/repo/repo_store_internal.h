@@ -62,6 +62,15 @@ wf_status commit_persist(metalbear_repo_store *s, const wf_cid *new_head);
  * report. */
 void emit_sync_event(metalbear_repo_store *s);
 
+/* Export the repo's CAR (commit + blocks, optionally since `since`).
+ * The _locked variant must be called with `s->mutex` held. */
+wf_status metalbear_repo_store_export(metalbear_repo_store *s, const char *since,
+                                      unsigned char **out_data, size_t *out_len);
+wf_status metalbear_repo_store_export_locked(metalbear_repo_store *s,
+                                             const char *since,
+                                             unsigned char **out_data,
+                                             size_t *out_len);
+
 /* Emit one #commit event describing `ops_count` mutations landed by a
  * single signed commit. */
 void emit_commit_event_ops(metalbear_repo_store *s, const wf_cid *old_head,
