@@ -30,6 +30,7 @@
 #include "wolfram/tid.h"
 
 #include <cJSON.h>
+#include <pthread.h>
 #include <sqlite3.h>
 
 #include <math.h>
@@ -347,6 +348,11 @@ static int parse_commit_at(metalbear_repo_store *s, const wf_cid *cid,
 static wf_status index_upsert_record(metalbear_repo_store *s,
                                      const char *collection, const char *rkey,
                                      const char *cid, const char *value);
+
+static wf_status
+apply_writes_locked(metalbear_repo_store *s, const char *writes_json,
+                    const char *swap_commit_or_null, char **out_commit_cid,
+                    char **out_commit_rev, char **out_results_json);
 
 /* Current head commit CID as a base32 string ("" when repo is empty). */
 static char *head_cid_string(metalbear_repo_store *s) {
@@ -675,6 +681,7 @@ static wf_status load_all_blocks(metalbear_repo_store *s) {
 
 static void free_store(metalbear_repo_store *s) {
     if (!s) return;
+    pthread_mutex_destroy(&s->mutex);
     if (s->db) sqlite3_close(s->db);
     for (size_t i = 0; i < s->car.block_count; i++) free(s->car.blocks[i].data);
     free(s->car.blocks);
@@ -710,7 +717,10 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
         return WF_ERR_ALLOC;
     }
 
-    if (sqlite3_open(path, &s->db) != SQLITE_OK) {
+    if (sqlite3_open_v2(path, &s->db,
+                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
+                            SQLITE_OPEN_FULLMUTEX,
+                        NULL) != SQLITE_OK) {
         free_store(s);
         return WF_ERR_INTERNAL;
     }
@@ -917,6 +927,11 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
         set_root(s);
     }
 
+    if (pthread_mutex_init(&s->mutex, NULL) != 0) {
+        free_store(s);
+        return WF_ERR_INTERNAL;
+    }
+
     *out = s;
     return WF_OK;
 }
@@ -942,12 +957,17 @@ wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store,
                                           const char *handle) {
     if (!store || !handle || !wf_syntax_handle_is_valid(handle))
         return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
     char *copy = strdup(handle);
-    if (!copy) return WF_ERR_ALLOC;
+    if (!copy) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_ALLOC;
+    }
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(store->db, "UPDATE meta SET handle=? WHERE id=0;",
                            -1, &stmt, NULL) != SQLITE_OK) {
         free(copy);
+        pthread_mutex_unlock(&store->mutex);
         return WF_ERR_INTERNAL;
     }
     sqlite3_bind_text(stmt, 1, handle, -1, SQLITE_TRANSIENT);
@@ -955,10 +975,12 @@ wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store,
     sqlite3_finalize(stmt);
     if (rc != SQLITE_DONE || sqlite3_changes(store->db) != 1) {
         free(copy);
+        pthread_mutex_unlock(&store->mutex);
         return WF_ERR_INTERNAL;
     }
     free(store->handle);
     store->handle = copy;
+    pthread_mutex_unlock(&store->mutex);
     return WF_OK;
 }
 
@@ -994,8 +1016,10 @@ void metalbear_repo_store_set_event_callback(
     metalbear_repo_store *store, metalbear_repo_store_event_cb callback,
     void *context) {
     if (!store) return;
+    pthread_mutex_lock(&store->mutex);
     store->event_cb = callback;
     store->event_ctx = context;
+    pthread_mutex_unlock(&store->mutex);
 }
 
 static int parse_commit_at(metalbear_repo_store *s, const wf_cid *cid,
@@ -1206,8 +1230,8 @@ static wf_status create_record_with_backlink_cleanup(
     if (!writes_json) return WF_ERR_ALLOC;
 
     char *commit_cid = NULL, *commit_rev = NULL, *results_json = NULL;
-    wf_status st = metalbear_repo_store_apply_writes(
-        s, writes_json, NULL, &commit_cid, &commit_rev, &results_json);
+    wf_status st = apply_writes_locked(s, writes_json, NULL, &commit_cid,
+                                       &commit_rev, &results_json);
     free(writes_json);
     free(commit_cid);
     free(commit_rev);
@@ -1238,12 +1262,12 @@ static wf_status create_record_with_backlink_cleanup(
 /* Write / read operations                                             */
 /* ------------------------------------------------------------------ */
 
-wf_status metalbear_repo_store_create_record(metalbear_repo_store *s,
-                                             const char *collection,
-                                             const char *rkey_or_null,
-                                             const char *record_json,
-                                             const char *swap_commit_or_null,
-                                             char **out_uri, char **out_cid) {
+static wf_status create_record_locked(metalbear_repo_store *s,
+                                      const char *collection,
+                                      const char *rkey_or_null,
+                                      const char *record_json,
+                                      const char *swap_commit_or_null,
+                                      char **out_uri, char **out_cid) {
     if (!s || !collection || !*collection || !record_json || !out_uri ||
         !out_cid)
         return WF_ERR_INVALID_ARG;
@@ -1335,10 +1359,31 @@ wf_status metalbear_repo_store_create_record(metalbear_repo_store *s,
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_put_record(
-    metalbear_repo_store *s, const char *collection, const char *rkey,
-    const char *record_json, const char *swap_commit_or_null,
-    const char *swap_record_or_null, char **out_uri, char **out_cid) {
+wf_status metalbear_repo_store_create_record(metalbear_repo_store *s,
+                                             const char *collection,
+                                             const char *rkey_or_null,
+                                             const char *record_json,
+                                             const char *swap_commit_or_null,
+                                             char **out_uri, char **out_cid) {
+    if (!s || !collection || !*collection || !record_json || !out_uri ||
+        !out_cid)
+        return WF_ERR_INVALID_ARG;
+    *out_uri = NULL;
+    *out_cid = NULL;
+    pthread_mutex_lock(&s->mutex);
+    wf_status st =
+        create_record_locked(s, collection, rkey_or_null, record_json,
+                             swap_commit_or_null, out_uri, out_cid);
+    pthread_mutex_unlock(&s->mutex);
+    return st;
+}
+
+static wf_status put_record_locked(metalbear_repo_store *s,
+                                   const char *collection, const char *rkey,
+                                   const char *record_json,
+                                   const char *swap_commit_or_null,
+                                   const char *swap_record_or_null,
+                                   char **out_uri, char **out_cid) {
     if (!s || !collection || !*collection || !rkey || !*rkey || !record_json ||
         !out_uri || !out_cid)
         return WF_ERR_INVALID_ARG;
@@ -1435,11 +1480,27 @@ wf_status metalbear_repo_store_put_record(
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_delete_record(metalbear_repo_store *s,
-                                             const char *collection,
-                                             const char *rkey,
-                                             const char *swap_commit_or_null,
-                                             const char *swap_record_or_null) {
+wf_status metalbear_repo_store_put_record(
+    metalbear_repo_store *s, const char *collection, const char *rkey,
+    const char *record_json, const char *swap_commit_or_null,
+    const char *swap_record_or_null, char **out_uri, char **out_cid) {
+    if (!s || !collection || !*collection || !rkey || !*rkey || !record_json ||
+        !out_uri || !out_cid)
+        return WF_ERR_INVALID_ARG;
+    *out_uri = NULL;
+    *out_cid = NULL;
+    pthread_mutex_lock(&s->mutex);
+    wf_status st =
+        put_record_locked(s, collection, rkey, record_json, swap_commit_or_null,
+                          swap_record_or_null, out_uri, out_cid);
+    pthread_mutex_unlock(&s->mutex);
+    return st;
+}
+
+static wf_status delete_record_locked(metalbear_repo_store *s,
+                                      const char *collection, const char *rkey,
+                                      const char *swap_commit_or_null,
+                                      const char *swap_record_or_null) {
     if (!s || !collection || !*collection || !rkey || !*rkey)
         return WF_ERR_INVALID_ARG;
 
@@ -1479,6 +1540,20 @@ wf_status metalbear_repo_store_delete_record(metalbear_repo_store *s,
     return WF_OK;
 }
 
+wf_status metalbear_repo_store_delete_record(metalbear_repo_store *s,
+                                             const char *collection,
+                                             const char *rkey,
+                                             const char *swap_commit_or_null,
+                                             const char *swap_record_or_null) {
+    if (!s || !collection || !*collection || !rkey || !*rkey)
+        return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&s->mutex);
+    wf_status st = delete_record_locked(
+        s, collection, rkey, swap_commit_or_null, swap_record_or_null);
+    pthread_mutex_unlock(&s->mutex);
+    return st;
+}
+
 wf_status metalbear_repo_store_get_record(metalbear_repo_store *s,
                                           const char *collection,
                                           const char *rkey,
@@ -1493,7 +1568,9 @@ wf_status metalbear_repo_store_get_record(metalbear_repo_store *s,
     unsigned char *data = NULL;
     size_t len = 0;
     wf_cid rcid;
+    pthread_mutex_lock(&s->mutex);
     wf_status st = get_record_cbor(s, collection, rkey, &data, &len, &rcid);
+    pthread_mutex_unlock(&s->mutex);
     if (st != WF_OK) return st;
 
     wf_cbor_item *item = wf_cbor_parse(data, len);
@@ -1519,12 +1596,10 @@ wf_status metalbear_repo_store_get_record(metalbear_repo_store *s,
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s,
-                                            const char *writes_json,
-                                            const char *swap_commit_or_null,
-                                            char **out_commit_cid,
-                                            char **out_commit_rev,
-                                            char **out_results_json) {
+static wf_status
+apply_writes_locked(metalbear_repo_store *s, const char *writes_json,
+                    const char *swap_commit_or_null, char **out_commit_cid,
+                    char **out_commit_rev, char **out_results_json) {
     if (!s || !writes_json || !out_commit_cid || !out_commit_rev ||
         !out_results_json)
         return WF_ERR_INVALID_ARG;
@@ -1775,6 +1850,23 @@ done:
     return WF_OK;
 }
 
+wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *s,
+                                            const char *writes_json,
+                                            const char *swap_commit_or_null,
+                                            char **out_commit_cid,
+                                            char **out_commit_rev,
+                                            char **out_results_json) {
+    if (!s || !writes_json || !out_commit_cid || !out_commit_rev ||
+        !out_results_json)
+        return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&s->mutex);
+    wf_status st =
+        apply_writes_locked(s, writes_json, swap_commit_or_null, out_commit_cid,
+                            out_commit_rev, out_results_json);
+    pthread_mutex_unlock(&s->mutex);
+    return st;
+}
+
 /* ------------------------------------------------------------------ */
 /* describeRepo + verification                                         */
 /* ------------------------------------------------------------------ */
@@ -1831,8 +1923,13 @@ wf_status metalbear_repo_store_describe(metalbear_repo_store *s,
     if (!s || !out_json) return WF_ERR_INVALID_ARG;
     *out_json = NULL;
 
+    pthread_mutex_lock(&s->mutex);
+
     cJSON *obj = cJSON_CreateObject();
-    if (!obj) return WF_ERR_ALLOC;
+    if (!obj) {
+        pthread_mutex_unlock(&s->mutex);
+        return WF_ERR_ALLOC;
+    }
     cJSON_AddStringToObject(obj, "handle", s->handle ? s->handle : "");
     cJSON_AddStringToObject(obj, "did", s->did ? s->did : "");
 
@@ -1857,6 +1954,8 @@ wf_status metalbear_repo_store_describe(metalbear_repo_store *s,
         }
     }
 
+    pthread_mutex_unlock(&s->mutex);
+
     char *js = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
     if (!js) return WF_ERR_ALLOC;
@@ -1872,11 +1971,13 @@ wf_status metalbear_repo_store_verify_head(metalbear_repo_store *s,
     if (out_commit) memset(out_commit, 0, sizeof(*out_commit));
     if (s->head.len == 0) return WF_OK;
 
+    pthread_mutex_lock(&s->mutex);
     wf_repo_verify_options opts = {s->did, s->signing_key_didkey, NULL};
     wf_commit c;
     wf_status st = wf_repo_verify(&s->car, &opts, &c);
     if (st == WF_OK) *out_verified = 1;
     if (out_commit) *out_commit = c;
+    pthread_mutex_unlock(&s->mutex);
     return st;
 }
 
@@ -2085,6 +2186,7 @@ wf_status metalbear_repo_store_get_head(metalbear_repo_store *s, char **out_rev,
     *out_cid = NULL;
     if (s->head.len == 0) return WF_ERR_NOT_FOUND;
 
+    pthread_mutex_lock(&s->mutex);
     char *cid = wf_cid_to_string(&s->head);
     char rev[64] = "";
     wf_car_block *blk = wf_car_find_block(&s->car, &s->head);
@@ -2093,6 +2195,7 @@ wf_status metalbear_repo_store_get_head(metalbear_repo_store *s, char **out_rev,
         if (wf_commit_parse(blk->data, blk->data_len, &cm) == WF_OK)
             snprintf(rev, sizeof(rev), "%s", cm.rev);
     }
+    pthread_mutex_unlock(&s->mutex);
     if (!cid) return WF_ERR_ALLOC;
     *out_cid = cid;
     *out_rev = strdup(rev);
@@ -2111,6 +2214,8 @@ wf_status metalbear_repo_store_export(metalbear_repo_store *s,
     *out_data = NULL;
     *out_len = 0;
     if (s->head.len == 0) return WF_ERR_NOT_FOUND;
+
+    pthread_mutex_lock(&s->mutex);
 
     const char *sql =
         since && since[0]
@@ -2150,7 +2255,8 @@ wf_status metalbear_repo_store_export(metalbear_repo_store *s,
     }
     sqlite3_finalize(stmt);
     if (status == WF_OK) status = wf_car_write(&export_car, out_data, out_len);
-    free(export_car.blocks); /* Shallow references into s->car. */
+    free(export_car.blocks);
+    pthread_mutex_unlock(&s->mutex);
     return status;
 }
 
@@ -2172,15 +2278,21 @@ wf_status metalbear_repo_store_export_commit(metalbear_repo_store *s,
     *out_len = 0;
     if (s->head.len == 0) return WF_ERR_NOT_FOUND;
 
+    pthread_mutex_lock(&s->mutex);
     wf_car_block *source = wf_car_find_block(&s->car, &s->head);
-    if (!source) return WF_ERR_NOT_FOUND;
+    if (!source) {
+        pthread_mutex_unlock(&s->mutex);
+        return WF_ERR_NOT_FOUND;
+    }
 
     wf_car export_car = {0};
     export_car.roots = &s->head;
     export_car.root_count = 1;
-    export_car.blocks = source; /* Shallow reference into s->car. */
+    export_car.blocks = source;
     export_car.block_count = 1;
-    return wf_car_write(&export_car, out_data, out_len);
+    wf_status st = wf_car_write(&export_car, out_data, out_len);
+    pthread_mutex_unlock(&s->mutex);
+    return st;
 }
 
 wf_status metalbear_repo_store_get_blocks(metalbear_repo_store *s,
@@ -2194,6 +2306,7 @@ wf_status metalbear_repo_store_get_blocks(metalbear_repo_store *s,
     *out_len = 0;
     if (s->head.len == 0) return WF_ERR_NOT_FOUND;
 
+    pthread_mutex_lock(&s->mutex);
     wf_car selected = {0};
     wf_status status = WF_OK;
     for (size_t i = 0; i < cid_count; i++) {
@@ -2225,7 +2338,8 @@ wf_status metalbear_repo_store_get_blocks(metalbear_repo_store *s,
         selected.blocks[selected.block_count++] = *source;
     }
     if (status == WF_OK) status = wf_car_write(&selected, out_data, out_len);
-    free(selected.blocks); /* Shallow references into s->car. */
+    free(selected.blocks);
+    pthread_mutex_unlock(&s->mutex);
     return status;
 }
 
@@ -2256,9 +2370,13 @@ wf_status metalbear_repo_store_get_record_car(metalbear_repo_store *s,
     }
     free(record_cid_str);
 
+    pthread_mutex_lock(&s->mutex);
     /* Find the record block in the CAR. */
     wf_car_block *record_block = wf_car_find_block(&s->car, &record_cid);
-    if (!record_block) return WF_ERR_NOT_FOUND;
+    if (!record_block) {
+        pthread_mutex_unlock(&s->mutex);
+        return WF_ERR_NOT_FOUND;
+    }
 
     /* Build a CAR with the commit as root and the record block. */
     wf_car out = {0};
@@ -2267,13 +2385,20 @@ wf_status metalbear_repo_store_get_record_car(metalbear_repo_store *s,
 
     /* Add commit block. */
     wf_car_block *commit_block = wf_car_find_block(&s->car, &s->head);
-    if (!commit_block) return WF_ERR_NOT_FOUND;
+    if (!commit_block) {
+        pthread_mutex_unlock(&s->mutex);
+        return WF_ERR_NOT_FOUND;
+    }
     out.blocks = calloc(2, sizeof(*out.blocks));
-    if (!out.blocks) return WF_ERR_ALLOC;
+    if (!out.blocks) {
+        pthread_mutex_unlock(&s->mutex);
+        return WF_ERR_ALLOC;
+    }
     out.blocks[0] = *commit_block;
     out.blocks[1] = *record_block;
     out.block_count = 2;
 
+    pthread_mutex_unlock(&s->mutex);
     status = wf_car_write(&out, out_data, out_len);
     free(out.blocks);
     return status;

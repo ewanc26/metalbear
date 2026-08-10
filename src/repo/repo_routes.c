@@ -1080,7 +1080,11 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
     }
 
     wf_cid old_head = s->head;
-    wf_status st;
+    wf_status st = WF_OK;
+    bool locked = false;
+
+    pthread_mutex_lock(&s->mutex);
+    locked = true;
 
     if (s->head.len == 0) {
         /* No existing commit to diff against (e.g. a freshly created
@@ -1105,7 +1109,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
             wf_xrpc_client_new("https://localhost");
         if (!resolve_client) {
             wf_car_free(&imported);
-            return WF_ERR_ALLOC;
+            st = WF_ERR_ALLOC;
+            goto cleanup;
         }
         char *published_key = NULL;
         wf_status key_st = wf_did_resolve_verification_key(
@@ -1117,7 +1122,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
                 resp, 400, "InvalidCAR",
                 "could not resolve this DID's currently published signing "
                 "key");
-            return WF_OK;
+            st = WF_OK;
+            goto cleanup;
         }
 
         wf_repo_verify_options opts = {s->did, published_key, NULL};
@@ -1128,7 +1134,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
             wf_car_free(&imported);
             wf_xrpc_response_set_error(resp, 400, "InvalidCAR",
                                        "imported CAR failed verification");
-            return WF_OK;
+            st = WF_OK;
+            goto cleanup;
         }
         for (size_t i = 0; i < imported.block_count; i++) {
             if (wf_car_find_block(&s->car, &imported.blocks[i].cid)) continue;
@@ -1136,7 +1143,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
                 realloc(s->car.blocks, (s->car.block_count + 1) * sizeof(*nb));
             if (!nb) {
                 wf_car_free(&imported);
-                return WF_ERR_ALLOC;
+                st = WF_ERR_ALLOC;
+                goto cleanup;
             }
             s->car.blocks = nb;
             wf_car_block *blk = &s->car.blocks[s->car.block_count];
@@ -1145,7 +1153,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
             blk->data = blk->data_len ? malloc(blk->data_len) : NULL;
             if (blk->data_len && !blk->data) {
                 wf_car_free(&imported);
-                return WF_ERR_ALLOC;
+                st = WF_ERR_ALLOC;
+                goto cleanup;
             }
             if (blk->data_len)
                 memcpy(blk->data, imported.blocks[i].data, blk->data_len);
@@ -1158,7 +1167,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
         if (st != WF_OK) {
             wf_xrpc_response_set_error(resp, 500, "InternalError",
                                        "failed to persist imported repo");
-            return WF_OK;
+            st = WF_OK;
+            goto cleanup;
         }
         reindex_all(s);
         emit_sync_event(s);
@@ -1179,7 +1189,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
         if (st != WF_OK) {
             wf_xrpc_response_set_error(resp, 400, "InvalidCAR",
                                        "imported CAR failed verification");
-            return WF_OK;
+            st = WF_OK;
+            goto cleanup;
         }
 
         if (diff.operation_count == 0) {
@@ -1191,7 +1202,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
                 calloc(diff.operation_count, sizeof(*writes));
             if (!writes) {
                 wf_repo_diff_free(&diff);
-                return WF_ERR_ALLOC;
+                st = WF_ERR_ALLOC;
+                goto cleanup;
             }
             for (size_t i = 0; i < diff.operation_count; i++) {
                 wf_repo_operation *op = &diff.operations[i];
@@ -1209,7 +1221,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
                     wf_xrpc_response_set_error(
                         resp, 400, "InvalidCAR",
                         "imported CAR is missing a referenced record block");
-                    return WF_OK;
+                    st = WF_OK;
+                    goto cleanup;
                 }
                 writes[i].action = op->action == WF_REPO_CREATE
                                        ? WF_REPO_WRITE_CREATE
@@ -1228,7 +1241,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
                 wf_xrpc_response_set_error(
                     resp, 400, "InvalidRequest",
                     "imported repo diverges from the current repo");
-                return WF_OK;
+                st = WF_OK;
+                goto cleanup;
             }
             st = commit_persist(s, &new_commit);
             if (st != WF_OK) {
@@ -1236,7 +1250,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
                 wf_repo_diff_free(&diff);
                 wf_xrpc_response_set_error(resp, 500, "InternalError",
                                            "failed to persist imported repo");
-                return WF_OK;
+                st = WF_OK;
+                goto cleanup;
             }
             reindex_all(s);
 
@@ -1245,7 +1260,8 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
             if (!events) {
                 free(writes);
                 wf_repo_diff_free(&diff);
-                return WF_ERR_ALLOC;
+                st = WF_ERR_ALLOC;
+                goto cleanup;
             }
             for (size_t i = 0; i < diff.operation_count; i++) {
                 events[i].action =
@@ -1267,10 +1283,17 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
     cJSON *out = cJSON_CreateObject();
     char *js = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
-    if (!js) return WF_ERR_ALLOC;
+    if (!js) {
+        st = WF_ERR_ALLOC;
+        goto cleanup;
+    }
     wf_xrpc_response_set_body(resp, js, strlen(js));
     free(js);
-    return WF_OK;
+    st = WF_OK;
+
+cleanup:
+    if (locked) pthread_mutex_unlock(&s->mutex);
+    return st;
 }
 
 static void free_pds_repo_bundle(void *ptr) {

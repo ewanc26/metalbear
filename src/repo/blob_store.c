@@ -12,8 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <stdbool.h>
 #include <dirent.h>
+#include <pthread.h>
+#include <stdbool.h>>
 
 typedef struct metalbear_blob_node {
     char *cid;           /* owned CID string (key) */
@@ -33,6 +34,7 @@ struct metalbear_blob_store {
     bool file_backed;
     char *dir;                 /* owned base directory (file-backed only) */
     metalbear_blob_node *head; /* in-memory index; source of truth */
+    pthread_mutex_t mutex;     /* guards head and all node mutations */
 };
 
 /* Join dir + name into a heap buffer (caller frees). Tolerates a trailing
@@ -285,6 +287,11 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path) {
         (metalbear_blob_store *)calloc(1, sizeof(*store));
     if (!store) return NULL;
 
+    if (pthread_mutex_init(&store->mutex, NULL) != 0) {
+        free(store);
+        return NULL;
+    }
+
     if (path && path[0] != '\0') {
         store->file_backed = true;
         store->dir = strdup(path);
@@ -383,6 +390,7 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path) {
 
 void metalbear_blob_store_free(metalbear_blob_store *store) {
     if (!store) return;
+    pthread_mutex_lock(&store->mutex);
     metalbear_blob_node *n = store->head;
     while (n) {
         metalbear_blob_node *next = n->next;
@@ -390,6 +398,8 @@ void metalbear_blob_store_free(metalbear_blob_store *store) {
         n = next;
     }
     free(store->dir);
+    pthread_mutex_unlock(&store->mutex);
+    pthread_mutex_destroy(&store->mutex);
     free(store);
 }
 
@@ -400,8 +410,13 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
         return WF_ERR_INVALID_ARG;
     }
 
+    pthread_mutex_lock(&store->mutex);
+
     unsigned char *data_copy = (unsigned char *)malloc(len ? len : 1);
-    if (!data_copy) return WF_ERR_ALLOC;
+    if (!data_copy) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_ALLOC;
+    }
     memcpy(data_copy, data, len);
     char *cid_copy = strdup(cid);
     char *mime_copy = strdup(mime_type);
@@ -409,6 +424,7 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
         free(data_copy);
         free(cid_copy);
         free(mime_copy);
+        pthread_mutex_unlock(&store->mutex);
         return WF_ERR_ALLOC;
     }
 
@@ -428,6 +444,7 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
                 blob_tid_now(n->rev);
                 persist_rev(store, n);
             }
+            pthread_mutex_unlock(&store->mutex);
             goto persist;
         }
     }
@@ -436,8 +453,10 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
     blob_tid_now(rev);
     if (blob_node_push(store, cid_copy, mime_copy, data_copy, len, rev) !=
         WF_OK) {
+        pthread_mutex_unlock(&store->mutex);
         return WF_ERR_ALLOC;
     }
+    pthread_mutex_unlock(&store->mutex);
     persist_rev(store, store->head); /* push inserts at head */
 
 persist:
@@ -497,6 +516,7 @@ wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
     *out_len = 0;
     *out_mime = NULL;
 
+    pthread_mutex_lock(&store->mutex);
     for (metalbear_blob_node *n = store->head; n; n = n->next) {
         if (strcmp(n->cid, cid) == 0) {
             unsigned char *data = (unsigned char *)malloc(n->len ? n->len : 1);
@@ -504,15 +524,18 @@ wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
             if (!data || !mime) {
                 free(data);
                 free(mime);
+                pthread_mutex_unlock(&store->mutex);
                 return WF_ERR_ALLOC;
             }
             memcpy(data, n->data, n->len);
             *out_data = data;
             *out_len = n->len;
             *out_mime = mime;
+            pthread_mutex_unlock(&store->mutex);
             return WF_OK;
         }
     }
+    pthread_mutex_unlock(&store->mutex);
 
     return WF_ERR_NOT_FOUND;
 }
@@ -520,9 +543,14 @@ wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
 wf_status metalbear_blob_store_exists(metalbear_blob_store *store,
                                       const char *cid) {
     if (!store || !blob_cid_is_valid(cid)) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
     for (metalbear_blob_node *n = store->head; n; n = n->next) {
-        if (strcmp(n->cid, cid) == 0) return WF_OK;
+        if (strcmp(n->cid, cid) == 0) {
+            pthread_mutex_unlock(&store->mutex);
+            return WF_OK;
+        }
     }
+    pthread_mutex_unlock(&store->mutex);
     return WF_ERR_NOT_FOUND;
 }
 
@@ -530,67 +558,104 @@ wf_status metalbear_blob_store_delete(metalbear_blob_store *store,
                                       const char *cid) {
     if (!store || !blob_cid_is_valid(cid)) return WF_ERR_INVALID_ARG;
 
+    pthread_mutex_lock(&store->mutex);
+
     metalbear_blob_node **link = &store->head;
     while (*link && strcmp((*link)->cid, cid) != 0) link = &(*link)->next;
-    if (!*link) return WF_ERR_NOT_FOUND;
-
-    if (store->file_backed) {
-        char *datap = blob_path(store->dir, cid);
-        char *mimep = blob_path(store->dir, cid);
-        if (!datap || !mimep) {
-            free(datap);
-            free(mimep);
-            return WF_ERR_ALLOC;
-        }
-        size_t plen = strlen(mimep);
-        char *mp = (char *)realloc(mimep, plen + 6);
-        if (!mp) {
-            free(datap);
-            free(mimep);
-            return WF_ERR_ALLOC;
-        }
-        mimep = mp;
-        memcpy(mimep + plen, ".mime", 6);
-
-        if (remove(datap) != 0) {
-            free(datap);
-            free(mimep);
-            return WF_ERR_INTERNAL;
-        }
-        if (remove(mimep) != 0) {
-            metalbear_blob_node *node = *link;
-            FILE *f = fopen(datap, "wb");
-            if (f) {
-                if (fwrite(node->data, 1, node->len, f) != node->len) {
-                    (void)remove(datap);
-                }
-                fclose(f);
-            }
-            free(datap);
-            free(mimep);
-            return WF_ERR_INTERNAL;
-        }
-        free(datap);
-        free(mimep);
-
-        /* Best-effort: an orphaned .refs sidecar is harmless (skipped by the
-         * loader's blob_cid_is_valid check either way), but remove it so a
-         * stale one can never be misread if a future CID happens to collide. */
-        char *refsp = blob_refs_path(store->dir, cid);
-        if (refsp) {
-            remove(refsp);
-            free(refsp);
-        }
-        char *revp = blob_rev_path(store->dir, cid);
-        if (revp) {
-            remove(revp);
-            free(revp);
-        }
+    if (!*link) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_NOT_FOUND;
     }
 
     metalbear_blob_node *node = *link;
     *link = node->next;
+
+    char *saved_dir = store->file_backed ? strdup(store->dir) : NULL;
+    char *saved_cid = strdup(cid);
+    unsigned char *saved_data =
+        (unsigned char *)malloc(node->len ? node->len : 1);
+    size_t saved_len = node->len;
+    char *saved_mime = strdup(node->mime);
+    char rev_copy[15];
+    memcpy(rev_copy, node->rev, 15);
+
     blob_node_free(node);
+
+    if (!saved_cid || !saved_data || !saved_mime) {
+        free(saved_dir);
+        free(saved_cid);
+        free(saved_data);
+        free(saved_mime);
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_ALLOC;
+    }
+
+    if (store->file_backed) {
+        char *datap = blob_path(saved_dir, saved_cid);
+        char *mimep = blob_path(saved_dir, saved_cid);
+        wf_status st = WF_OK;
+        if (!datap || !mimep) {
+            free(datap);
+            free(mimep);
+            st = WF_ERR_ALLOC;
+        } else {
+            size_t plen = strlen(mimep);
+            char *mp = (char *)realloc(mimep, plen + 6);
+            if (!mp) {
+                free(datap);
+                free(mimep);
+                st = WF_ERR_ALLOC;
+            } else {
+                mimep = mp;
+                memcpy(mimep + plen, ".mime", 6);
+
+                if (remove(datap) != 0) {
+                    FILE *f = fopen(datap, "wb");
+                    if (f) {
+                        if (fwrite(saved_data, 1, saved_len, f) != saved_len) {
+                            (void)remove(datap);
+                        }
+                        fclose(f);
+                    }
+                    st = WF_ERR_INTERNAL;
+                }
+                if (st == WF_OK && remove(mimep) != 0) {
+                    FILE *mf = fopen(mimep, "wb");
+                    if (mf) {
+                        if (fwrite(saved_mime, 1, strlen(saved_mime), mf) !=
+                            strlen(saved_mime)) {
+                            (void)remove(mimep);
+                        }
+                        fclose(mf);
+                    }
+                    st = WF_ERR_INTERNAL;
+                }
+                free(datap);
+                free(mimep);
+                if (st == WF_OK) {
+                    char *refsp = blob_refs_path(saved_dir, saved_cid);
+                    if (refsp) {
+                        remove(refsp);
+                        free(refsp);
+                    }
+                    char *revp = blob_rev_path(saved_dir, saved_cid);
+                    if (revp) {
+                        remove(revp);
+                        free(revp);
+                    }
+                }
+            }
+        }
+        free(saved_dir);
+        free(saved_cid);
+        free(saved_data);
+        free(saved_mime);
+        pthread_mutex_unlock(&store->mutex);
+        return st;
+    }
+
+    (void)rev_copy;
+    pthread_mutex_unlock(&store->mutex);
     return WF_OK;
 }
 
@@ -600,12 +665,20 @@ wf_status metalbear_blob_store_list(metalbear_blob_store *store,
     *out_cids = NULL;
     *out_count = 0;
 
+    pthread_mutex_lock(&store->mutex);
+
     size_t count = 0;
     for (metalbear_blob_node *n = store->head; n; n = n->next) count++;
-    if (count == 0) return WF_OK;
+    if (count == 0) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_OK;
+    }
 
     char **cids = (char **)calloc(count, sizeof(*cids));
-    if (!cids) return WF_ERR_ALLOC;
+    if (!cids) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_ALLOC;
+    }
     size_t i = 0;
     wf_status status = WF_OK;
     for (metalbear_blob_node *n = store->head; n && status == WF_OK;
@@ -616,6 +689,7 @@ wf_status metalbear_blob_store_list(metalbear_blob_store *store,
         else
             i++;
     }
+    pthread_mutex_unlock(&store->mutex);
     if (status != WF_OK) {
         for (size_t j = 0; j < i; j++) free(cids[j]);
         free(cids);
@@ -633,19 +707,27 @@ void metalbear_blob_store_list_free(char **cids, size_t count) {
 }
 
 wf_status metalbear_blob_store_list_since(metalbear_blob_store *store,
-                                          const char *since,
-                                          char ***out_cids, size_t *out_count) {
+                                          const char *since, char ***out_cids,
+                                          size_t *out_count) {
     if (!store || !since || !out_cids || !out_count) return WF_ERR_INVALID_ARG;
     *out_cids = NULL;
     *out_count = 0;
 
+    pthread_mutex_lock(&store->mutex);
+
     size_t count = 0;
     for (metalbear_blob_node *n = store->head; n; n = n->next)
         if (n->rev[0] != '\0' && strcmp(n->rev, since) > 0) count++;
-    if (count == 0) return WF_OK;
+    if (count == 0) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_OK;
+    }
 
     char **cids = (char **)calloc(count, sizeof(*cids));
-    if (!cids) return WF_ERR_ALLOC;
+    if (!cids) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_ALLOC;
+    }
     size_t i = 0;
     wf_status status = WF_OK;
     for (metalbear_blob_node *n = store->head; n && status == WF_OK;
@@ -657,6 +739,7 @@ wf_status metalbear_blob_store_list_since(metalbear_blob_store *store,
         else
             i++;
     }
+    pthread_mutex_unlock(&store->mutex);
     if (status != WF_OK) {
         for (size_t j = 0; j < i; j++) free(cids[j]);
         free(cids);
@@ -709,20 +792,26 @@ wf_status metalbear_blob_store_associate(metalbear_blob_store *store,
                                          const char *record_uri) {
     if (!store || !blob_cid_is_valid(cid) || !record_uri || !record_uri[0])
         return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
     metalbear_blob_node *n = blob_node_find(store, cid);
-    if (!n) return WF_ERR_NOT_FOUND;
+    if (!n) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_NOT_FOUND;
+    }
     if (n->rev[0] == '\0') {
         /* First association of a blob that predates rev tracking: record
          * this association as its first-seen moment. */
         blob_tid_now(n->rev);
         persist_rev(store, n);
     }
+    wf_status st = WF_OK;
     if (refs_index_of(n, record_uri) != n->ref_count)
-        return WF_OK; /* already associated */
-    wf_status st = refs_append(n, record_uri);
-    if (st != WF_OK) return st;
-    persist_refs(store, n);
-    return WF_OK;
+        st = WF_OK; /* already associated — no-op */
+    else
+        st = refs_append(n, record_uri);
+    if (st == WF_OK) persist_refs(store, n);
+    pthread_mutex_unlock(&store->mutex);
+    return st;
 }
 
 wf_status metalbear_blob_store_dissociate(metalbear_blob_store *store,
@@ -730,25 +819,41 @@ wf_status metalbear_blob_store_dissociate(metalbear_blob_store *store,
                                           const char *record_uri) {
     if (!store || !blob_cid_is_valid(cid) || !record_uri || !record_uri[0])
         return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
     metalbear_blob_node *n = blob_node_find(store, cid);
-    if (!n) return WF_ERR_NOT_FOUND;
+    if (!n) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_NOT_FOUND;
+    }
     size_t idx = refs_index_of(n, record_uri);
-    if (idx == n->ref_count) return WF_OK; /* not associated: no-op success */
+    if (idx == n->ref_count) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_OK; /* not associated: no-op success */
+    }
     refs_remove_at(n, idx);
     if (n->ref_count == 0) {
         /* Dereferenced: garbage, matching the reference PDS's
          * deleteDereferencedBlobs. Delete outright rather than waiting on a
          * timer — see metalbear_blob_store_dissociate's header comment. */
+        /* Unlock before delete (which re-locks) to avoid recursion. */
+        pthread_mutex_unlock(&store->mutex);
         return metalbear_blob_store_delete(store, cid);
     }
     persist_refs(store, n);
+    pthread_mutex_unlock(&store->mutex);
     return WF_OK;
 }
 
 wf_status metalbear_blob_store_is_referenced(metalbear_blob_store *store,
                                              const char *cid) {
     if (!store || !blob_cid_is_valid(cid)) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
     metalbear_blob_node *n = blob_node_find(store, cid);
-    if (!n) return WF_ERR_NOT_FOUND;
-    return n->ref_count > 0 ? WF_OK : WF_ERR_NOT_FOUND;
+    if (!n) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_NOT_FOUND;
+    }
+    wf_status st = n->ref_count > 0 ? WF_OK : WF_ERR_NOT_FOUND;
+    pthread_mutex_unlock(&store->mutex);
+    return st;
 }
