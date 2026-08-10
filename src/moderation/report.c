@@ -24,7 +24,10 @@ wf_status metalbear_report_store_open(const char *path,
         free(store);
         return WF_ERR_INTERNAL;
     }
-    if (sqlite3_open(path, &store->db) != SQLITE_OK ||
+    if (sqlite3_open_v2(path, &store->db,
+                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
+                            SQLITE_OPEN_FULLMUTEX,
+                        NULL) != SQLITE_OK ||
         sqlite3_exec(
             store->db,
             "PRAGMA journal_mode=WAL;"
@@ -114,21 +117,26 @@ wf_status metalbear_report_store_get(metalbear_report_store *store, int64_t id,
                                      metalbear_report **out) {
     if (!store || !out || id <= 0) return WF_ERR_INVALID_ARG;
     *out = NULL;
+    pthread_mutex_lock(&store->mutex);
     sqlite3_stmt *stmt = NULL;
     const char *sql =
         "SELECT id,did,reason_type,reason,subject_type,subject_uri,"
         "subject_cid,mod_tool_name,mod_tool_meta,reported_by,created_at"
         " FROM reports WHERE id=?";
-    if (sqlite3_prepare_v2(store->db, sql, -1, &stmt, NULL) != SQLITE_OK)
+    if (sqlite3_prepare_v2(store->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        pthread_mutex_unlock(&store->mutex);
         return WF_ERR_INTERNAL;
+    }
     sqlite3_bind_int64(stmt, 1, (sqlite3_int64)id);
     if (sqlite3_step(stmt) != SQLITE_ROW) {
         sqlite3_finalize(stmt);
+        pthread_mutex_unlock(&store->mutex);
         return WF_ERR_NOT_FOUND;
     }
     metalbear_report *r = calloc(1, sizeof(*r));
     if (!r) {
         sqlite3_finalize(stmt);
+        pthread_mutex_unlock(&store->mutex);
         return WF_ERR_ALLOC;
     }
     r->id = sqlite3_column_int64(stmt, 0);
@@ -146,9 +154,11 @@ wf_status metalbear_report_store_get(metalbear_report_store *store, int64_t id,
     if (!r->did || !r->reason_type || !r->subject_type || !r->subject_uri ||
         !r->reported_by || !r->created_at) {
         metalbear_report_free(r);
+        pthread_mutex_unlock(&store->mutex);
         return WF_ERR_ALLOC;
     }
     *out = r;
+    pthread_mutex_unlock(&store->mutex);
     return WF_OK;
 }
 
