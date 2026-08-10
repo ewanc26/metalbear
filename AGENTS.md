@@ -429,3 +429,24 @@ it locally.
   export the repo with `com.atproto.sync.getRepo` and check the commit
   signature against the key published in the PLC directory, using something
   other than Wolfram — verifying wolfram's output with wolfram proves nothing.
+
+## Wolfram submodule / CI compatibility
+
+- The Docker builds (`Dockerfile` and `Dockerfile.alpine`) copy the `wolfram`
+  sibling repo into `/src/wolfram` and build it as part of the MetalBear image.
+  MetalBear CI therefore depends on wolfram's CI being green — a wolfram
+  `clang-format` or build failure breaks the MetalBear Release workflow before
+  MetalBear's own build even starts.
+- When fixing MetalBear CI, check the wolfram run that feeds it:
+  `gh run list --repo ewanc26/wolfram --limit 5`. The wolfram `main` branch must
+  be buildable on Alpine (libcurl 8.x) before the MetalBear release workflow
+  can succeed.
+- Known wolfram issues that surface in MetalBear's Alpine build:
+  - `src/transport/websocket.c`: `curl_ws_recv`'s fifth parameter is `const
+    struct curl_ws_frame **` on Alpine/libcurl 8.x. Declare the local `meta`
+    pointer as `const struct curl_ws_frame *meta = NULL;` to avoid
+    `-Wincompatible-pointer-types` build failures.
+  - `src/cli/main.c`: the `clang-format (changed lines)` check inspects only
+    lines touched by the PR. After editing long string literals in the usage or
+    help text, run `clang-format -i src/cli/main.c` and commit the formatted
+    result — do not hand-format or leave alignment-based spacing.
