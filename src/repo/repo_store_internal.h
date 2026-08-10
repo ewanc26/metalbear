@@ -64,8 +64,10 @@ void emit_sync_event(metalbear_repo_store *s);
 
 /* Export the repo's CAR (commit + blocks, optionally since `since`).
  * The _locked variant must be called with `s->mutex` held. */
-wf_status metalbear_repo_store_export(metalbear_repo_store *s, const char *since,
-                                      unsigned char **out_data, size_t *out_len);
+wf_status metalbear_repo_store_export(metalbear_repo_store *s,
+                                      const char *since,
+                                      unsigned char **out_data,
+                                      size_t *out_len);
 wf_status metalbear_repo_store_export_locked(metalbear_repo_store *s,
                                              const char *since,
                                              unsigned char **out_data,
