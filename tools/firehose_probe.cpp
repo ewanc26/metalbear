@@ -217,8 +217,8 @@ std::string b64_rand16() {
 }
 
 // Raw read from the TLS stream. Returns >0 bytes read, 0 on clean EOF, -1 on
-// error with errno set (EAGAIN after SO_RCVTIMEO, ECONNRESET, ...).
-ssize_t read_some(SSL *ssl, uint8_t *out, size_t n) {
+// error with errno set (EAGAIN after timeout, ECONNRESET, ...).
+ssize_t read_some(SSL *ssl, uint8_t *out, size_t n, int timeout_ms) {
     for (;;) {
         int rc = SSL_read(ssl, out, static_cast<int>(n));
         int saved_errno = errno;
@@ -229,8 +229,12 @@ ssize_t read_some(SSL *ssl, uint8_t *out, size_t n) {
             struct pollfd pfd {};
             pfd.fd = SSL_get_fd(ssl);
             pfd.events = (e == SSL_ERROR_WANT_READ) ? POLLIN : POLLOUT;
-            if (poll(&pfd, 1, -1) < 0) {
+            if (poll(&pfd, 1, timeout_ms) < 0) {
                 errno = saved_errno;
+                return -1;
+            }
+            if (pfd.revents == 0) {
+                errno = EAGAIN;
                 return -1;
             }
             continue;
@@ -326,7 +330,7 @@ class FrameReader {
         while (avail() < n) {
             compact();
             uint8_t chunk[65536];
-            ssize_t got = read_some(ssl_, chunk, sizeof(chunk));
+            ssize_t got = read_some(ssl_, chunk, sizeof(chunk), 5000);
             if (got == 0) throw PyError("RuntimeError", "closed");
             if (got < 0) throw_errno_socket("recv");
             buf_.insert(buf_.end(), chunk, chunk + got);
@@ -516,7 +520,10 @@ int main(int argc, char *argv[]) {
                 struct pollfd pfd {};
                 pfd.fd = guard.fd;
                 pfd.events = (e == SSL_ERROR_WANT_READ) ? POLLIN : POLLOUT;
-                poll(&pfd, 1, -1);
+                if (poll(&pfd, 1, 10000) < 0) {
+                    throw PyError("OSError",
+                                  "TLS handshake poll: " + std::string(std::strerror(errno)));
+                }
                 rc = SSL_connect(tls.ssl);
                 continue;
             }
@@ -552,7 +559,7 @@ int main(int argc, char *argv[]) {
         while (buf.find("\r\n\r\n") == std::string::npos) {
             char chunk[4096];
             ssize_t n = read_some(tls.ssl, reinterpret_cast<uint8_t *>(chunk),
-                                  sizeof(chunk));
+                                  sizeof(chunk), 10000);
             if (n == 0)
                 throw PyError("RuntimeError",
                               "connection closed during handshake");
