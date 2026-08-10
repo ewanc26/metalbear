@@ -19,6 +19,7 @@
 #include "wolfram/repo/cid.h"
 
 #include <cJSON.h>
+#include <pthread.h>
 #include <sqlite3.h>
 #include <stddef.h>
 
@@ -38,6 +39,7 @@ struct metalbear_repo_store {
     size_t persisted_blocks; /* count of blocks already flushed to db */
     metalbear_repo_store_event_cb event_cb;
     void *event_ctx;
+    pthread_mutex_t mutex; /* guards db, car, head, persisted_blocks */
 };
 
 /* Build `at://<did>/<collection>/<rkey>`. Caller frees. */
