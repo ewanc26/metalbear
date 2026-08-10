@@ -1041,8 +1041,8 @@ void emit_commit_event_ops(metalbear_repo_store *s, const wf_cid *old_head,
     unsigned char *blocks = NULL;
     size_t blocks_len = 0;
     if (metalbear_repo_store_export_locked(s,
-                                            has_previous ? previous.rev : NULL,
-                                            &blocks, &blocks_len) != WF_OK)
+                                           has_previous ? previous.rev : NULL,
+                                           &blocks, &blocks_len) != WF_OK)
         return;
     metalbear_repo_store_event event = {
         .kind = METALBEAR_REPO_STORE_EVENT_COMMIT,
