@@ -31,12 +31,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Debian bookworm ships libc-ares 1.18.1; Wolfram requires >= 1.28 for the
-# DNS record API. Build the latest release from source so pkg-config finds a
+# DNS record API. Build from the c-ares main branch so pkg-config finds a
 # version that satisfies the check and the runtime stage carries the matching
 # shared library.
-ARG CARES_VERSION=1.33.1
-RUN git clone --depth 1 --branch "cares-${CARES_VERSION//./_}" \
-        https://github.com/c-ares/c-ares.git /tmp/c-ares \
+RUN git clone --depth 1 https://github.com/c-ares/c-ares.git /tmp/c-ares \
     && cmake -B /tmp/c-ares/build -S /tmp/c-ares \
             -DCMAKE_BUILD_TYPE=Release \
             -DCARES_SHARED=ON \
