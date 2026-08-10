@@ -3,6 +3,7 @@
  */
 
 #define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 
 #include "metalbear/oauth/oauth_scope.h"
 #include "metalbear/log.h"

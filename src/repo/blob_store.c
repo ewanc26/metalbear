@@ -14,7 +14,7 @@
 #include <stdio.h>
 #include <dirent.h>
 #include <pthread.h>
-#include <stdbool.h>>
+#include <stdbool.h>
 
 typedef struct metalbear_blob_node {
     char *cid;           /* owned CID string (key) */
