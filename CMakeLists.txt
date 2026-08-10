@@ -440,6 +440,14 @@ if(METALBEAR_BUILD_TESTS)
   target_include_directories(test_metalbear_metrics
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_metrics COMMAND test_metalbear_metrics)
+
+  add_executable(test_metalbear_repo_parallel test/test_repo_parallel.c)
+  target_link_libraries(test_metalbear_repo_parallel
+                        PRIVATE metalbear_core Threads::Threads)
+  target_include_directories(test_metalbear_repo_parallel
+                            PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_repo_parallel
+           COMMAND test_metalbear_repo_parallel)
 endif()
 
 # C++ dev tools (replacements for the Python tools of the same name). Guarded so
