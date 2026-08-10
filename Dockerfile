@@ -26,10 +26,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libsecp256k1-dev \
         libmicrohttpd-dev \
         libzstd-dev \
-        libc-ares-dev \
         libidn2-dev \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Debian bookworm ships libc-ares 1.18.1; Wolfram requires >= 1.28 for the
+# DNS record API. Build the latest release from source so pkg-config finds a
+# version that satisfies the check and the runtime stage carries the matching
+# shared library.
+ARG CARES_VERSION=1.33.1
+RUN git clone --depth 1 --branch "cares-${CARES_VERSION//./_}" \
+        https://github.com/c-ares/c-ares.git /tmp/c-ares \
+    && cmake -B /tmp/c-ares/build -S /tmp/c-ares \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCARES_SHARED=ON \
+            -DCARES_STATIC=OFF \
+    && cmake --build /tmp/c-ares/build --parallel \
+    && cmake --install /tmp/c-ares/build \
+    && rm -rf /tmp/c-ares
 
 WORKDIR /src
 # The POSIX feature-test macros glibc needs are set by Wolfram's CMake target
@@ -100,11 +114,15 @@ RUN apt-get update     && apt-get install -y --no-install-recommends \
         libsecp256k1-1 \
         libmicrohttpd12 \
         libzstd1 \
-        libc-ares2 \
         libidn2-0 \
         zlib1g \
         wget \
     && rm -rf /var/lib/apt/lists/*
+
+# The build stage compiled against a newer c-ares than bookworm ships; carry
+# the matching shared library into the runtime image.
+COPY --from=build /usr/local/lib/libcares.so* /usr/local/lib/
+RUN ldconfig
 
 COPY --from=build /src/build/metalbear /usr/local/bin/metalbear
 
