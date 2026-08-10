@@ -276,7 +276,6 @@ int main(void) {
     free(access_token);
     wf_xrpc_client_free(client);
     metalbear_server_free(server);
-    stop_mock_plc();
     rmtree(directory);
 
     printf("\n");
