@@ -204,6 +204,11 @@ bool admin_authenticated(metalbear_server *server, const wf_xrpc_request *req) {
     int elen = EVP_EncodeBlock((unsigned char *)encoded,
                                (const unsigned char *)expected, n);
     if (elen <= 0) return false;
+    /* EVP_EncodeBlock appends a trailing newline; strip it so lengths
+     * match `provided`, which was already trimmed above. */
+    while (elen > 0 && (encoded[elen - 1] == '\r' || encoded[elen - 1] == '\n' ||
+                        encoded[elen - 1] == ' '))
+        elen--;
 
     if ((size_t)elen != provided_len) return false;
     return CRYPTO_memcmp(encoded, provided, (size_t)elen) == 0;
