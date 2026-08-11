@@ -121,14 +121,17 @@ static void print_usage(FILE *out, const char *argv0) {
         "  -h, --help      print this message and exit\n"
         "\n"
         "MetalBear is configured entirely through a config file and the\n"
-        "environment, not through flags. Settings are read from ./config.toml "
-        "or\n"
-        "the path in METALBEAR_CONFIG, and every value can also be given as "
-        "an\n"
-        "environment variable, which overrides the file.\n"
+        "environment, not through flags. Settings are read from "
+        "./config.toml,\n"
+        "./config.yaml, ./config.yml, or the path in METALBEAR_CONFIG (any\n"
+        "filename, dialect chosen by its .yml/.yaml/other extension), and "
+        "every\n"
+        "value can also be given as an environment variable, which overrides "
+        "the\n"
+        "file.\n"
         "\n"
         "METALBEAR_SERVICE_DID and METALBEAR_USER_DOMAIN are required. See\n"
-        "config.example.toml for the full set.\n",
+        "config.example.toml or config.example.yaml for the full set.\n",
         METALBEAR_VERSION, argv0);
 }
 
@@ -178,8 +181,17 @@ int main(int argc, char **argv) {
      */
     metalbear_config_file *config_owner = NULL;
     const char *config_path = getenv("METALBEAR_CONFIG");
-    if (!config_path && access("config.toml", R_OK) == 0)
-        config_path = "config.toml";
+    if (!config_path) {
+        static const char *const default_paths[] = {
+            "config.toml", "config.yaml", "config.yml"};
+        for (size_t i = 0; i < sizeof(default_paths) / sizeof(default_paths[0]);
+             i++) {
+            if (access(default_paths[i], R_OK) == 0) {
+                config_path = default_paths[i];
+                break;
+            }
+        }
+    }
 
     metalbear_config config = {
         .listen_address = "127.0.0.1",

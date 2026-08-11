@@ -253,6 +253,15 @@ if(METALBEAR_BUILD_TESTS)
   add_test(NAME metalbear_config_file COMMAND test_metalbear_config_file
            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
+  add_executable(test_metalbear_config_file_yaml test/test_config_file_yaml.c)
+  target_link_libraries(test_metalbear_config_file_yaml PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_config_file_yaml
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  # Run from the source tree so the shipped config.example.yaml is reachable.
+  add_test(NAME metalbear_config_file_yaml
+          COMMAND test_metalbear_config_file_yaml
+          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
   # Runs the publisher against a stand-in for the Cloudflare API, so the
   # requests it would send to a live zone can be asserted on directly.
   find_path(MICROHTTPD_INCLUDE_DIR NAMES microhttpd.h REQUIRED)

@@ -1,0 +1,151 @@
+# MetalBear configuration.
+#
+# Every value here can also be set as an environment variable, and the
+# environment wins. That lets a checked-in file hold the shape of a deployment
+# while secrets and per-host overrides stay outside it.
+#
+# Load order: ./config.yaml (or ./config.toml), or the path in
+# METALBEAR_CONFIG. Any setting left out keeps its default; unknown settings
+# are an error rather than silently ignored.
+#
+# This is the same configuration surface as config.example.toml, in YAML: a
+# deliberate, restricted subset (2-space indent, no block sequences or
+# multi-line scalars) rather than the full YAML spec -- see config_file.h.
+
+server:
+  listen: "127.0.0.1"        # bind address; put TLS in front
+  port: 2583
+  threads: 4                 # request worker threads
+  data: "data"                # data directory
+  service_did: "did:web:pds.example.com"
+  public_url: "https://pds.example.com"   # derived from a did:web service DID if omitted
+  user_domain: ".pds.example.com"   # suffix accounts may register handles under
+  # contact_email: "admin@example.com"
+  # lexicon_dir: "/usr/local/share/metalbear/lexicons"
+
+operator:
+  # Who runs this instance. `email`, `privacy_policy` and `terms_of_service` are
+  # published through com.atproto.server.describeServer, which defines fields for
+  # them; the rest is served from /operator.json and shown on the landing page.
+  name: "Your Name"
+  email: "admin@example.com"
+  url: "https://example.com"
+  support_url: "https://example.com/support"
+  description: "A personal AT Protocol server."
+  # privacy_policy: "https://example.com/privacy"
+  # terms_of_service: "https://example.com/terms"
+
+  # Marks a testing instance. The landing page says so plainly, so nobody
+  # mistakes the accounts on it for people.
+  development: false
+
+identity:
+  plc_url: "https://plc.directory"
+
+  # Hex-encoded secp256k1 private key signing the genesis PLC operation for every
+  # DID this host mints. Generated and persisted on first start when unset.
+  # Losing it orphans those DIDs: their operations cannot be updated without it.
+  # plc_rotation_key: "..."
+
+  # Resolved DID documents are cached. Without this, every describeRepo becomes an
+  # outbound request to the PLC directory -- a federating host sees enough AppView
+  # traffic for that to saturate the worker pool.
+  did_cache_ttl_seconds: 300
+  did_cache_entries: 64
+
+accounts:
+  # HTTP Basic 'admin:<password>' for admin endpoints, including invite codes.
+  # admin_password: "..."
+
+  # When true, createAccount requires a valid invite code. Mint one with
+  # com.atproto.server.createInviteCode, which is admin-authenticated.
+  invite_required: true
+
+limits:
+  # Per-client request budget: requests per window. The historical 100/60 is under
+  # two requests a second, which one AppView or a relay backfilling with getRepo
+  # will exceed without being abusive.
+  rate_limit: 3000
+  rate_limit_window_seconds: 60
+
+  # Maximum blob upload. 0 removes the cap, which makes an upload path a
+  # disk-exhaustion lever; the reference uses 5 MB.
+  blob_upload_bytes: 5242880
+
+firehose:
+  # Relays told about new data via requestCrawl on write. Without any, a quiet
+  # host is never crawled and never federates.
+  crawlers: ["https://bsky.network"]
+
+  # Throttle between announcements.
+  crawl_notify_seconds: 1200
+
+  # Keepalive for idle firehose connections. Must stay well under the tightest
+  # idle timeout in the proxy path (nginx defaults to 60s), or relays are
+  # disconnected every minute and never stay attached.
+  ping_seconds: 20
+
+  # Event retention. Pruned events cannot be replayed, and a consumer asking for
+  # them is answered with #info{OutdatedCursor} rather than a silent gap.
+  retention_max_age_seconds: 2592000   # 30 days
+  retention_min_events: 1000
+
+appview:
+  url: "https://api.bsky.app"
+  did: "did:web:api.bsky.app"
+
+# dns:
+#   # Publishes the `_atproto` TXT records that make minted handles resolve.
+#   #
+#   # A handle is verified either over HTTPS at
+#   # `https://<handle>/.well-known/atproto-did` or by a DNS TXT record at
+#   # `_atproto.<handle>`. A wildcard certificate covers one label, so a host
+#   # minting `alice.pds.example.com` under `*.example.com` has no certificate for
+#   # the handle and the HTTPS route cannot work for it at all -- leaving DNS as the
+#   # only mechanism, and one record per account to write by hand.
+#   #
+#   # With this set MetalBear writes those records itself on createAccount, moves
+#   # them on a handle change, and removes them when an account is deleted. Leave it
+#   # out and handle resolution stays entirely the operator's business, which is
+#   # what every deployment did before this existed.
+#   #
+#   provider: "cloudflare"   # cloudflare | digitalocean | desec | rfc2136
+#   api_token: "..."          # a credential that may edit the zone's records
+#   zone_id: "..."            # cloudflare: the zone id; others: the domain
+#   ttl: 300                  # short: a stale record shows a renamed handle
+#
+#   # zone_id is whatever the provider uses to name the zone: Cloudflare's opaque
+#   # id from the dashboard's zone overview, or the domain itself ("example.com")
+#   # for DigitalOcean and deSEC. api_token is a Cloudflare API token with
+#   # Zone.DNS:Edit, a DigitalOcean personal access token with write scope, or a
+#   # deSEC account token.
+#   #
+#   # Each provider enforces its own minimum TTL -- 60, 30 and 3600 respectively --
+#   # and a smaller value here is raised to it rather than refused, since failing
+#   # every write would take handle resolution down for the whole host.
+#   #
+#   # rfc2136 is not a vendor: it speaks the dynamic-update protocol the
+#   # nameservers themselves implement, so it works against BIND, Knot, PowerDNS,
+#   # NSD and anything else standards-compliant. It needs `server` as well, and its
+#   # api_token is the TSIG key as "<name>:<base64 secret>" -- the same pair
+#   # nsupdate -y and a BIND key stanza take.
+#   #
+#   server: "ns1.example.com"       # or "ns1.example.com:5353"
+
+# smtp:
+#   host: "smtp.example.com"
+#   port: 587
+#   username: "user@example.com"
+#   password: "..."
+#   from_address: "pds@example.com"
+#   from_name: "My PDS"
+#   starttls: true
+
+updates:
+  # Periodically checks GitHub for newer MetalBear and Wolfram releases, and
+  # logs a warning when one is found. Disabled by default; enable it to be
+  # notified when a new release is available.
+  check_enabled: false
+  check_interval_seconds: 86400   # 24 hours
+  # metalbear_repo: "ewanc26/metalbear"
+  # wolfram_repo: "ewanc26/wolfram"
