@@ -1271,8 +1271,8 @@ int main(void) {
         {
             char pw_hdr[160];
             char pw_cred[64];
-            int pn = snprintf(pw_cred, sizeof(pw_cred), "admin:%s",
-                              "secret-admin");
+            int pn =
+                snprintf(pw_cred, sizeof(pw_cred), "admin:%s", "secret-admin");
             char pw_b64[128];
             int plen = EVP_EncodeBlock((unsigned char *)pw_b64,
                                        (const unsigned char *)pw_cred, pn);
@@ -1932,16 +1932,15 @@ int main(void) {
      * record processing. */
     {
         wf_xrpc_client_set_auth(client, access_token);
-        static const char prefix[] =
-            "{\"repo\":\"";
+        static const char prefix[] = "{\"repo\":\"";
         static const char middle[] =
             "\",\"collection\":\"app.bsky.feed.post\",\"record\":{\"$type\":"
             "\"app.bsky.feed.post\",\"text\":\"";
         static const char suffix[] =
             "\",\"createdAt\":\"2026-07-27T00:00:00.000Z\"}}";
         size_t pad_len = 1000000;
-        size_t total = sizeof(prefix) - 1 + strlen(alice_did) +
-                      sizeof(middle) - 1 + pad_len + sizeof(suffix) - 1 + 1;
+        size_t total = sizeof(prefix) - 1 + strlen(alice_did) + sizeof(middle) -
+                       1 + pad_len + sizeof(suffix) - 1 + 1;
         char *big_body = malloc(total);
         CHECK(big_body != NULL);
         if (big_body) {
