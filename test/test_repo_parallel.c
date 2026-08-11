@@ -47,11 +47,13 @@ static void *worker_thread(void *arg) {
                  "\"text\":\"thread%d-%d\","
                  "\"createdAt\":\"2024-01-01T00:00:00.000Z\"}",
                  ctx->thread_id, i);
-        char uri[64];
-        char cid[200];
+        char *uri = NULL;
+        char *cid = NULL;
         wf_status st = metalbear_repo_store_create_record(
-            s, "app.bsky.feed.post", rkey, body, NULL, uri, cid);
+            s, "app.bsky.feed.post", rkey, body, NULL, &uri, &cid);
         if (st == WF_OK) ok++;
+        free(uri);
+        free(cid);
     }
     ctx->success = ok;
     return NULL;
