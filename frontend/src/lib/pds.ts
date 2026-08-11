@@ -9,6 +9,7 @@
 
 import { auth } from './stores/auth';
 import type { Session } from './stores/auth';
+import { adminAuth } from './stores/adminAuth';
 
 export interface ServerInfo {
 	did: string;
@@ -570,4 +571,142 @@ export async function deleteAccount(did: string, password: string, token: string
 		password,
 		token
 	});
+}
+
+/* ---- Admin ----
+ * com.atproto.admin.* is gated by HTTP Basic auth against a fixed "admin"
+ * username and the server's configured METALBEAR_ADMIN_PASSWORD -- there is
+ * no bearer session, so every call here carries the password directly
+ * rather than going through xrpc()/xrpcPost()'s session-based auth. */
+
+function currentAdminPassword(): string | null {
+	let val: string | null = null;
+	const unsub = adminAuth.subscribe((p) => (val = p));
+	unsub();
+	return val;
+}
+
+function adminAuthHeader(): string {
+	const password = currentAdminPassword();
+	if (!password) throw new Error('Not authenticated');
+	return `Basic ${btoa(`admin:${password}`)}`;
+}
+
+async function xrpcAdminQuery<T>(path: string, params?: Record<string, string>): Promise<T> {
+	const url = new URL(`/xrpc/${path}`, window.location.origin);
+	for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
+	const res = await fetch(url, {
+		headers: { accept: 'application/json', authorization: adminAuthHeader() }
+	});
+	if (!res.ok) throw new Error(`${path}: ${res.status}`);
+	return res.json() as Promise<T>;
+}
+
+async function xrpcAdminProcedure<T>(path: string, body: unknown): Promise<T> {
+	const url = new URL(`/xrpc/${path}`, window.location.origin);
+	const res = await fetch(url, {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+			accept: 'application/json',
+			authorization: adminAuthHeader()
+		},
+		body: JSON.stringify(body)
+	});
+	if (!res.ok) throw new Error(`${path}: ${res.status}`);
+	return res.json() as Promise<T>;
+}
+
+/* Verifies the given password against the server rather than just storing
+ * it -- getInviteCodes is a harmless, side-effect-free admin query well
+ * suited as an auth check. */
+export async function adminLogin(password: string): Promise<void> {
+	const url = new URL('/xrpc/com.atproto.admin.getInviteCodes', window.location.origin);
+	url.searchParams.set('limit', '1');
+	const res = await fetch(url, {
+		headers: { accept: 'application/json', authorization: `Basic ${btoa(`admin:${password}`)}` }
+	});
+	if (!res.ok) throw new Error(res.status === 401 ? 'Incorrect admin password' : `${res.status}`);
+	adminAuth.login(password);
+}
+
+export interface AdminAccountView {
+	did: string;
+	handle: string;
+	email?: string;
+	indexedAt: string;
+	invitesDisabled?: boolean;
+	emailConfirmedAt?: string;
+	deactivatedAt?: string;
+}
+
+export async function adminGetAccountInfo(did: string): Promise<AdminAccountView> {
+	return xrpcAdminQuery<AdminAccountView>('com.atproto.admin.getAccountInfo', { did });
+}
+
+export interface StatusAttr {
+	applied: boolean;
+	ref?: string;
+}
+
+export interface SubjectStatus {
+	subject: { $type: string; did: string };
+	takedown?: StatusAttr;
+	deactivated?: StatusAttr;
+}
+
+export async function adminGetSubjectStatus(did: string): Promise<SubjectStatus> {
+	return xrpcAdminQuery<SubjectStatus>('com.atproto.admin.getSubjectStatus', { did });
+}
+
+export async function adminSetTakedown(did: string, applied: boolean, ref?: string): Promise<void> {
+	await xrpcAdminProcedure('com.atproto.admin.updateSubjectStatus', {
+		subject: { $type: 'com.atproto.admin.defs#repoRef', did },
+		takedown: { applied, ...(ref ? { ref } : {}) }
+	});
+}
+
+export async function adminSetDeactivated(did: string, applied: boolean): Promise<void> {
+	await xrpcAdminProcedure('com.atproto.admin.updateSubjectStatus', {
+		subject: { $type: 'com.atproto.admin.defs#repoRef', did },
+		deactivated: { applied }
+	});
+}
+
+export interface AdminInviteCode {
+	code: string;
+	available: number;
+	disabled: boolean;
+	forAccount: string;
+	createdBy: string;
+	createdAt: string;
+	uses: unknown[];
+}
+
+export async function adminGetInviteCodes(
+	cursor?: string,
+	limit = 100
+): Promise<{ codes: AdminInviteCode[]; cursor?: string }> {
+	return xrpcAdminQuery('com.atproto.admin.getInviteCodes', {
+		limit: String(limit),
+		...(cursor ? { cursor } : {})
+	});
+}
+
+export async function adminDisableInviteCodes(codes: string[]): Promise<void> {
+	await xrpcAdminProcedure('com.atproto.admin.disableInviteCodes', { codes });
+}
+
+export async function adminSetAccountInvitesEnabled(did: string, enabled: boolean): Promise<void> {
+	await xrpcAdminProcedure(
+		enabled ? 'com.atproto.admin.enableAccountInvites' : 'com.atproto.admin.disableAccountInvites',
+		{ account: did }
+	);
+}
+
+/* Public, unauthenticated -- lets the admin lookup form accept a handle in
+ * addition to a raw DID. */
+export async function resolveHandle(handle: string): Promise<string> {
+	const { did } = await xrpc<{ did: string }>('com.atproto.identity.resolveHandle', { handle });
+	return did;
 }
