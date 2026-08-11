@@ -1,9 +1,13 @@
 #include "account_routes.h"
 #include "../server_internal.h"
 
+#include "metalbear/account/account_registry.h"
+#include "metalbear/email.h"
 #include "metalbear/log.h"
+#include "metalbear/oauth/auth.h"
 #include "metalbear/ops/metrics.h"
 #include "metalbear/repo/blob_store.h"
+#include "metalbear/sequencer.h"
 #include "wolfram/crypto.h"
 #include "wolfram/plc.h"
 #include "wolfram/syntax.h"
@@ -1254,4 +1258,123 @@ wf_status check_signup_queue(void *ctx, const wf_xrpc_request *request,
         return WF_ERR_ALLOC;
     }
     return set_json(response, root);
+}
+
+wf_status request_account_delete(void *ctx, const wf_xrpc_request *request,
+                                 wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    /* The requester's own account — not the server's configured one. This
+     * route is authenticated, so there is always a subject to act on. */
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
+    if (!check_endpoint_rate_limit(server->rl_request_account_delete_day,
+                                   server->rl_request_account_delete_hour,
+                                   acct->did, 1, response)) {
+        return WF_OK;
+    }
+    char token[33];
+    if (metalbear_account_create_email_token(acct->account, "delete", token,
+                                             sizeof(token)) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not create deletion token");
+        return WF_OK;
+    }
+    /* Send confirmation to the requester's own address. */
+    char *acct_email = NULL;
+    metalbear_account_get_email(acct->account, &acct_email, NULL);
+    const char *to =
+        (acct_email && acct_email[0]) ? acct_email : server->account_email;
+    if (server->email && to && to[0])
+        metalbear_email_send_account_deletion(server->email, to, token);
+    free(acct_email);
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    cJSON_AddStringToObject(root, "token", token);
+    return set_json(response, root);
+}
+
+wf_status delete_account(void *ctx, const wf_xrpc_request *request,
+                         wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did = request->params
+                     ? cJSON_GetObjectItemCaseSensitive(request->params, "did")
+                     : NULL;
+    cJSON *password =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "password")
+            : NULL;
+    cJSON *token =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "token")
+            : NULL;
+    if (!cJSON_IsString(did) || !did->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "did is required");
+        return WF_OK;
+    }
+    if (!cJSON_IsString(password) || !password->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "password is required");
+        return WF_OK;
+    }
+    if (!cJSON_IsString(token) || !token->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidToken",
+                                   "token is required");
+        return WF_OK;
+    }
+    /*
+     * Act on the account named by `did`. This took the caller's did, ignored
+     * it, and deleted the server's configured account instead — so a user
+     * deleting their own account destroyed somebody else's, and anyone holding
+     * that account's credentials could delete it while naming any did at all.
+     */
+    metalbear_account_context *acct = context_for_did(server, did->valuestring);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "Account not found");
+        return WF_OK;
+    }
+    if (!metalbear_account_verify_password(acct->account,
+                                           password->valuestring)) {
+        wf_xrpc_response_set_error(response, 401, "AuthenticationRequired",
+                                   "Invalid password");
+        return WF_OK;
+    }
+    wf_status token_status = metalbear_account_verify_email_token(
+        acct->account, "delete", token->valuestring);
+    if (token_status != WF_OK) {
+        wf_xrpc_response_set_error(response, 400, "InvalidToken",
+                                   "Invalid or expired deletion token");
+        return WF_OK;
+    }
+    /* Revoke all sessions */
+    metalbear_auth_delete_all(acct->auth);
+    /* Delete all app passwords and credentials */
+    metalbear_account_delete(acct->account);
+    /* Deactivate the account */
+    metalbear_account_deactivate(acct->account, NULL);
+    /* Remove from the account registry, moderation state included: a DID
+     * re-registered later must not inherit the old account's takedowns. */
+    metalbear_account_registry_remove(server->registry, acct->did);
+    metalbear_account_registry_clear_takedowns_for_did(server->registry,
+                                                       acct->did);
+    /* Emit deletion event to firehose, against the host log rather than a
+     * resolved context's, then drop everything else this DID ever published:
+     * leaving it there hands the repository of somebody who asked to be gone
+     * to any consumer backfilling from an old cursor. */
+    metalbear_sequencer_account_status(server->sequencer, acct->did, 0,
+                                       "deleted");
+    int64_t purged = 0;
+    metalbear_sequencer_purge_account(server->sequencer, acct->did, &purged);
+    metalbear_metrics_inc(METALBEAR_METRIC_ACCOUNTS_DELETED);
+    LOG_INFO("delete_account: purged %lld firehose events for did=%s",
+             (long long)purged, acct->did);
+    /* Drop the handle's TXT record: leaving it would keep pointing resolvers
+     * at a DID this host no longer serves. */
+    retract_handle_dns(server, acct->handle);
+    return WF_OK;
 }
