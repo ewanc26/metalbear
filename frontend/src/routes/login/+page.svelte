@@ -82,7 +82,12 @@
 		</div>
 
 		<div>
-			<label for="password" class="mb-1.5 block text-sm font-medium text-slate-300">Password</label>
+			<div class="mb-1.5 flex items-center justify-between">
+				<label for="password" class="block text-sm font-medium text-slate-300">Password</label>
+				<a href="/reset-password" class="text-xs text-emerald-500 hover:text-emerald-400"
+					>Forgot password?</a
+				>
+			</div>
 			<div class="relative">
 				<input
 					id="password"

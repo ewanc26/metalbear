@@ -126,6 +126,14 @@
 						>Active devices →</a
 					>
 				</li>
+				<li>
+					<a href="/account/security" class="text-emerald-500 hover:text-emerald-400"
+						>Security (password, email, handle) →</a
+					>
+				</li>
+				<li>
+					<a href="/account/danger-zone" class="text-red-400 hover:text-red-300">Danger zone →</a>
+				</li>
 			</ul>
 		</section>
 	{/if}
