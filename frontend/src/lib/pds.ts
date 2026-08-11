@@ -496,3 +496,78 @@ export async function listGrants(): Promise<GrantInfo[]> {
 export async function revokeGrant(clientId: string): Promise<void> {
 	await xrpcPost<Record<string, never>>('com.metalbear.oauth.revokeGrant', { clientId });
 }
+
+/* ---- Password reset / change ----
+ * requestPasswordReset and resetPassword are both unauthenticated per the
+ * lexicon (the emailed token is the credential, not a session) -- used both
+ * for a signed-out "forgot password" flow and, from the account page, as a
+ * signed-in "change password" flow that just emails a code to the account's
+ * own known address. xrpcPostPlain deliberately never attaches a session
+ * token here. */
+
+export async function requestPasswordReset(email: string): Promise<void> {
+	await xrpcPostPlain<Record<string, never>>('com.atproto.server.requestPasswordReset', {
+		email
+	});
+}
+
+export async function resetPassword(token: string, password: string): Promise<void> {
+	await xrpcPostPlain<Record<string, never>>('com.atproto.server.resetPassword', {
+		token,
+		password
+	});
+}
+
+/* ---- Email update / verification ---- */
+
+export async function requestEmailUpdate(): Promise<{ tokenRequired: boolean }> {
+	return xrpcPost<{ tokenRequired: boolean }>('com.atproto.server.requestEmailUpdate', {});
+}
+
+/* `token` is required only when the current email is already confirmed --
+ * see update_email in account_routes.c. Omit it for an unconfirmed email. */
+export async function updateEmail(email: string, token?: string): Promise<void> {
+	await xrpcPost<Record<string, never>>(
+		'com.atproto.server.updateEmail',
+		token ? { email, token } : { email }
+	);
+}
+
+export async function requestEmailConfirmation(): Promise<void> {
+	await xrpcPost<Record<string, never>>('com.atproto.server.requestEmailConfirmation', {});
+}
+
+export async function confirmEmail(email: string, token: string): Promise<void> {
+	await xrpcPost<Record<string, never>>('com.atproto.server.confirmEmail', { email, token });
+}
+
+/* ---- Handle change ---- */
+
+export async function updateHandle(handle: string): Promise<void> {
+	await xrpcPost<Record<string, never>>('com.atproto.identity.updateHandle', { handle });
+}
+
+/* ---- Account deactivation / reactivation / deletion ---- */
+
+export async function deactivateAccount(): Promise<void> {
+	await xrpcPost<Record<string, never>>('com.atproto.server.deactivateAccount', {});
+}
+
+export async function activateAccount(): Promise<void> {
+	await xrpcPost<Record<string, never>>('com.atproto.server.activateAccount', {});
+}
+
+export async function requestAccountDelete(): Promise<void> {
+	await xrpcPost<Record<string, never>>('com.atproto.server.requestAccountDelete', {});
+}
+
+/* Unauthenticated per the lexicon: the token+password together are the
+ * credential, matching how deleteAccount is implemented server-side (it
+ * looks the account up by `did`, not by session). */
+export async function deleteAccount(did: string, password: string, token: string): Promise<void> {
+	await xrpcPostPlain<Record<string, never>>('com.atproto.server.deleteAccount', {
+		did,
+		password,
+		token
+	});
+}
