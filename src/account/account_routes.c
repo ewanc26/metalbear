@@ -1239,3 +1239,19 @@ wf_status create_invite_codes(void *ctx, const wf_xrpc_request *request,
     cJSON_AddItemToObject(root, "codes", codes_arr);
     return set_json(response, root);
 }
+
+/* ---- com.atproto.temp.checkSignupQueue (query) ----
+ * Temporary unspecced route. MetalBear has no entryway, so always
+ * returns { activated: true }. */
+wf_status check_signup_queue(void *ctx, const wf_xrpc_request *request,
+                             wf_xrpc_response *response) {
+    (void)ctx;
+    (void)request;
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    if (!cJSON_AddBoolToObject(root, "activated", 1)) {
+        cJSON_Delete(root);
+        return WF_ERR_ALLOC;
+    }
+    return set_json(response, root);
+}

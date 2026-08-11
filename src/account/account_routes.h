@@ -37,6 +37,8 @@ wf_status create_invite_code(void *ctx, const wf_xrpc_request *request,
                              wf_xrpc_response *response);
 wf_status create_invite_codes(void *ctx, const wf_xrpc_request *request,
                               wf_xrpc_response *response);
+wf_status check_signup_queue(void *ctx, const wf_xrpc_request *request,
+                             wf_xrpc_response *response);
 
 #ifdef __cplusplus
 }
