@@ -11,11 +11,19 @@
  * Content-Type.
  */
 
+#include "blob_store_server.h"
+#include "../server_internal.h"
+
+#include "metalbear/account/account_context.h"
+#include "metalbear/account/account_registry.h"
+#include "metalbear/log.h"
+#include "metalbear/ops/metrics.h"
 #include "metalbear/repo/blob_store.h"
 #include "metalbear/repo/repo_store.h"
 #include "wolfram/xrpc_server.h"
 #include "wolfram/repo/cid.h"
 
+#include <cJSON.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -208,6 +216,101 @@ static wf_status blob_get_handler(void *ctx, const wf_xrpc_request *req,
     free(data);
     free(mime);
     return WF_OK;
+}
+
+/* ---- com.atproto.repo.uploadBlob (procedure) ----
+ * Mirrors the resolver-less/resolver-based handlers above but runs against
+ * the full PDS server context: enforces METALBEAR_BLOB_UPLOAD_LIMIT, resolves
+ * the account via resolve_request_context, and checks for a blob takedown
+ * before storing. Output shape matches the com.atproto.repo.uploadBlob
+ * schema exactly. Registered directly by server.c (not through the bundle
+ * used by metalbear_xrpc_server_register_blob_store[_resolver], which have
+ * no account or rate-limit context to enforce). */
+wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
+                      wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    LOG_DEBUG("upload_blob: did=%s content_type=%s len=%zu",
+              request->authed_subject ? request->authed_subject : "-",
+              request->content_type ? request->content_type : "-",
+              (size_t)request->body_len);
+    if (request->body_len == 0) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "blob body is empty");
+        return WF_OK;
+    }
+    if (server->blob_upload_limit > 0 &&
+        (int64_t)request->body_len > server->blob_upload_limit) {
+        wf_xrpc_response_set_error(response, 413, "BlobTooLarge",
+                                   "blob exceeds the configured upload limit");
+        return WF_OK;
+    }
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 400, "AccountNotFound",
+                                   "account is not hosted here");
+        return WF_OK;
+    }
+    const char *mime = request->content_type && request->content_type[0]
+                           ? request->content_type
+                           : "application/octet-stream";
+    wf_cid cid;
+    if (wf_cid_of_bytes(request->body, request->body_len, &cid) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "failed to compute blob CID");
+        return WF_OK;
+    }
+    char *cid_str = wf_cid_to_string(&cid);
+    if (!cid_str) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "failed to encode blob CID");
+        return WF_OK;
+    }
+    /*
+     * Checked after hashing, because the CID is what a takedown names and it
+     * is not known until the body has been read. A takedown that blocked only
+     * reads would be undone by re-uploading the same bytes.
+     */
+    char *blob_takedown = NULL;
+    metalbear_account_registry_get_takedown(server->registry, acct->did, NULL,
+                                            cid_str, &blob_takedown);
+    if (blob_takedown) {
+        free(blob_takedown);
+        free(cid_str);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "Blob has been takendown, cannot re-upload");
+        return WF_OK;
+    }
+    if (metalbear_blob_store_put(acct->blobs, cid_str, mime, request->body,
+                                 request->body_len) != WF_OK) {
+        free(cid_str);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "failed to store blob");
+        return WF_OK;
+    }
+    metalbear_metrics_inc(METALBEAR_METRIC_BLOBS_UPLOADED);
+    cJSON *root = cJSON_CreateObject();
+    cJSON *blob = cJSON_CreateObject();
+    if (!root || !blob) {
+        cJSON_Delete(root);
+        cJSON_Delete(blob);
+        free(cid_str);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddStringToObject(blob, "$type", "blob");
+    cJSON_AddStringToObject(blob, "mimeType", mime);
+    cJSON *ref = cJSON_CreateObject();
+    if (!ref || !cJSON_AddStringToObject(ref, "$link", cid_str)) {
+        cJSON_Delete(root);
+        cJSON_Delete(blob);
+        cJSON_Delete(ref);
+        free(cid_str);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddItemToObject(blob, "ref", ref);
+    cJSON_AddNumberToObject(blob, "size", (double)request->body_len);
+    cJSON_AddItemToObject(root, "blob", blob);
+    free(cid_str);
+    return set_json(response, root);
 }
 
 wf_status
