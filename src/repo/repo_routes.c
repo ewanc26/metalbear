@@ -248,6 +248,49 @@ static void free_owned_strings(char **arr, size_t count) {
  * emitted: validate:false means nothing was checked, so it reports "unknown"
  * rather than omitting the field.
  */
+/* True when `node` is a legacy-shaped blob ref: an object with exactly the
+ * two keys "cid" (string) and "mimeType" (non-empty string), and nothing
+ * else -- in particular no "$type". Mirrors the reference's isLegacyBlobRef
+ * (lex-data/src/blob.ts), minus its CID-string well-formedness check, which
+ * the record store validates separately. */
+static bool is_legacy_blob_shape(const cJSON *node) {
+    if (!cJSON_IsObject(node)) return false;
+    const cJSON *cid = cJSON_GetObjectItemCaseSensitive(node, "cid");
+    const cJSON *mime = cJSON_GetObjectItemCaseSensitive(node, "mimeType");
+    if (!cJSON_IsString(cid) || !cJSON_IsString(mime) || !mime->valuestring[0])
+        return false;
+    int count = 0;
+    const cJSON *child = NULL;
+    cJSON_ArrayForEach(child, node) count++;
+    return count == 2;
+}
+
+/* Recursively search `node` for a legacy-shaped blob ref, returning its cid
+ * (borrowed, do not free) or NULL if none is found. Matches the traversal
+ * enumBlobRefs performs over records (object/array recursion), stopping at
+ * a legacy-ref match the same way it does at a proper `$type: "blob"` one. */
+static const char *find_legacy_blob_ref(const cJSON *node) {
+    if (!node) return NULL;
+    if (cJSON_IsObject(node)) {
+        if (is_legacy_blob_shape(node)) {
+            const cJSON *cid = cJSON_GetObjectItemCaseSensitive(node, "cid");
+            return cid->valuestring;
+        }
+        const cJSON *child = NULL;
+        cJSON_ArrayForEach(child, node) {
+            const char *found = find_legacy_blob_ref(child);
+            if (found) return found;
+        }
+    } else if (cJSON_IsArray(node)) {
+        const cJSON *child = NULL;
+        cJSON_ArrayForEach(child, node) {
+            const char *found = find_legacy_blob_ref(child);
+            if (found) return found;
+        }
+    }
+    return NULL;
+}
+
 static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
                         const char *collection, const char *record_json,
                         wf_xrpc_response *resp,
@@ -275,6 +318,18 @@ static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
         char detail[512];
         snprintf(detail, sizeof(detail), "Invalid $type: expected %s, got %s",
                  collection, type->valuestring);
+        cJSON_Delete(parsed);
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest", detail);
+        return 0;
+    }
+    /* Legacy blob refs ({cid, mimeType}, no $type) are rejected on write
+     * regardless of validate, matching the reference's prepareCreate/
+     * prepareUpdate enumBlobRefs step (repo/prepare.ts). */
+    const char *legacy_cid = find_legacy_blob_ref(parsed);
+    if (legacy_cid) {
+        char detail[320];
+        snprintf(detail, sizeof(detail), "Legacy blobs are not allowed (%s)",
+                 legacy_cid);
         cJSON_Delete(parsed);
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest", detail);
         return 0;
