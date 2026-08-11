@@ -1874,6 +1874,53 @@ int main(void) {
     cJSON_Delete(json);
     wf_response_free(&response);
 
+    /* sync.getRecord: an existing record proves inclusion (commit + MST
+     * proof nodes + the leaf block itself, all present and parseable) --
+     * not just a bare commit+leaf dump with nothing to verify it against. */
+    {
+        wf_xrpc_param sync_get_params[] = {
+            {"did", alice_did},
+            {"collection", "app.bsky.feed.post"},
+            {"rkey", "first"},
+        };
+        CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getRecord",
+                                   sync_get_params, 3, &response) == WF_OK);
+        CHECK(response.status == 200 && response.body_len > 0);
+        wf_car proof_car = {0};
+        CHECK(wf_car_parse((const unsigned char *)response.body,
+                           response.body_len, &proof_car) == WF_OK);
+        CHECK(proof_car.root_count == 1);
+        /* Commit + at least one MST node + the leaf: a bare commit+leaf
+         * dump (the old, unverifiable shape) would be exactly 2. */
+        CHECK(proof_car.block_count > 2);
+        wf_car_free(&proof_car);
+        wf_response_free(&response);
+    }
+
+    /* sync.getRecord on a record that does not exist: still 200 (matching
+     * the reference, which only errors when the repo itself has no commit),
+     * with a CAR proving non-inclusion -- the MST path down to where the
+     * key would live -- rather than a 404 with nothing to verify. */
+    {
+        wf_xrpc_param sync_missing_params[] = {
+            {"did", alice_did},
+            {"collection", "app.bsky.feed.post"},
+            {"rkey", "definitely-does-not-exist"},
+        };
+        CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getRecord",
+                                   sync_missing_params, 3, &response) == WF_OK);
+        CHECK(response.status == 200 && response.body_len > 0);
+        wf_car missing_car = {0};
+        CHECK(wf_car_parse((const unsigned char *)response.body,
+                           response.body_len, &missing_car) == WF_OK);
+        CHECK(missing_car.root_count == 1);
+        /* At least the commit itself, proving the walk actually ran rather
+         * than short-circuiting to an empty body. */
+        CHECK(missing_car.block_count >= 1);
+        wf_car_free(&missing_car);
+        wf_response_free(&response);
+    }
+
     wf_xrpc_param repo_params[] = {{"did", alice_did}};
     CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getRepo", repo_params,
                                1, &response) == WF_OK);
