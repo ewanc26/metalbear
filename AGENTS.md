@@ -76,11 +76,36 @@ every protocol handler in the codebase; it and `repo_store.c` were split
 along these lines, and the same standard applies to new code and to the
 next oversized file found, not just the ones already done.
 
+Modular structure is mandatory, not a style preference:
+
+- **New protocol handlers go in domain-scoped files, never `server.c`.**
+  A lexicon namespace's XRPC handlers live in
+  `src/<domain>/<domain>_routes.c` with a matching `.h` in the same
+  directory; `server.c` includes that header and registers the handlers,
+  and defines none of them. `server.c` is the server lifecycle
+  (`metalbear_server_start`/`_free`), the auth callback, route
+  registration, and the small shared helpers those need — nothing else.
+  A handler written into `server.c` is a review failure; the `video`
+  routes in `src/video/video_routes.c` are the template to follow.
+- **Keep `server.c` under ~3000 lines.** It is the largest hand-written
+  file and still holds several handlers that belong in their domains (see
+  "Remaining extractions" below); add code to it only as a short-lived step
+  toward removing it. A change that grows any hand-written file past ~3000
+  lines must split it in the same change.
+
 - **Domain-scoped route files**: XRPC handlers for one lexicon namespace
   (or one clearly-bounded cluster within a namespace, e.g. `sync_routes.c`
   covering `com.atproto.sync.*`) live in their own `src/<domain>/<domain>_routes.c`,
   declared via a matching `.h` in the same directory. `server.c` includes
   that header and registers the handlers; it does not define them.
+- **Remaining extractions from `server.c`.** `upload_blob` belongs in
+  `src/repo/blob_store_server.c` (which already owns the blob routes);
+  `check_signup_queue` and `getActorPreferences`/`putActorPreferences`
+  belong in `src/account/` / `src/appview/`; `health`, `operator_info`,
+  and `describe_server` belong in `src/ops/`; `request_account_delete`
+  and `delete_account` belong in `src/account/`. Extract each the way the
+  video module was: one domain file per split, each its own `refactor:`
+  commit, verified (rebuild + ctest + clang-format) before the next.
 - **Internal headers share what the public API must not expose.** A struct
   that is opaque in `include/metalbear/*.h` for external consumers (e.g.
   `metalbear_server`, `metalbear_repo_store`) sometimes has fields several
@@ -114,9 +139,11 @@ next oversized file found, not just the ones already done.
   green CI run before starting the next file. Don't stack unverified splits.
 - **Size alone doesn't mandate a split.** A large file that genuinely deals
   with one scope — one lexicon namespace with a lot of surface area, one
-  cohesive subsystem — is not automatically a violation. Look for actual
-  domain mixing (a session handler and a moderation handler in the same
-  file) before deciding a file needs dividing, not just a line count.
+  cohesive subsystem — is not automatically a violation (a single-domain
+  file may legitimately run several hundred lines above the threshold
+  above). Look for actual domain mixing (a session handler and a moderation
+  handler in the same file) before deciding a file needs dividing, not just
+  a line count; a file past ~3000 lines must still be split or justified.
 
 ## Commits
 
