@@ -306,24 +306,49 @@ char *make_uri(const char *did, const char *collection, const char *rkey) {
     return u;
 }
 
+/* s->car.roots is normally a non-owning pointer at &s->head, never a
+ * separate heap allocation -- cheaper than keeping a second copy of the
+ * head CID in sync, and every other wf_car in this file that IS
+ * heap-allocated (imported/exported CARs, diffs) is a short-lived local, not
+ * s->car. wf_repo_diff_apply is the one exception: it always frees whatever
+ * `repo->roots` pointed at and replaces it with its own malloc'd copy (see
+ * its call site in h_import_repo), so this must release that heap copy
+ * before restoring the invariant, or it leaks; the reverse (freeing &s->head
+ * itself) would be exactly the "pointer being freed was not allocated" crash
+ * this guards against. */
 static void set_root(metalbear_repo_store *s) {
+    if (s->car.roots != &s->head) free(s->car.roots);
     s->car.roots = &s->head;
     s->car.root_count = s->head.len > 0 ? 1 : 0;
 }
 
 /* Fill a `commit` meta object {cid, rev} from the current head. */
+/* The rev every route reports: `rev_override` if importRepo set one
+ * (deliberately diverging from the head commit's own embedded rev, matching
+ * the reference -- see rev_override's doc comment), otherwise the rev
+ * actually embedded in the head commit block. Writes at most `out_len - 1`
+ * bytes into `out` plus a NUL terminator; `out` is "" when there is no head
+ * or the override/commit can't be read. Caller must hold s->mutex. */
+static void get_effective_rev(metalbear_repo_store *s, char *out,
+                              size_t out_len) {
+    out[0] = '\0';
+    if (s->rev_override) {
+        snprintf(out, out_len, "%s", s->rev_override);
+        return;
+    }
+    if (!s->head.len) return;
+    wf_car_block *blk = wf_car_find_block(&s->car, &s->head);
+    if (!blk) return;
+    wf_commit cm;
+    if (wf_commit_parse(blk->data, blk->data_len, &cm) == WF_OK)
+        snprintf(out, out_len, "%s", cm.rev);
+}
+
 void add_commit_meta(metalbear_repo_store *s, cJSON *parent) {
     cJSON *commit = cJSON_CreateObject();
     char *cid = s->head.len ? wf_cid_to_string(&s->head) : strdup("");
-    char rev[64] = "";
-    if (s->head.len) {
-        wf_car_block *blk = wf_car_find_block(&s->car, &s->head);
-        if (blk) {
-            wf_commit cm;
-            if (wf_commit_parse(blk->data, blk->data_len, &cm) == WF_OK)
-                snprintf(rev, sizeof(rev), "%s", cm.rev);
-        }
-    }
+    char rev[64];
+    get_effective_rev(s, rev, sizeof(rev));
     cJSON_AddStringToObject(commit, "cid", cid ? cid : "");
     free(cid);
     cJSON_AddStringToObject(commit, "rev", rev);
@@ -599,12 +624,15 @@ static wf_status index_delete_record(metalbear_repo_store *s,
     return rc == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
 }
 
+/* Persists s->head and s->rev_override as they currently stand -- callers
+ * decide what those hold before calling this. */
 static wf_status persist_head(metalbear_repo_store *s) {
     char *cidstr = s->head.len ? wf_cid_to_string(&s->head) : NULL;
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(
-            s->db, "INSERT OR REPLACE INTO head (id, cid) VALUES (0, ?);", -1,
-            &stmt, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(s->db,
+                           "INSERT OR REPLACE INTO head (id, cid, "
+                           "rev_override) VALUES (0, ?, ?);",
+                           -1, &stmt, NULL) != SQLITE_OK) {
         free(cidstr);
         return WF_ERR_INTERNAL;
     }
@@ -612,16 +640,26 @@ static wf_status persist_head(metalbear_repo_store *s) {
         sqlite3_bind_text(stmt, 1, cidstr, -1, SQLITE_TRANSIENT);
     else
         sqlite3_bind_null(stmt, 1);
+    if (s->rev_override)
+        sqlite3_bind_text(stmt, 2, s->rev_override, -1, SQLITE_TRANSIENT);
+    else
+        sqlite3_bind_null(stmt, 2);
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     free(cidstr);
     return rc == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
 }
 
-/* Persist the new head commit (and any new blocks) atomically. */
+/* Persist the new head commit (and any new blocks) atomically. Every commit
+ * this produces is self-consistent (rev embedded in the commit matches what
+ * every route reports), so any rev_override left over from an earlier
+ * importRepo is now stale and is cleared -- set_rev_override is the only way
+ * one gets set again, and only importRepo calls it, always after this. */
 wf_status commit_persist(metalbear_repo_store *s, const wf_cid *new_head) {
     s->head = *new_head;
     set_root(s);
+    free(s->rev_override);
+    s->rev_override = NULL;
 
     if (sqlite3_exec(s->db, "BEGIN;", NULL, NULL, NULL) != SQLITE_OK)
         return WF_ERR_INTERNAL;
@@ -632,6 +670,18 @@ wf_status commit_persist(metalbear_repo_store *s, const wf_cid *new_head) {
     else
         sqlite3_exec(s->db, "ROLLBACK;", NULL, NULL, NULL);
     return st;
+}
+
+/* Set a decoupled rev_override, persisted immediately. Called only by
+ * importRepo's adopt-verbatim path, after commit_persist -- see
+ * rev_override's doc comment on struct metalbear_repo_store for why this
+ * exists at all. */
+wf_status set_rev_override(metalbear_repo_store *s, const char *rev) {
+    char *copy = strdup(rev);
+    if (!copy) return WF_ERR_ALLOC;
+    free(s->rev_override);
+    s->rev_override = copy;
+    return persist_head(s);
 }
 
 static wf_status load_all_blocks(metalbear_repo_store *s) {
@@ -689,6 +739,7 @@ static void free_store(metalbear_repo_store *s) {
     free(s->handle);
     free(s->signing_key_didkey);
     free(s->path);
+    free(s->rev_override);
     free(s);
 }
 
@@ -762,6 +813,29 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
     sqlite3_finalize(column_stmt);
     if (!has_repo_rev &&
         sqlite3_exec(s->db, "ALTER TABLE blocks ADD COLUMN repo_rev TEXT;",
+                     NULL, NULL, NULL) != SQLITE_OK) {
+        free_store(s);
+        return WF_ERR_INTERNAL;
+    }
+
+    /* Migration for stores created before rev_override existed (see its doc
+     * comment on struct metalbear_repo_store). Legacy rows have no override,
+     * i.e. behave exactly as before this column existed. */
+    int has_rev_override = 0;
+    sqlite3_stmt *head_column_stmt = NULL;
+    if (sqlite3_prepare_v2(s->db, "PRAGMA table_info(head);", -1,
+                           &head_column_stmt, NULL) != SQLITE_OK) {
+        free_store(s);
+        return WF_ERR_INTERNAL;
+    }
+    while (sqlite3_step(head_column_stmt) == SQLITE_ROW) {
+        const char *name =
+            (const char *)sqlite3_column_text(head_column_stmt, 1);
+        if (name && strcmp(name, "rev_override") == 0) has_rev_override = 1;
+    }
+    sqlite3_finalize(head_column_stmt);
+    if (!has_rev_override &&
+        sqlite3_exec(s->db, "ALTER TABLE head ADD COLUMN rev_override TEXT;",
                      NULL, NULL, NULL) != SQLITE_OK) {
         free_store(s);
         return WF_ERR_INTERNAL;
@@ -863,9 +937,10 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
             return st;
         }
 
-        /* Load head commit CID, if any. */
-        if (sqlite3_prepare_v2(s->db, "SELECT cid FROM head WHERE id=0;", -1,
-                               &stmt, NULL) != SQLITE_OK) {
+        /* Load head commit CID and any decoupled-rev override, if any. */
+        if (sqlite3_prepare_v2(s->db,
+                               "SELECT cid, rev_override FROM head WHERE id=0;",
+                               -1, &stmt, NULL) != SQLITE_OK) {
             free_store(s);
             return WF_ERR_INTERNAL;
         }
@@ -877,6 +952,8 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
                 free_store(s);
                 return WF_ERR_PARSE;
             }
+            const char *ro = (const char *)sqlite3_column_text(stmt, 1);
+            if (ro) s->rev_override = strdup(ro);
         }
         sqlite3_finalize(stmt);
         s->persisted_blocks = s->car.block_count;
@@ -2189,13 +2266,8 @@ wf_status metalbear_repo_store_get_head(metalbear_repo_store *s, char **out_rev,
 
     pthread_mutex_lock(&s->mutex);
     char *cid = wf_cid_to_string(&s->head);
-    char rev[64] = "";
-    wf_car_block *blk = wf_car_find_block(&s->car, &s->head);
-    if (blk) {
-        wf_commit cm;
-        if (wf_commit_parse(blk->data, blk->data_len, &cm) == WF_OK)
-            snprintf(rev, sizeof(rev), "%s", cm.rev);
-    }
+    char rev[64];
+    get_effective_rev(s, rev, sizeof(rev));
     pthread_mutex_unlock(&s->mutex);
     if (!cid) return WF_ERR_ALLOC;
     *out_cid = cid;
