@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libmicrohttpd-dev \
         libzstd-dev \
         libidn2-dev \
+        libpcre2-dev \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -113,6 +114,7 @@ RUN apt-get update     && apt-get install -y --no-install-recommends \
         libmicrohttpd12 \
         libzstd1 \
         libidn2-0 \
+        libpcre2-8-0 \
         zlib1g \
         wget \
     && rm -rf /var/lib/apt/lists/*

@@ -68,7 +68,7 @@ jobs:
             build-essential cmake pkg-config \
             libsqlite3-dev libcurl4-openssl-dev libssl-dev \
             libsecp256k1-dev libmicrohttpd-dev libzstd-dev \
-            zlib1g-dev libc-ares-dev libidn2-dev
+            zlib1g-dev libc-ares-dev libidn2-dev libpcre2-dev
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos'
@@ -77,7 +77,7 @@ jobs:
           # without the library, so pkg-config finds the module and the link
           # then fails. Installing it makes the detection consistent rather
           # than accidental.
-          brew install cmake openssl@3 sqlite libmicrohttpd secp256k1 zstd c-ares
+          brew install cmake openssl@3 sqlite libmicrohttpd secp256k1 zstd c-ares pcre2
 
       - name: Build
         working-directory: MetalBear
