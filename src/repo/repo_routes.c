@@ -9,6 +9,7 @@
 #include "wolfram/repo/record.h"
 #include "wolfram/server.h"
 #include "wolfram/syntax.h"
+#include "wolfram/tid.h"
 #include "wolfram/xrpc_server.h"
 
 #include <cJSON.h>
@@ -1091,31 +1092,35 @@ static wf_status h_get_latest_commit(void *ctx, const wf_xrpc_request *req,
  * the reference's acceptingImports config check, maxImportSize blobLimit,
  * and repo:manage scope requirement.
  *
- * Onto an existing repo (s->head already set): wf_repo_diff_verify diffs the
- * imported snapshot against the live repo (mirroring the reference's
- * verifyDiff) and the resulting create/update/delete operations are
- * reapplied via wf_repo_apply_writes -- the same primitive applyWrites
- * uses -- producing ONE new commit with a fresh rev, chained onto the
- * current head and signed with this account's own key. A #commit event is
- * emitted describing the ops.
+ * Matches the reference's actual mechanism exactly (see
+ * `packages/pds/src/api/com/atproto/repo/importRepo.ts` and
+ * `packages/repo/src/sync/consumer.ts`, verifyDiff, in the
+ * bluesky-social/atproto reference source; investigated in issue #22), in
+ * both cases below: the imported commit is adopted VERBATIM -- its own
+ * rev/prev/sig, never re-signed or re-encoded -- while a freshly generated
+ * TID is recorded separately as rev_override, deliberately diverging from
+ * whatever rev is actually embedded in that commit's CBOR (matching
+ * `diff.commit.rev = TID.nextStr()` being assigned on the in-memory object
+ * the reference builds, which is never re-serialized into the block it
+ * already wrote to newBlocks). No firehose event is emitted for an import,
+ * onto an empty repo or an existing one -- the reference never sequences one
+ * here, unlike every other repo-mutating endpoint.
  *
  * Onto a still-empty repo (no commits yet -- e.g. immediately post-
  * createAccount, before any writes): there is no base to diff against, so
- * the imported commit is adopted as-is (still signature-verified) and a
- * #sync event is emitted.
+ * the imported commit is adopted as-is (still signature-verified).
  *
- * NOTE on parity: this deliberately does NOT replicate the reference's
- * exact mechanism. Per `packages/pds/src/api/com/atproto/repo/importRepo.ts`
- * and `packages/repo/src/sync/consumer.ts` (verifyDiff) in the
- * bluesky-social/atproto reference source, the reference's "fresh rev" is a
- * local SQL bookkeeping column (`repo_root.rev`) that is allowed to diverge
- * from the rev embedded in the actual served commit CBOR -- it never
- * re-signs anything, and it never sequences a firehose event for an import
- * at all (no other repo-mutating endpoint skips that). This handler instead
- * keeps rev-in-the-database and rev-in-the-signed-commit consistent (this
- * codebase has no decoupled-rev concept -- rev is always parsed from the
- * head commit itself, see parse_commit_at) and always tells relays what
- * changed. See issue #22 for the full investigation. */
+ * Onto an existing repo (s->head already set): wf_repo_diff_verify diffs the
+ * imported snapshot against the live repo (mirroring the reference's
+ * verifyDiff, and confirming the imported commit is validly signed by this
+ * account's own key), the diff's new blocks are merged into s->car, and the
+ * imported commit's own CID is adopted as the new head directly -- unlike
+ * wf_repo_apply_writes (used by createRecord et al.), this does not produce
+ * a new, freshly-signed commit chained onto the current head; it splices the
+ * imported commit in as-is, exactly as the reference's applyCommit does.
+ * (Not wf_repo_diff_apply: it prunes blocks the diff removed, which is
+ * correct for wolfram's own generic CAR-diff semantics but would desync
+ * s->car from the blocks table here -- see the merge loop's own comment.) */
 
 static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
                                wf_xrpc_response *resp) {
@@ -1162,7 +1167,6 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
         return WF_OK;
     }
 
-    wf_cid old_head = s->head;
     wf_status st = WF_OK;
     bool locked = false;
 
@@ -1254,17 +1258,33 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
             goto cleanup;
         }
         reindex_all(s);
-        emit_sync_event(s);
+        /* Fresh, deliberately decoupled rev -- see this handler's own doc
+         * comment. No firehose event: the reference never sequences one for
+         * an import. */
+        char fresh_rev[15];
+        if (wf_tid_now(fresh_rev) == WF_OK) set_rev_override(s, fresh_rev);
     } else {
         /* An existing base commit: diff the imported snapshot against it
          * (wf_repo_diff_verify mirrors the reference's verifyDiff, and
          * confirms the imported commit is validly signed by this account's
-         * own key) and reapply the resulting record-level operations as ONE
-         * new commit with a fresh rev, chained onto the current head via
-         * wf_repo_apply_writes -- the same primitive applyWrites uses. This
-         * is deliberately NOT wf_repo_diff_apply: that adopts the imported
-         * commit's own rev/prev/sig verbatim, which would splice a foreign
-         * commit into this repo's chain instead of extending it. */
+         * own key), then adopt the resulting commit verbatim -- its own
+         * rev/prev/sig, matching the reference's applyCommit exactly (see
+         * this handler's own doc comment for why this replaced reapplying
+         * through wf_repo_apply_writes).
+         *
+         * This deliberately does NOT use wf_repo_diff_apply: it prunes
+         * blocks named in diff.removed_cids from its result, which is
+         * correct for wolfram's own generic CAR-diff semantics but wrong
+         * here -- every other write path in this codebase (createRecord,
+         * deleteRecord, ...) leaves a deleted record's old blocks sitting
+         * unreachable-but-present in s->car/the blocks table, because
+         * metalbear_repo_store_export's no-`since` path answers from every
+         * block ever persisted, not just what the live MST reaches. Pruning
+         * would desync s->car from the blocks table and break that export
+         * the moment anything actually got removed by an import. Merging in
+         * only diff.new_blocks (never removing) keeps that invariant, at
+         * the cost of never reclaiming space for anything an import drops
+         * -- the same tradeoff every other write path already makes. */
         wf_repo_verify_options opts = {s->did, s->signing_key_didkey, NULL};
         wf_repo_diff diff = {0};
         st = wf_repo_diff_verify(&s->car, &s->head, &imported, &opts, &diff);
@@ -1277,89 +1297,71 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
         }
 
         if (diff.operation_count == 0) {
-            /* Identical snapshot re-imported: a genuine no-op rather than a
-             * content-free commit that just advances rev. */
+            /* Identical snapshot re-imported: a genuine no-op. (The
+             * reference would still bump repo_root.rev here since it always
+             * calls applyCommit unconditionally; skipping that in this one
+             * narrow edge case -- no record-level change at all -- is a
+             * deliberate simplification, not an oversight.) */
             wf_repo_diff_free(&diff);
         } else {
-            wf_repo_write *writes =
-                calloc(diff.operation_count, sizeof(*writes));
-            if (!writes) {
-                wf_repo_diff_free(&diff);
-                st = WF_ERR_ALLOC;
-                goto cleanup;
-            }
+            /* Each create/update op must reference a record block the
+             * imported CAR actually included -- matching the reference's
+             * own getAndParseRecord failure (`Could not parse record at
+             * '<collection>/<rkey>'`). */
             for (size_t i = 0; i < diff.operation_count; i++) {
                 wf_repo_operation *op = &diff.operations[i];
-                writes[i].collection = op->collection;
-                writes[i].rkey = op->rkey;
-                if (op->action == WF_REPO_DELETE) {
-                    writes[i].action = WF_REPO_WRITE_DELETE;
-                    continue;
-                }
-                wf_car_block *leaf =
-                    wf_car_find_block(&diff.new_blocks, &op->cid);
-                if (!leaf) {
-                    free(writes);
-                    wf_repo_diff_free(&diff);
-                    wf_xrpc_response_set_error(
-                        resp, 400, "InvalidCAR",
-                        "imported CAR is missing a referenced record block");
-                    st = WF_OK;
-                    goto cleanup;
-                }
-                writes[i].action = op->action == WF_REPO_CREATE
-                                       ? WF_REPO_WRITE_CREATE
-                                       : WF_REPO_WRITE_UPDATE;
-                writes[i].record_cbor = leaf->data;
-                writes[i].record_cbor_len = leaf->data_len;
-            }
-
-            wf_cid new_commit = {{0}, 0};
-            st = wf_repo_apply_writes(&s->car, &s->head, s->did, writes,
-                                      diff.operation_count, &s->key,
-                                      &new_commit);
-            if (st != WF_OK) {
-                free(writes);
+                if (op->action == WF_REPO_DELETE) continue;
+                if (wf_car_find_block(&diff.new_blocks, &op->cid)) continue;
                 wf_repo_diff_free(&diff);
                 wf_xrpc_response_set_error(
-                    resp, 400, "InvalidRequest",
-                    "imported repo diverges from the current repo");
+                    resp, 400, "InvalidCAR",
+                    "imported CAR is missing a referenced record block");
                 st = WF_OK;
                 goto cleanup;
             }
-            st = commit_persist(s, &new_commit);
+
+            bool merge_failed = false;
+            for (size_t i = 0; i < diff.new_blocks.block_count; i++) {
+                wf_car_block *nbk = &diff.new_blocks.blocks[i];
+                if (wf_car_find_block(&s->car, &nbk->cid)) continue;
+                wf_car_block *grown = realloc(
+                    s->car.blocks, (s->car.block_count + 1) * sizeof(*grown));
+                if (!grown) {
+                    merge_failed = true;
+                    break;
+                }
+                s->car.blocks = grown;
+                wf_car_block *blk = &s->car.blocks[s->car.block_count];
+                blk->cid = nbk->cid;
+                blk->data_len = nbk->data_len;
+                blk->data = blk->data_len ? malloc(blk->data_len) : NULL;
+                if (blk->data_len && !blk->data) {
+                    merge_failed = true;
+                    break;
+                }
+                if (blk->data_len) memcpy(blk->data, nbk->data, blk->data_len);
+                s->car.block_count++;
+            }
+            wf_cid new_head = diff.commit.cid;
+            wf_repo_diff_free(&diff);
+            if (merge_failed) {
+                st = WF_ERR_ALLOC;
+                goto cleanup;
+            }
+
+            st = commit_persist(s, &new_head);
             if (st != WF_OK) {
-                free(writes);
-                wf_repo_diff_free(&diff);
                 wf_xrpc_response_set_error(resp, 500, "InternalError",
                                            "failed to persist imported repo");
                 st = WF_OK;
                 goto cleanup;
             }
             reindex_all(s);
-
-            metalbear_repo_store_op *events =
-                calloc(diff.operation_count, sizeof(*events));
-            if (!events) {
-                free(writes);
-                wf_repo_diff_free(&diff);
-                st = WF_ERR_ALLOC;
-                goto cleanup;
-            }
-            for (size_t i = 0; i < diff.operation_count; i++) {
-                events[i].action =
-                    writes[i].action == WF_REPO_WRITE_CREATE   ? "create"
-                    : writes[i].action == WF_REPO_WRITE_UPDATE ? "update"
-                                                               : "delete";
-                events[i].collection = writes[i].collection;
-                events[i].rkey = writes[i].rkey;
-                events[i].cid = writes[i].out_record;
-                events[i].has_cid = writes[i].action != WF_REPO_WRITE_DELETE;
-            }
-            emit_commit_event_ops(s, &old_head, events, diff.operation_count);
-            free(events);
-            free(writes);
-            wf_repo_diff_free(&diff);
+            /* Fresh, deliberately decoupled rev -- see this handler's own
+             * doc comment. No firehose event: the reference never sequences
+             * one for an import. */
+            char fresh_rev[15];
+            if (wf_tid_now(fresh_rev) == WF_OK) set_rev_override(s, fresh_rev);
         }
     }
 
