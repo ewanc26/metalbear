@@ -1892,6 +1892,51 @@ int main(void) {
         wf_response_free(&response);
     }
 
+    /* createRecord rejects a body over the reference's jsonLimit (1,000,000
+     * bytes, createRecord.ts:48) with 413 PayloadTooLarge, before any
+     * record processing. */
+    {
+        wf_xrpc_client_set_auth(client, access_token);
+        static const char prefix[] =
+            "{\"repo\":\"";
+        static const char middle[] =
+            "\",\"collection\":\"app.bsky.feed.post\",\"record\":{\"$type\":"
+            "\"app.bsky.feed.post\",\"text\":\"";
+        static const char suffix[] =
+            "\",\"createdAt\":\"2026-07-27T00:00:00.000Z\"}}";
+        size_t pad_len = 1000000;
+        size_t total = sizeof(prefix) - 1 + strlen(alice_did) +
+                      sizeof(middle) - 1 + pad_len + sizeof(suffix) - 1 + 1;
+        char *big_body = malloc(total);
+        CHECK(big_body != NULL);
+        if (big_body) {
+            size_t pos = 0;
+            memcpy(big_body + pos, prefix, sizeof(prefix) - 1);
+            pos += sizeof(prefix) - 1;
+            memcpy(big_body + pos, alice_did, strlen(alice_did));
+            pos += strlen(alice_did);
+            memcpy(big_body + pos, middle, sizeof(middle) - 1);
+            pos += sizeof(middle) - 1;
+            memset(big_body + pos, 'x', pad_len);
+            pos += pad_len;
+            memcpy(big_body + pos, suffix, sizeof(suffix) - 1);
+            pos += sizeof(suffix) - 1;
+            big_body[pos] = '\0';
+
+            CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                                    big_body, &response) == WF_ERR_HTTP);
+            CHECK(response.status == 413);
+            json = json_response(&response);
+            CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")
+                             ->valuestring,
+                         "PayloadTooLarge") == 0);
+            cJSON_Delete(json);
+            wf_response_free(&response);
+            free(big_body);
+        }
+        wf_xrpc_client_set_auth(client, NULL);
+    }
+
     wf_xrpc_param block_params[] = {
         {"did", alice_did},
         {"cids", commit_cid},

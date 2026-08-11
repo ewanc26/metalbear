@@ -324,6 +324,19 @@ static int check_rkey(const cJSON *rkey, wf_xrpc_response *resp) {
     return 0;
 }
 
+/* The reference caps createRecord/putRecord/applyWrites request bodies at
+ * 1,000,000 bytes (jsonLimit, createRecord.ts/putRecord.ts/applyWrites.ts)
+ * and rejects oversized ones before parsing. Handlers here only see the
+ * already-parsed body, so this checks the raw length the server captured. */
+#define METALBEAR_REPO_WRITE_JSON_LIMIT 1000000
+
+static int check_body_size(const wf_xrpc_request *req, wf_xrpc_response *resp) {
+    if (req->body_len <= METALBEAR_REPO_WRITE_JSON_LIMIT) return 1;
+    wf_xrpc_response_set_error(resp, 413, "PayloadTooLarge",
+                               "request entity too large");
+    return 0;
+}
+
 static const char *validation_status_text(metalbear_validation_status s) {
     return s == METALBEAR_VALIDATION_VALID ? "valid" : "unknown";
 }
@@ -360,6 +373,7 @@ static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
     metalbear_repo_store *s = resolve_repo_and_blobs(
         (metalbear_pds_repo_bundle *)ctx, req, resp, &blobs);
     if (!s) return WF_OK;
+    if (!check_body_size(req, resp)) return WF_OK;
     cJSON *body = req->params;
     if (!body || !cJSON_IsObject(body)) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
@@ -425,6 +439,7 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
     metalbear_repo_store *s = resolve_repo_and_blobs(
         (metalbear_pds_repo_bundle *)ctx, req, resp, &blobs);
     if (!s) return WF_OK;
+    if (!check_body_size(req, resp)) return WF_OK;
     cJSON *body = req->params;
     if (!body || !cJSON_IsObject(body)) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
@@ -636,6 +651,7 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
     metalbear_repo_store *s = resolve_repo_and_blobs(
         (metalbear_pds_repo_bundle *)ctx, req, resp, &blobs);
     if (!s) return WF_OK;
+    if (!check_body_size(req, resp)) return WF_OK;
     cJSON *body = req->params;
     if (!body || !cJSON_IsObject(body)) {
         wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
