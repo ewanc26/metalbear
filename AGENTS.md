@@ -194,8 +194,14 @@ stays stale or a daemon rebuilds the same state twice.
    `CMakeLists.txt`. Tag that commit (`git tag -s vx.y.z -m "vx.y.z"`), push
    `main` and the tag, and create the GitHub release in the same commit as the
    tag — no bump without a tag, no release without one.
-3. **Deploy to bear1.croft.click**: `docker compose build bear-pds && docker
-   compose up -d bear-pds` in `/Volumes/Storage/Server/bear`. When the
+3. **Deploy to bear1.croft.click**: export the built commit so it's baked into
+   the image (the build context excludes `.git`, so `docker compose build`
+   can't detect it on its own): `METALBEAR_BUILD_COMMIT=$(git rev-parse
+   --short=12 HEAD)` in `MetalBear`, then `docker compose build bear-pds &&
+   docker compose up -d bear-pds` in `/Volumes/Storage/Server/bear` with that
+   variable exported. Skipping the export silently degrades `commit` in
+   `operator.json`/`/_debug/health` to `"unknown"` instead of failing the
+   build, so this is easy to miss. When the
    frontend changed, copy the fresh `frontend/build/` over
    `/Volumes/Storage/Server/stack/nginx/bear1-site` (nginx serves it read-only
    from a bind mount, so no restart is needed). Finally write the deployed
