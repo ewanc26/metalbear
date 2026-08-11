@@ -20,6 +20,8 @@
 #include "metalbear/ops/metrics.h"
 #include "metalbear/repo/repo_store.h"
 #include "metalbear/sequencer.h"
+#include "wolfram/identity.h"
+#include "wolfram/plc.h"
 #include "wolfram/syntax.h"
 #include "wolfram/xrpc.h"
 
@@ -690,6 +692,48 @@ wf_status admin_update_account_handle(void *ctx, const wf_xrpc_request *request,
         if (conflict) {
             wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
                                        "Handle is already taken");
+            return WF_OK;
+        }
+    }
+    /* For a did:plc account, the DID document's alsoKnownAs must be updated
+     * to match -- otherwise bidirectional handle verification fails even
+     * though DNS/local state agrees. This is a required, blocking step
+     * ordered BEFORE any local mutation, matching the reference
+     * (account-manager.ts's updateHandle: the PLC update is awaited first;
+     * if it fails, updateAccountHandle -- the local-state write -- never
+     * runs, so a failed PLC submission never leaves the DID document and
+     * local state disagreeing). did:web accounts have no PLC document to
+     * update, so this only applies to did:plc. */
+    if (wf_did_method_of(did->valuestring) == WF_DID_METHOD_PLC) {
+        wf_signing_key rotation_key;
+        if (metalbear_key_rotation_current_key(server->plc_rotation,
+                                               &rotation_key) != WF_OK) {
+            wf_xrpc_response_set_error(response, 500, "InternalError",
+                                       "Could not load PLC rotation key");
+            return WF_OK;
+        }
+        wf_xrpc_client *plc_client = wf_xrpc_client_new(server->plc_url);
+        if (!plc_client) {
+            wf_xrpc_response_set_error(response, 500, "InternalError",
+                                       "Could not reach the PLC directory");
+            return WF_OK;
+        }
+        char *signed_op = NULL;
+        wf_status plc_status = wf_plc_build_handle_update(
+            plc_client, server->plc_url, did->valuestring, handle->valuestring,
+            &rotation_key, &signed_op);
+        if (plc_status == WF_OK) {
+            plc_status = wf_plc_submit_operation_raw(
+                server->plc_url, did->valuestring, signed_op);
+        }
+        wf_plc_operation_free(signed_op);
+        wf_xrpc_client_free(plc_client);
+        if (plc_status != WF_OK) {
+            LOG_ERROR("admin_update_account_handle: PLC update failed for "
+                      "did=%s handle=%s (status=%d)",
+                      did->valuestring, handle->valuestring, plc_status);
+            wf_xrpc_response_set_error(response, 500, "InternalError",
+                                       "Could not update PLC document");
             return WF_OK;
         }
     }
