@@ -1,6 +1,8 @@
 #include "appview_routes.h"
 #include "../server_internal.h"
 
+#include "metalbear/account/account.h"
+#include "metalbear/account/account_context.h"
 #include "metalbear/log.h"
 #include "metalbear/oauth/auth.h"
 
@@ -1061,4 +1063,82 @@ wf_status appview_unspecced_get_age_assurance(void *ctx,
                                               const wf_xrpc_request *req,
                                               wf_xrpc_response *resp) {
     return appview_public(ctx, req, resp);
+}
+
+/* ---- app.bsky.actor.getPreferences / putPreferences ----
+ * The reference PDS proxies these to the AppView too, but MetalBear stores
+ * them locally rather than round-tripping through an upstream — see the
+ * exclusion of these two NSIDs from the generic proxy fallback in server.c. */
+wf_status get_actor_preferences(void *ctx, const wf_xrpc_request *request,
+                                wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
+    char *prefs_json = NULL;
+    if (metalbear_account_store_prefs_get(acct->account, &prefs_json) !=
+            WF_OK ||
+        !prefs_json) {
+        cJSON *root = cJSON_CreateObject();
+        cJSON_AddItemToObject(root, "preferences", cJSON_CreateArray());
+        return set_json(response, root);
+    }
+    cJSON *root = cJSON_Parse(prefs_json);
+    free(prefs_json);
+    if (!root) {
+        cJSON *empty = cJSON_CreateObject();
+        cJSON_AddItemToObject(empty, "preferences", cJSON_CreateArray());
+        return set_json(response, empty);
+    }
+    return set_json(response, root);
+}
+
+wf_status put_actor_preferences(void *ctx, const wf_xrpc_request *request,
+                                wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct) {
+        wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                   "Invalid access token");
+        return WF_OK;
+    }
+    if (!request->body || request->body_len == 0) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "empty body");
+        return WF_OK;
+    }
+    cJSON *parsed =
+        cJSON_ParseWithLength((const char *)request->body, request->body_len);
+    if (!parsed) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "invalid JSON");
+        return WF_OK;
+    }
+    cJSON *prefs = cJSON_GetObjectItemCaseSensitive(parsed, "preferences");
+    if (!cJSON_IsArray(prefs)) {
+        cJSON_Delete(parsed);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "preferences must be an array");
+        return WF_OK;
+    }
+    cJSON_Delete(parsed);
+    char *body_copy = malloc(request->body_len + 1);
+    if (!body_copy) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "allocation failed");
+        return WF_OK;
+    }
+    memcpy(body_copy, request->body, request->body_len);
+    body_copy[request->body_len] = '\0';
+    if (metalbear_account_store_prefs_put(acct->account, body_copy) != WF_OK) {
+        free(body_copy);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "failed to store preferences");
+        return WF_OK;
+    }
+    free(body_copy);
+    return WF_OK;
 }

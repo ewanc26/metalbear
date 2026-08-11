@@ -85,6 +85,10 @@ wf_status appview_unspecced_get_age_assurance_config(void *ctx,
 wf_status appview_unspecced_get_age_assurance(void *ctx,
                                               const wf_xrpc_request *req,
                                               wf_xrpc_response *resp);
+wf_status get_actor_preferences(void *ctx, const wf_xrpc_request *request,
+                                wf_xrpc_response *response);
+wf_status put_actor_preferences(void *ctx, const wf_xrpc_request *request,
+                                wf_xrpc_response *response);
 
 #ifdef __cplusplus
 }
