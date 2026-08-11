@@ -818,6 +818,13 @@ wf_status admin_update_account_password(void *ctx,
                                    "password is required");
         return WF_OK;
     }
+    /* Match the reference's NEW_PASSWORD_MAX_LENGTH ceiling
+     * (updateAccountPassword.ts:26-28, scrypt.ts:6). */
+    if (strlen(password->valuestring) > 256) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "Invalid password length.");
+        return WF_OK;
+    }
     metalbear_account_entry *entry = NULL;
     if (metalbear_account_registry_find_by_did(
             server->registry, did->valuestring, &entry) != WF_OK ||

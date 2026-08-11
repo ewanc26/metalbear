@@ -203,11 +203,11 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     /* Match the reference's NEW_PASSWORD_MAX_LENGTH ceiling
-     * (createAccount.ts:217-221). */
-    if (strlen(password->valuestring) > 64) {
+     * (createAccount.ts:217-221, scrypt.ts:6). */
+    if (strlen(password->valuestring) > 256) {
         wf_xrpc_response_set_error(
             response, 400, "InvalidRequest",
-            "Password too long. Maximum length is 64 characters.");
+            "Password too long. Maximum length is 256 characters.");
         return WF_OK;
     }
     LOG_DEBUG("create_account: attempt handle=%s email=%s did=%s",

@@ -1266,6 +1266,40 @@ int main(void) {
             wf_response_free(&response);
         }
 
+        /* admin.updateAccountPassword rejects a password over the
+         * reference's NEW_PASSWORD_MAX_LENGTH (256 chars, scrypt.ts:6). */
+        {
+            char pw_hdr[160];
+            char pw_cred[64];
+            int pn = snprintf(pw_cred, sizeof(pw_cred), "admin:%s",
+                              "secret-admin");
+            char pw_b64[128];
+            int plen = EVP_EncodeBlock((unsigned char *)pw_b64,
+                                       (const unsigned char *)pw_cred, pn);
+            pw_b64[plen] = '\0';
+            snprintf(pw_hdr, sizeof(pw_hdr), "Basic %s", pw_b64);
+            wf_http_header pw_auth_hdr = {"Authorization", pw_hdr};
+            char pw_url[256];
+            snprintf(pw_url, sizeof(pw_url),
+                     "%s/xrpc/com.atproto.admin.updateAccountPassword", base);
+            char long_pw[258];
+            memset(long_pw, 'z', 257);
+            long_pw[257] = '\0';
+            char pw_body[400];
+            snprintf(pw_body, sizeof(pw_body),
+                     "{\"did\":\"%s\",\"password\":\"%s\"}", charlie_did,
+                     long_pw);
+            CHECK(wf_http_post(client, pw_url, "application/json", pw_body,
+                               &pw_auth_hdr, 1, &response) == WF_ERR_HTTP);
+            CHECK(response.status == 400);
+            json = json_response(&response);
+            CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")
+                             ->valuestring,
+                         "InvalidRequest") == 0);
+            cJSON_Delete(json);
+            wf_response_free(&response);
+        }
+
         /* Admin delete the account. */
         char del_body[256];
         snprintf(del_body, sizeof(del_body), "{\"did\":\"%s\"}", charlie_did);
