@@ -371,7 +371,7 @@ static int run(void) {
         s = wf_xrpc_query_params(client, "com.atproto.repo.getRecord", params,
                                  3, &res);
         /* Non-2xx yields WF_ERR_HTTP but still populates res.status. */
-        WF_CHECK(res.status == 404);
+        WF_CHECK(res.status == 400);
         wf_response_free(&res);
     }
 

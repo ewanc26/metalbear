@@ -1550,7 +1550,7 @@ static bool repo_access_guard(void *ctx, const wf_xrpc_request *req,
                                                 record_uri, NULL, &ref);
         if (!ref) return true;
         free(ref);
-        wf_xrpc_response_set_error(resp, 404, "RecordNotFound",
+        wf_xrpc_response_set_error(resp, 400, "RecordNotFound",
                                    "Could not locate record");
         return false;
     }
