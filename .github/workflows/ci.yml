@@ -33,6 +33,7 @@ jobs:
             zlib1g-dev \
             libc-ares-dev \
             libidn2-dev \
+            libpcre2-dev \
 
       - name: Clean build directory
         run: rm -rf build

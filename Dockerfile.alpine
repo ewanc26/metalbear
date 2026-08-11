@@ -25,6 +25,7 @@ RUN apk add --no-cache \
         zstd-dev \
         zlib-dev \
         c-ares-dev \
+        pcre2-dev \
         linux-headers
 
 WORKDIR /src
@@ -72,7 +73,8 @@ RUN apk add --no-cache \
         libmicrohttpd \
         zstd-libs \
         zlib \
-        c-ares
+        c-ares \
+        pcre2
 
 COPY --from=build /src/build/metalbear /usr/local/bin/metalbear
 
