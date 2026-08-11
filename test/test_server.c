@@ -1572,6 +1572,88 @@ int main(void) {
           memcmp(response.body, blob_data, sizeof(blob_data)) == 0);
     wf_response_free(&response);
 
+    /* app.bsky.video.uploadVideo: store the video as a blob and return an
+     * immediately-completed jobStatus carrying the blob ref. */
+    const unsigned char video_data[] = {
+        0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm',
+    };
+    wf_xrpc_client_set_auth(client, access_token);
+    CHECK(wf_xrpc_upload_blob(client, "app.bsky.video.uploadVideo", video_data,
+                              sizeof(video_data), "video/mp4",
+                              &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    cJSON *vjs = cJSON_GetObjectItemCaseSensitive(json, "jobStatus");
+    cJSON *vjs_job = cJSON_GetObjectItemCaseSensitive(vjs, "jobId");
+    cJSON *vjs_did = cJSON_GetObjectItemCaseSensitive(vjs, "did");
+    cJSON *vjs_state = cJSON_GetObjectItemCaseSensitive(vjs, "state");
+    CHECK(cJSON_IsString(vjs_job) && vjs_job->valuestring[0]);
+    CHECK(cJSON_IsString(vjs_did) &&
+          strcmp(vjs_did->valuestring, alice_did) == 0);
+    CHECK(cJSON_IsString(vjs_state) &&
+          strcmp(vjs_state->valuestring, "JOB_STATE_COMPLETED") == 0);
+    cJSON *vjs_blob = cJSON_GetObjectItemCaseSensitive(vjs, "blob");
+    cJSON *vjs_ref = cJSON_GetObjectItemCaseSensitive(vjs_blob, "ref");
+    cJSON *vjs_link = cJSON_GetObjectItemCaseSensitive(vjs_ref, "$link");
+    CHECK(cJSON_IsString(vjs_link) && vjs_link->valuestring[0]);
+    char *video_job_id =
+        cJSON_IsString(vjs_job) ? strdup(vjs_job->valuestring) : NULL;
+    char *video_cid =
+        cJSON_IsString(vjs_link) ? strdup(vjs_link->valuestring) : NULL;
+    cJSON_Delete(json);
+    wf_response_free(&response);
+    CHECK(video_job_id && video_cid);
+
+    /* getJobStatus: the job ID round-trips to a completed job for this did,
+     * still naming the stored blob. */
+    wf_xrpc_param job_params[] = {
+        {"jobId", video_job_id ? video_job_id : ""},
+    };
+    CHECK(wf_xrpc_query_params(client, "app.bsky.video.getJobStatus",
+                               job_params, 1, &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    vjs = cJSON_GetObjectItemCaseSensitive(json, "jobStatus");
+    vjs_did = cJSON_GetObjectItemCaseSensitive(vjs, "did");
+    vjs_state = cJSON_GetObjectItemCaseSensitive(vjs, "state");
+    vjs_blob = cJSON_GetObjectItemCaseSensitive(vjs, "blob");
+    vjs_ref = cJSON_GetObjectItemCaseSensitive(vjs_blob, "ref");
+    vjs_link = cJSON_GetObjectItemCaseSensitive(vjs_ref, "$link");
+    CHECK(cJSON_IsString(vjs_did) &&
+          strcmp(vjs_did->valuestring, alice_did) == 0);
+    CHECK(cJSON_IsString(vjs_state) &&
+          strcmp(vjs_state->valuestring, "JOB_STATE_COMPLETED") == 0);
+    CHECK(cJSON_IsString(vjs_link) &&
+          strcmp(vjs_link->valuestring, video_cid ? video_cid : "") == 0);
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* A malformed / unknown job ID is a 404. */
+    wf_xrpc_param bad_job_params[] = {{"jobId", "garbage-job-id"}};
+    CHECK(wf_xrpc_query_params(client, "app.bsky.video.getJobStatus",
+                               bad_job_params, 1, &response) == WF_ERR_HTTP);
+    CHECK(response.status == 404);
+    wf_response_free(&response);
+
+    /* getUploadLimits: an authenticated user may upload. */
+    CHECK(wf_xrpc_query(client, "app.bsky.video.getUploadLimits", NULL,
+                        &response) == WF_OK);
+    CHECK(response.status == 200);
+    json = json_response(&response);
+    CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "canUpload")));
+    cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* uploadVideo requires auth. */
+    wf_xrpc_client_set_auth(client, NULL);
+    CHECK(wf_xrpc_upload_blob(client, "app.bsky.video.uploadVideo", video_data,
+                              sizeof(video_data), "video/mp4",
+                              &response) == WF_ERR_HTTP);
+    CHECK(response.status == 401);
+    wf_response_free(&response);
+    free(video_job_id);
+    free(video_cid);
+
     char create_body[512];
     snprintf(create_body, sizeof(create_body),
              "{\"repo\":\"%s\","

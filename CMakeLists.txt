@@ -121,6 +121,7 @@ add_library(
   src/appview/appview_routes.c
   src/moderation/moderation_routes.c
   src/moderation/report.c
+  src/video/video_routes.c
   src/repo/blob_store.c
   src/repo/blob_store_server.c
   src/ops/update_watcher.c
