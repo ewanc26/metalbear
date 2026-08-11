@@ -436,6 +436,15 @@ if(METALBEAR_BUILD_TESTS)
   add_test(NAME metalbear_identity_plc_operation
           COMMAND test_metalbear_identity_plc_operation)
 
+  add_executable(test_metalbear_handle_plc_update
+                 test/test_handle_plc_update.c)
+  target_link_libraries(test_metalbear_handle_plc_update
+                        PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_handle_plc_update
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_handle_plc_update
+          COMMAND test_metalbear_handle_plc_update)
+
   add_executable(test_metalbear_metrics test/test_metrics.c)
   target_link_libraries(test_metalbear_metrics PRIVATE metalbear_core)
   target_include_directories(test_metalbear_metrics
