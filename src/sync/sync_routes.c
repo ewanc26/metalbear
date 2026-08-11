@@ -153,10 +153,10 @@ wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "since")
             : NULL;
-    const char *since = (cJSON_IsString(since_param) &&
-                         since_param->valuestring[0])
-                            ? since_param->valuestring
-                            : NULL;
+    const char *since =
+        (cJSON_IsString(since_param) && since_param->valuestring[0])
+            ? since_param->valuestring
+            : NULL;
     int limit = query_param_int(request->params, "limit", 500, 1, 1000);
     cJSON *cursor_param =
         request->params
@@ -173,9 +173,9 @@ wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
     char **all = NULL;
     size_t count = 0;
     wf_status list_status =
-        since ? metalbear_blob_store_list_since(acct->blobs, since, &all,
-                                                &count)
-              : metalbear_blob_store_list(acct->blobs, &all, &count);
+        since
+            ? metalbear_blob_store_list_since(acct->blobs, since, &all, &count)
+            : metalbear_blob_store_list(acct->blobs, &all, &count);
     if (list_status != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not enumerate blobs");
@@ -388,11 +388,14 @@ wf_status get_record(void *ctx, const wf_xrpc_request *request,
     size_t length = 0;
     wf_status status = metalbear_repo_store_get_record_car(
         acct->repo, collection->valuestring, rkey->valuestring, &data, &length);
-    if (status == WF_ERR_NOT_FOUND) {
-        wf_xrpc_response_set_error(response, 404, "RecordNotFound",
-                                   "Record not found");
-        return WF_OK;
-    }
+    /* Unlike com.atproto.repo.getRecord, a missing record here is not an
+     * error: the reference (sync/getRecord.ts) only errors when the repo
+     * itself has no commit. A specific record's absence is instead proven
+     * by the CAR body -- the MST path down to where it would live, with no
+     * leaf block -- so the caller can verify non-inclusion, not just
+     * receive a 404 with nothing to check it against. assert_repo_available
+     * above already ruled out "no such repo"; WF_ERR_NOT_FOUND here would
+     * only mean an internal invariant broke, not a normal not-found. */
     if (status != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not export record");
