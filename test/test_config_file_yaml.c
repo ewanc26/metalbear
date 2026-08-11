@@ -130,6 +130,27 @@ static void test_single_quoted_strings(void) {
     free(path);
 }
 
+/* operator.email and operator.override_email are distinct fields
+ * (account_email vs. operator_email) -- setting one must not touch the
+ * other. */
+static void test_operator_email_override_is_distinct(void) {
+    char *path = write_temp("operator:\n"
+                            "  email: \"contact@example.com\"\n"
+                            "  override_email: \"press@example.com\"\n");
+    metalbear_config cfg = {0};
+    metalbear_config_file *owner = NULL;
+    char err[256] = "";
+    CHECK(metalbear_config_file_load(path, &cfg, &owner, err, sizeof(err)) ==
+          WF_OK);
+    CHECK(cfg.account_email &&
+          strcmp(cfg.account_email, "contact@example.com") == 0);
+    CHECK(cfg.operator_email &&
+          strcmp(cfg.operator_email, "press@example.com") == 0);
+    metalbear_config_file_free(owner);
+    unlink(path);
+    free(path);
+}
+
 static void test_absent_settings_are_left_alone(void) {
     char *path = write_temp("server:\n  port: 9000\n");
     metalbear_config cfg = {0};
@@ -258,6 +279,7 @@ int main(void) {
     test_reads_every_type();
     test_bare_scalars();
     test_single_quoted_strings();
+    test_operator_email_override_is_distinct();
     test_absent_settings_are_left_alone();
     test_rejects_bad_input();
     test_missing_file_is_reported();

@@ -90,6 +90,27 @@ static void test_absent_settings_are_left_alone(void) {
     free(path);
 }
 
+/* operator.email and operator.override_email are distinct fields
+ * (account_email vs. operator_email) -- setting one must not touch the
+ * other. */
+static void test_operator_email_override_is_distinct(void) {
+    char *path = write_temp("[operator]\n"
+                            "email = \"contact@example.com\"\n"
+                            "override_email = \"press@example.com\"\n");
+    metalbear_config cfg = {0};
+    metalbear_config_file *owner = NULL;
+    char err[256] = "";
+    CHECK(metalbear_config_file_load(path, &cfg, &owner, err, sizeof(err)) ==
+          WF_OK);
+    CHECK(cfg.account_email &&
+          strcmp(cfg.account_email, "contact@example.com") == 0);
+    CHECK(cfg.operator_email &&
+          strcmp(cfg.operator_email, "press@example.com") == 0);
+    metalbear_config_file_free(owner);
+    unlink(path);
+    free(path);
+}
+
 /* Each of these must fail loudly, naming the line. */
 static void test_rejects_bad_input(void) {
     const char *cases[][2] = {
@@ -161,6 +182,7 @@ int main(void) {
     printf("MetalBear config file tests\n");
     test_reads_every_type();
     test_absent_settings_are_left_alone();
+    test_operator_email_override_is_distinct();
     test_rejects_bad_input();
     test_missing_file_is_reported();
     test_example_config_parses();

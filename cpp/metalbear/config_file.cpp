@@ -111,6 +111,11 @@ static bool parse_bool(const char *v, bool *out) {
                                                                                \
     STR("operator.name", operator_name)                                        \
     STR("operator.email", account_email)                                       \
+    /* Distinct from operator.email above: this overrides only the email       \
+     * operator.json/the landing page show, leaving account_email (used for    \
+     * describeServer and notifications) untouched. See operator_email's own   \
+     * doc comment on metalbear_config. */                                     \
+    STR("operator.override_email", operator_email)                             \
     STR("operator.url", operator_url)                                          \
     STR("operator.support_url", support_url)                                   \
     STR("operator.description", instance_description)                          \
