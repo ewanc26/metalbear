@@ -76,6 +76,15 @@ find_package(Threads REQUIRED)
 # find_package(OpenSSL REQUIRED), but that only populates targets in wolfram's
 # scope, so MetalBear must resolve OpenSSL::Crypto here.
 find_package(OpenSSL REQUIRED)
+
+# PCRE2 (8-bit/UTF-8 build) for explicit-slur record-key detection
+# (src/repo/explicit_slurs.c) -- the reference's own detection patterns are
+# Unicode character classes POSIX regex.h cannot express correctly. No
+# standard CMake config package ships on every platform, so this goes
+# through pkg-config (libpcre2-8.pc), which every target this project builds
+# for already provides.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PCRE2 REQUIRED IMPORTED_TARGET libpcre2-8)
 set(WOLFRAM_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../wolfram"
     CACHE PATH "Path to the Wolfram source tree")
 
@@ -101,6 +110,8 @@ add_library(
   src/account/account_cache.c
   src/oauth/auth.c
   src/repo/backup.c
+  src/repo/explicit_slurs.c
+  src/repo/explicit_slurs_patterns.c
   src/email.cpp
   src/oauth/oauth.c
   src/oauth/oauth_routes.c
@@ -132,7 +143,7 @@ add_library(
 target_include_directories(metalbear_core PUBLIC include
                            PUBLIC "${METALBEAR_CJSON_SOURCE_DIR}")
 target_link_libraries(metalbear_core PUBLIC wolfram cjson
-                      PRIVATE SQLite3::SQLite3 Threads::Threads)
+                      PRIVATE SQLite3::SQLite3 Threads::Threads PkgConfig::PCRE2)
 # PUBLIC so consumers — and the test targets, which assert what the running
 # server reports against what it was built as — see the version they link.
 target_compile_definitions(
@@ -444,6 +455,13 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_handle_plc_update
           COMMAND test_metalbear_handle_plc_update)
+
+  add_executable(test_metalbear_explicit_slurs test/test_explicit_slurs.c)
+  target_link_libraries(test_metalbear_explicit_slurs PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_explicit_slurs
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_explicit_slurs
+          COMMAND test_metalbear_explicit_slurs)
 
   add_executable(test_metalbear_metrics test/test_metrics.c)
   target_link_libraries(test_metalbear_metrics PRIVATE metalbear_core)

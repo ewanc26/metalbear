@@ -2046,6 +2046,34 @@ int main(void) {
         wf_xrpc_client_set_auth(client, NULL);
     }
 
+    /* createRecord rejects a record key containing an explicit slur,
+     * matching the reference's hasExplicitSlur check (handle/explicit-
+     * slurs.ts, wired in via repo/prepare.ts) -- independent of, and in
+     * addition to, ordinary rkey syntax validation. The trigger key here is
+     * one of the same test candidates verified against the reference's
+     * actual regex patterns (see scripts/gen_explicit_slurs.py). */
+    {
+        wf_xrpc_client_set_auth(client, access_token);
+        char slur_body[512];
+        snprintf(slur_body, sizeof(slur_body),
+                 "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
+                 "\"rkey\":\"chink\",\"record\":{\"$type\":"
+                 "\"app.bsky.feed.post\",\"text\":\"hi\",\"createdAt\":"
+                 "\"2026-07-27T00:00:00.000Z\"}}",
+                 alice_did);
+        CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                                slur_body, &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        json = json_response(&response);
+        CHECK(
+            strstr(
+                cJSON_GetObjectItemCaseSensitive(json, "message")->valuestring,
+                "Unacceptable slur") != NULL);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+        wf_xrpc_client_set_auth(client, NULL);
+    }
+
     wf_xrpc_param block_params[] = {
         {"did", alice_did},
         {"cids", commit_cid},
