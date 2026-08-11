@@ -2363,52 +2363,70 @@ wf_status metalbear_repo_store_get_record_car(metalbear_repo_store *s,
         return WF_ERR_INVALID_ARG;
     *out_data = NULL;
     *out_len = 0;
+    /* A missing repo (no commit at all) is the only case this call fails
+     * for -- matching the reference, which throws only when
+     * storage.getRoot() is null (sync/getRecord.ts). A record that simply
+     * doesn't exist under an otherwise-real repo still gets a normal CAR
+     * response: an inclusion proof if present, a non-inclusion proof (the
+     * MST path down to where it would live) if not. */
     if (s->head.len == 0) return WF_ERR_NOT_FOUND;
 
-    /* Get the record CID. */
-    char *record_json = NULL;
-    char *record_cid_str = NULL;
-    wf_status status = metalbear_repo_store_get_record(
-        s, collection, rkey, &record_json, &record_cid_str);
-    if (status != WF_OK) return status;
-    free(record_json);
-
-    /* Parse the record CID. */
-    wf_cid record_cid;
-    if (wf_cid_from_string(record_cid_str, &record_cid) != WF_OK) {
-        free(record_cid_str);
-        return WF_ERR_INTERNAL;
-    }
-    free(record_cid_str);
-
     pthread_mutex_lock(&s->mutex);
-    /* Find the record block in the CAR. */
-    wf_car_block *record_block = wf_car_find_block(&s->car, &record_cid);
-    if (!record_block) {
-        pthread_mutex_unlock(&s->mutex);
-        return WF_ERR_NOT_FOUND;
-    }
 
-    /* Build a CAR with the commit as root and the record block. */
-    wf_car out = {0};
-    out.roots = &s->head;
-    out.root_count = 1;
-
-    /* Add commit block. */
     wf_car_block *commit_block = wf_car_find_block(&s->car, &s->head);
     if (!commit_block) {
         pthread_mutex_unlock(&s->mutex);
         return WF_ERR_NOT_FOUND;
     }
-    out.blocks = calloc(2, sizeof(*out.blocks));
+
+    wf_cid *proof_cids = NULL;
+    size_t proof_count = 0;
+    wf_cid record_cid;
+    memset(&record_cid, 0, sizeof(record_cid));
+    wf_status status =
+        wf_repo_get_record_proof(&s->car, &s->head, collection, rkey,
+                                 &proof_cids, &proof_count, &record_cid);
+    if (status != WF_OK) {
+        pthread_mutex_unlock(&s->mutex);
+        return status;
+    }
+
+    wf_car_block *record_block = NULL;
+    if (record_cid.len > 0) {
+        record_block = wf_car_find_block(&s->car, &record_cid);
+        if (!record_block) {
+            wf_mst_cid_list_free(proof_cids, proof_count);
+            pthread_mutex_unlock(&s->mutex);
+            return WF_ERR_INTERNAL;
+        }
+    }
+
+    /* Build a CAR with the commit as root, every MST node on the proof
+     * path, and the record leaf if one was found. */
+    wf_car out = {0};
+    out.roots = &s->head;
+    out.root_count = 1;
+    size_t max_blocks = 1 + proof_count + (record_block ? 1 : 0);
+    out.blocks = calloc(max_blocks, sizeof(*out.blocks));
     if (!out.blocks) {
+        wf_mst_cid_list_free(proof_cids, proof_count);
         pthread_mutex_unlock(&s->mutex);
         return WF_ERR_ALLOC;
     }
-    out.blocks[0] = *commit_block;
-    out.blocks[1] = *record_block;
-    out.block_count = 2;
+    out.blocks[out.block_count++] = *commit_block;
+    for (size_t i = 0; i < proof_count; i++) {
+        wf_car_block *node_block = wf_car_find_block(&s->car, &proof_cids[i]);
+        if (!node_block) {
+            free(out.blocks);
+            wf_mst_cid_list_free(proof_cids, proof_count);
+            pthread_mutex_unlock(&s->mutex);
+            return WF_ERR_INTERNAL;
+        }
+        out.blocks[out.block_count++] = *node_block;
+    }
+    if (record_block) out.blocks[out.block_count++] = *record_block;
 
+    wf_mst_cid_list_free(proof_cids, proof_count);
     pthread_mutex_unlock(&s->mutex);
     status = wf_car_write(&out, out_data, out_len);
     free(out.blocks);
