@@ -88,24 +88,21 @@ Modular structure is mandatory, not a style preference:
   A handler written into `server.c` is a review failure; the `video`
   routes in `src/video/video_routes.c` are the template to follow.
 - **Keep `server.c` under ~3000 lines.** It is the largest hand-written
-  file and still holds several handlers that belong in their domains (see
-  "Remaining extractions" below); add code to it only as a short-lived step
-  toward removing it. A change that grows any hand-written file past ~3000
-  lines must split it in the same change.
+  file; every handler that used to live here has been extracted into its
+  domain (`upload_blob` into `src/repo/blob_store_server.c`,
+  `check_signup_queue`/`request_account_delete`/`delete_account` into
+  `src/account/`, `getActorPreferences`/`putActorPreferences` into
+  `src/appview/`, `health`/`operator_info`/`describe_server` into the new
+  `src/ops/ops_routes.c`). Add code to it only as a short-lived step toward
+  removing it. A change that grows any hand-written file past ~3000 lines
+  must split it in the same change — the standard below applies to the
+  next oversized file found, not just the ones already done.
 
 - **Domain-scoped route files**: XRPC handlers for one lexicon namespace
   (or one clearly-bounded cluster within a namespace, e.g. `sync_routes.c`
   covering `com.atproto.sync.*`) live in their own `src/<domain>/<domain>_routes.c`,
   declared via a matching `.h` in the same directory. `server.c` includes
   that header and registers the handlers; it does not define them.
-- **Remaining extractions from `server.c`.** `upload_blob` belongs in
-  `src/repo/blob_store_server.c` (which already owns the blob routes);
-  `check_signup_queue` and `getActorPreferences`/`putActorPreferences`
-  belong in `src/account/` / `src/appview/`; `health`, `operator_info`,
-  and `describe_server` belong in `src/ops/`; `request_account_delete`
-  and `delete_account` belong in `src/account/`. Extract each the way the
-  video module was: one domain file per split, each its own `refactor:`
-  commit, verified (rebuild + ctest + clang-format) before the next.
 - **Internal headers share what the public API must not expose.** A struct
   that is opaque in `include/metalbear/*.h` for external consumers (e.g.
   `metalbear_server`, `metalbear_repo_store`) sometimes has fields several
