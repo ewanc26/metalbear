@@ -25,6 +25,9 @@ user_domain   = ".pds.example.com"   # suffix accounts may register handles unde
 # them; the rest is served from /operator.json and shown on the landing page.
 name        = "Your Name"
 email       = "admin@example.com"
+# Overrides just the email operator.json/the landing page show, leaving the
+# describeServer/notification email above untouched. Rarely needed.
+# override_email = "press@example.com"
 url         = "https://example.com"
 support_url = "https://example.com/support"
 description = "A personal AT Protocol server."
