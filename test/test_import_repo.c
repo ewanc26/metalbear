@@ -284,7 +284,7 @@ int main(void) {
                 CHECK(wf_xrpc_query_params(client, "com.atproto.repo.getRecord",
                                            second_params, 3,
                                            &response) == WF_ERR_HTTP);
-                CHECK(response.status == 404);
+                CHECK(response.status == 400);
                 cJSON *notfound = json_response(&response);
                 CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(notfound, "error")
                                  ->valuestring,

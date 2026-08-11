@@ -638,7 +638,7 @@ int main(void) {
     CHECK(get_record(client, did_bob, "isolated", text, sizeof(text)) == 200);
     CHECK(strcmp(text, "bob-only-secret") == 0);
     /* The same record key must NOT resolve under carol's repository. */
-    CHECK(get_record(client, did_carol, "isolated", NULL, 0) == 404);
+    CHECK(get_record(client, did_carol, "isolated", NULL, 0) == 400);
 
     /* (c) Auth routing by `sub`: bob's token wins over a spoofed foreign
      * `repo` DID. Writing with token=bob but repo=carol must land in BOB's
@@ -650,7 +650,7 @@ int main(void) {
     text[0] = '\0';
     CHECK(get_record(client, did_bob, "spoof", text, sizeof(text)) == 200);
     CHECK(strcmp(text, "still-bobs") == 0);
-    CHECK(get_record(client, did_carol, "spoof", NULL, 0) == 404);
+    CHECK(get_record(client, did_carol, "spoof", NULL, 0) == 400);
 
     /* Carol writes to her own repo with her own token; bob cannot see it. */
     char shared_seq[512];
@@ -665,7 +665,7 @@ int main(void) {
     CHECK(get_record(client, did_carol, "carolpost", text, sizeof(text)) ==
           200);
     CHECK(strcmp(text, "carol-only") == 0);
-    CHECK(get_record(client, did_bob, "carolpost", NULL, 0) == 404);
+    CHECK(get_record(client, did_bob, "carolpost", NULL, 0) == 400);
 
     /*
      * A non-bootstrap account's write must reach the firehose.

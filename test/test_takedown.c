@@ -322,7 +322,7 @@ int main(void) {
     }
     wf_xrpc_client_set_auth(client, NULL);
     /* The taken-down record reads as absent; its neighbour still serves. */
-    CHECK(get_record(client, mallory_did, "bad") == 404);
+    CHECK(get_record(client, mallory_did, "bad") == 400);
     CHECK(get_record(client, mallory_did, "keep") == 200);
 
     /* getSubjectStatus reports it, and the strongRef it echoes carries the
@@ -668,7 +668,7 @@ int main(void) {
     CHECK(get_record(client, mallory_did, "keep") == 200);
     /* The record's own takedown outlives the account's: lifting one does not
      * lift the other. */
-    CHECK(get_record(client, mallory_did, "bad") == 404);
+    CHECK(get_record(client, mallory_did, "bad") == 400);
     {
         const char *body = "{\"identifier\":\"mallory.example.com\","
                            "\"password\":\"mallorysecret\"}";

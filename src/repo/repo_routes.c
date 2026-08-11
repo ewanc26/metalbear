@@ -596,7 +596,7 @@ static wf_status h_get_record(void *ctx, const wf_xrpc_request *req,
     wf_status st = metalbear_repo_store_get_record(
         s, collection->valuestring, rkey->valuestring, &rec, &cid);
     if (st != WF_OK) {
-        wf_xrpc_response_set_error(resp, 404, "RecordNotFound",
+        wf_xrpc_response_set_error(resp, 400, "RecordNotFound",
                                    "record not found");
         return WF_OK;
     }
@@ -609,7 +609,7 @@ static wf_status h_get_record(void *ctx, const wf_xrpc_request *req,
         (!cid || strcmp(cid, want_cid->valuestring) != 0)) {
         free(rec);
         free(cid);
-        wf_xrpc_response_set_error(resp, 404, "RecordNotFound",
+        wf_xrpc_response_set_error(resp, 400, "RecordNotFound",
                                    "record not found at requested cid");
         return WF_OK;
     }
