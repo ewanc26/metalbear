@@ -66,7 +66,7 @@ ARG METALBEAR_BUILD_COMMIT=unknown
 # deployment building its own image (a stable self-host, say) can override it
 # with --build-arg or docker-compose.yaml's build.args, same pattern as
 # METALBEAR_BUILD_COMMIT above.
-ARG METALBEAR_RELEASE_STAGE=alpha
+ARG METALBEAR_RELEASE_STAGE=beta
 
 # Static internal libraries: the project's own objects link into the binary, so
 # the runtime stage carries one file instead of four shared libraries that have
