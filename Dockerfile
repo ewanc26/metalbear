@@ -77,7 +77,7 @@ RUN cmake -S MetalBear -B build \
         -DWOLFRAM_SOURCE_DIR=/src/wolfram \
         -DMETALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}" \
         -DMETALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}" \
-    && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)"
+    && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)" --target metalbear
 
 # A toolchain image with the sources and the test suite, for poking at the
 # server without setting up a build host:
