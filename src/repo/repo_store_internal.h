@@ -37,6 +37,20 @@ struct metalbear_repo_store {
     wf_car car;              /* accumulated blocks; roots -> &head */
     wf_cid head;             /* current head commit CID (len 0 = empty) */
     size_t persisted_blocks; /* count of blocks already flushed to db */
+    /*
+     * Set only by importRepo adopting a foreign commit verbatim onto an
+     * existing repo (see h_import_repo): a "fresh" rev that deliberately
+     * diverges from whatever rev is actually embedded in the commit at
+     * `head`, matching the reference PDS's own inconsistency (importRepo.ts
+     * assigns a new TID to `repo_root.rev` as pure SQL bookkeeping, without
+     * re-signing or re-encoding the imported commit block it never touches).
+     * NULL (the overwhelmingly common case) means "derive rev by parsing the
+     * head commit," which is self-consistent, is what every other write path
+     * produces, and is cleared back to NULL by commit_persist on every
+     * ordinary write -- this field exists to reproduce one specific
+     * reference quirk, not to become a general decoupled-rev mechanism.
+     */
+    char *rev_override;
     metalbear_repo_store_event_cb event_cb;
     void *event_ctx;
     pthread_mutex_t mutex; /* guards db, car, head, persisted_blocks */
@@ -55,6 +69,12 @@ wf_status reindex_all(metalbear_repo_store *s);
 
 /* Persist `new_head`'s blocks and update the store's durable head pointer. */
 wf_status commit_persist(metalbear_repo_store *s, const wf_cid *new_head);
+
+/* Set a decoupled rev_override, persisted immediately -- see its doc comment
+ * on struct metalbear_repo_store. Only importRepo's adopt-verbatim path
+ * calls this, always after commit_persist (which would otherwise clear it
+ * again). */
+wf_status set_rev_override(metalbear_repo_store *s, const char *rev);
 
 /* Notify the store's event callback (if any) that the head advanced,
  * without describing the individual operations -- used where the new state

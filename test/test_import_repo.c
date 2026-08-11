@@ -33,6 +33,7 @@
 #endif
 #include "metalbear/server.h"
 #include "wolfram/repo/car.h"
+#include "wolfram/repo/commit.h"
 #include "wolfram/xrpc.h"
 
 #include <cJSON.h>
@@ -231,12 +232,17 @@ int main(void) {
                 /* Incremental import onto a repo that has since diverged: add
                  * a second record so the live repo (first + second) no
                  * longer matches the earlier CAR_A snapshot (first only),
-                 * then re-import CAR_A. importRepo must diff CAR_A against
-                 * the CURRENT repo and reapply the delta as one fresh-rev
-                 * commit -- not adopt CAR_A's own (now stale) commit
-                 * verbatim -- so "second" is deleted, "first" survives
-                 * untouched, and the head's rev advances past both the
-                 * pre-import head and CAR_A's own rev. */
+                 * then re-import CAR_A. importRepo diffs CAR_A against the
+                 * CURRENT repo and adopts CAR_A's own commit VERBATIM (its
+                 * own signature, unmodified -- matching the reference's
+                 * applyCommit exactly; see issue #22), while every
+                 * rev-reporting route reports a freshly generated, DELIBERATELY
+                 * decoupled rev that has no relationship to what CAR_A's
+                 * commit actually carries. So "second" is deleted, "first"
+                 * survives untouched, and the head's reported rev advances
+                 * (checked below against both the pre-import rev and the
+                 * served commit block's own embedded rev, which stays
+                 * CAR_A's original -- the decoupling this is all about). */
                 char create_second_body[256];
                 snprintf(
                     create_second_body, sizeof(create_second_body),
@@ -292,8 +298,8 @@ int main(void) {
                 cJSON_Delete(notfound);
                 wf_response_free(&response);
 
-                /* A genuinely new commit was minted (fresh rev), not a
-                 * silent no-op and not CAR_A's own stale rev adopted as-is. */
+                /* getLatestCommit reports a fresh rev, not a silent no-op
+                 * and not CAR_A's own stale rev echoed back. */
                 CHECK(wf_xrpc_query_params(client,
                                            "com.atproto.sync.getLatestCommit",
                                            repo_params, 1, &response) == WF_OK);
@@ -305,6 +311,33 @@ int main(void) {
                       strcmp(rev_before, rev_after) != 0);
                 cJSON_Delete(after);
                 free(rev_before);
+                wf_response_free(&response);
+
+                /* The decoupling itself: the commit block actually served by
+                 * getRepo still carries CAR_A's OWN original rev (this
+                 * commit was adopted verbatim, never re-signed), which
+                 * differs from what getLatestCommit just reported above --
+                 * exactly the reference's own inconsistency (see issue #22),
+                 * not an accident. */
+                CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getRepo",
+                                           repo_params, 1, &response) == WF_OK);
+                CHECK(response.status == 200 && response.body_len > 0);
+                wf_car exported = {0};
+                CHECK(wf_car_parse((const unsigned char *)response.body,
+                                   response.body_len, &exported) == WF_OK);
+                if (exported.root_count == 1) {
+                    wf_car_block *commit_block =
+                        wf_car_find_block(&exported, &exported.roots[0]);
+                    CHECK(commit_block != NULL);
+                    if (commit_block) {
+                        wf_commit served;
+                        CHECK(wf_commit_parse(commit_block->data,
+                                              commit_block->data_len,
+                                              &served) == WF_OK);
+                        CHECK(strcmp(served.rev, rev_after) != 0);
+                    }
+                }
+                wf_car_free(&exported);
                 wf_response_free(&response);
 
                 /* Re-importing the exact same (now-current) snapshot again is
