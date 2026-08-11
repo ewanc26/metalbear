@@ -175,10 +175,10 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "email")
             : NULL;
-    cJSON *plcOp = request->params
-                       ? cJSON_GetObjectItemCaseSensitive(request->params,
-                                                          "plcOp")
-                       : NULL;
+    cJSON *plcOp =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "plcOp")
+            : NULL;
     /* Reject the signed-PLC-operation import path: it is an entryway-PDS
      * feature and this host never accepts it, matching the reference's
      * validateInputsForLocalPds (createAccount.ts:213-215). */
@@ -299,8 +299,8 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
     bool have_minted_key = false;
     memset(&minted_key, 0, sizeof(minted_key));
     bool imported_did = cJSON_IsString(did) && did->valuestring[0];
-    bool example_did = imported_did &&
-                       strncmp(did->valuestring, "did:example:", 12) == 0;
+    bool example_did =
+        imported_did && strncmp(did->valuestring, "did:example:", 12) == 0;
     if (imported_did && !example_did) {
         /* Importing a DID requires proving control of it: the reference
          * rejects an imported DID unless the requester authenticates as
@@ -318,10 +318,8 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
                 metalbear_account_context *sub_acct =
                     context_for_did(server, sub);
                 metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
-                if (sub_acct &&
-                    metalbear_auth_verify_access_scope(sub_acct->auth,
-                                                       provided, &scope) ==
-                    WF_OK)
+                if (sub_acct && metalbear_auth_verify_access_scope(
+                                    sub_acct->auth, provided, &scope) == WF_OK)
                     owns_did = true;
             }
             free(sub);
@@ -340,9 +338,8 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
          * owner's live account and then fail the registry insert on the DID
          * primary key. */
         metalbear_account_entry *by_did = NULL;
-        if (metalbear_account_registry_find_by_did(server->registry,
-                                                   did->valuestring,
-                                                   &by_did) == WF_OK) {
+        if (metalbear_account_registry_find_by_did(
+                server->registry, did->valuestring, &by_did) == WF_OK) {
             metalbear_account_entry_free(by_did);
             char msg[512];
             snprintf(msg, sizeof(msg), "DID already taken: %s",
@@ -480,10 +477,9 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
      * the DID to its handle and know it is active — without them the first
      * thing the network sees is a commit for a DID it has never heard of.
      */
-    if (!imported_did &&
-        metalbear_sequencer_account_activation(server->sequencer, account_did,
-                                               handle->valuestring,
-                                               acct->repo) != WF_OK) {
+    if (!imported_did && metalbear_sequencer_account_activation(
+                             server->sequencer, account_did,
+                             handle->valuestring, acct->repo) != WF_OK) {
         /* Not fatal to account creation: the account is already durable, and
          * reconciliation heals a missing tail event. Log loudly — a silently
          * unannounced account looks exactly like a working one locally. */
@@ -946,10 +942,10 @@ wf_status get_account_invite_codes(void *ctx, const wf_xrpc_request *request,
                 cJSON_AddStringToObject(
                     obj, "createdBy",
                     entries[i].created_by ? entries[i].created_by : "admin");
-                cJSON_AddStringToObject(
-                    obj, "createdAt",
-                    entries[i].created_at ? entries[i].created_at
-                                          : "1970-01-01T00:00:00.000Z");
+                cJSON_AddStringToObject(obj, "createdAt",
+                                        entries[i].created_at
+                                            ? entries[i].created_at
+                                            : "1970-01-01T00:00:00.000Z");
 
                 cJSON *uses = cJSON_CreateArray();
                 if (uses) {
