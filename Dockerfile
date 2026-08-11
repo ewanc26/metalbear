@@ -7,9 +7,10 @@
 #
 #   docker build -f MetalBear/Dockerfile -t metalbear .
 #
-# Configuration comes from a config.toml (mount it and set METALBEAR_CONFIG) or
-# from environment variables, which override the file. Nothing is baked in, so
-# one image serves every deployment.
+# Configuration comes from a config file -- TOML or YAML, chosen by extension
+# (mount it and set METALBEAR_CONFIG) -- or from environment variables, which
+# override the file. Nothing is baked in, so one image serves every
+# deployment.
 
 FROM debian:bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \

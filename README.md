@@ -254,8 +254,8 @@ docker run -d --name metalbear -p 2583:2583 -v metalbear-data:/data \
   ghcr.io/ewanc26/metalbear:latest
 ```
 
-Mount a `config.toml` and set `METALBEAR_CONFIG` to configure it as a file
-instead; environment variables override whatever the file says.
+Mount a config file (TOML or YAML) and set `METALBEAR_CONFIG` to configure it
+as a file instead; environment variables override whatever the file says.
 
 Three variants are published:
 
@@ -320,22 +320,29 @@ ctest --test-dir build --output-on-failure
 By default CMake uses the sibling `../wolfram` checkout. Set
 `-DWOLFRAM_SOURCE_DIR=/path/to/wolfram` to use another checkout.
 
-Or provision a host end to end — dependencies, build, secrets, `config.toml`,
+Or provision a host end to end — dependencies, build, secrets, a config file,
 and a running daemon:
 
 ```sh
 scripts/setup.sh --hostname pds.example.com
 ```
 
+Writes `config.yaml` by default; pass `--format toml` for `config.toml`
+instead, or `--config <path>` for a specific filename (e.g. `--config
+bear.yml`) — the dialect is still chosen by its extension.
+
 Re-running is safe: existing secrets are carried over, so a rebuild never
 changes the identity authority that signed DIDs already minted.
 
 ## Configuration
 
-Settings live in a `config.toml`, read from `./config.toml` or the path in
-`METALBEAR_CONFIG`. Every value can also be given as an environment variable,
-and **the environment overrides the file**, so a checked-in config can describe
-the shape of a deployment while secrets and per-host overrides stay outside it.
+Settings live in a config file — TOML or YAML, chosen by extension — read
+from `./config.toml`, `./config.yaml`, `./config.yml`, or the path in
+`METALBEAR_CONFIG` (any filename; the dialect is still chosen by its
+`.yml`/`.yaml`/other extension). Every value can also be given as an
+environment variable, and **the environment overrides the file**, so a
+checked-in config can describe the shape of a deployment while secrets and
+per-host overrides stay outside it.
 
 ```toml
 [server]
@@ -356,9 +363,33 @@ crawlers     = ["https://bsky.network"]
 ping_seconds = 20                  # keepalive; must beat the proxy idle timeout
 ```
 
-`config.example.toml` documents every setting. Unknown keys are an error with a
-line number rather than a silent no-op — a configuration file that is half-read
-is worse than one that refuses to load.
+The same settings in YAML — a deliberate subset (2-space indent, no block
+sequences or multi-line scalars; see `config_file.h`), not the full spec:
+
+```yaml
+server:
+  service_did: "did:web:pds.example.com"
+  user_domain: ".pds.example.com"
+  port: 2583
+
+accounts:
+  admin_password: "..."
+  invite_required: true
+
+limits:
+  rate_limit: 3000   # per client, per window
+  rate_limit_window_seconds: 60
+
+firehose:
+  crawlers: ["https://bsky.network"]
+  ping_seconds: 20   # keepalive; must beat the proxy idle timeout
+```
+
+`config.example.toml` and `config.example.yaml` each document every setting,
+and describe the identical deployment — the two dialects share one field
+table in `config_file.cpp` so they cannot silently drift apart. Unknown keys
+are an error with a line number rather than a silent no-op — a configuration
+file that is half-read is worse than one that refuses to load.
 
 ### Handle resolution
 
