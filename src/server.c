@@ -1798,22 +1798,6 @@ static wf_status get_service_auth(void *ctx, const wf_xrpc_request *request,
     return set_json(response, root);
 }
 
-/* ---- com.atproto.temp.checkSignupQueue (query) ----
- * Temporary unspecced route. MetalBear has no entryway, so always
- * returns { activated: true }. */
-static wf_status check_signup_queue(void *ctx, const wf_xrpc_request *request,
-                                    wf_xrpc_response *response) {
-    (void)ctx;
-    (void)request;
-    cJSON *root = cJSON_CreateObject();
-    if (!root) return WF_ERR_ALLOC;
-    if (!cJSON_AddBoolToObject(root, "activated", 1)) {
-        cJSON_Delete(root);
-        return WF_ERR_ALLOC;
-    }
-    return set_json(response, root);
-}
-
 static bool make_directory(const char *path) {
     if (mkdir(path, 0700) == 0) return true;
     struct stat st;
