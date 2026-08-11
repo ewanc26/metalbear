@@ -1971,6 +1971,34 @@ int main(void) {
         wf_xrpc_client_set_auth(client, NULL);
     }
 
+    /* createRecord rejects a legacy-shaped blob ref ({cid, mimeType}, no
+     * $type), matching the reference's isLegacyBlobRef check
+     * (lex-data/src/blob.ts, wired in via repo/prepare.ts). */
+    {
+        wf_xrpc_client_set_auth(client, access_token);
+        char legacy_body[600];
+        snprintf(
+            legacy_body, sizeof(legacy_body),
+            "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
+            "\"record\":{\"$type\":\"app.bsky.feed.post\",\"text\":\"hi\","
+            "\"createdAt\":\"2026-07-27T00:00:00.000Z\",\"embed\":"
+            "{\"image\":{\"cid\":"
+            "\"bafyreigdyrht5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi\""
+            ",\"mimeType\":\"image/png\"}}}}",
+            alice_did);
+        CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                                legacy_body, &response) == WF_ERR_HTTP);
+        CHECK(response.status == 400);
+        json = json_response(&response);
+        CHECK(
+            strstr(
+                cJSON_GetObjectItemCaseSensitive(json, "message")->valuestring,
+                "Legacy blobs are not allowed") != NULL);
+        cJSON_Delete(json);
+        wf_response_free(&response);
+        wf_xrpc_client_set_auth(client, NULL);
+    }
+
     wf_xrpc_param block_params[] = {
         {"did", alice_did},
         {"cids", commit_cid},
