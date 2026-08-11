@@ -231,6 +231,19 @@ routes through a Cloudflare tunnel; if it does not resolve from the build host,
 curl `https://bear1.croft.click/xrpc/_health` after DNS recovers before
 assuming the host is down.
 
+**Record keys are real TIDs, always — never hand-crafted.** Every record
+created for testing or the devlog (posts, `put-record`, `applyWrites`) must
+use a real, freshly generated TID record key (`wf_tid_now` or the `wolf`
+CLI's auto-rkey path) — never a hand-made rkey such as `3l7v6qvideo`. A
+record that is not a valid 13-character base32 TID is accepted and stored by
+the PDS (`getRecord` succeeds) but the public AppView the feed is proxied to
+(`METALBEAR_APPVIEW_URL`) silently never ingests it: the record is invisible
+on the network while local verification looks green. This is not a theory —
+a hand-made rkey post sat missing from the feed for exactly this reason.
+Always verify network visibility through the AppView
+(`app.bsky.feed.getAuthorFeed` / `getPostThread`, which require a session
+token), never `com.atproto.repo.getRecord` alone.
+
 ## The landing page is two pages
 
 `GET /` on the PDS port serves `landing_handler`'s static HTML and is almost
