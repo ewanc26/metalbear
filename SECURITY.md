@@ -62,6 +62,7 @@ If you run a MetalBear instance:
   WebSocket upgrades
 - back up `METALBEAR_PLC_ROTATION_KEY`. Every DID the host has minted is
   unrecoverable without it
-- keep `config.toml` and `metalbear.env` out of version control; both hold
-  secrets and both are gitignored for that reason
+- keep your config file (`config.toml`, `config.yaml`, `bear.yml`, ...) and
+  `metalbear.env` out of version control; both hold secrets and the common
+  names are gitignored for that reason
 - raise the rate limit deliberately rather than disabling it
