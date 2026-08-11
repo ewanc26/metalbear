@@ -18,6 +18,7 @@
 #include "sync/sync_routes.h"
 #include "appview/appview_routes.h"
 #include "moderation/moderation_routes.h"
+#include "video/video_routes.h"
 #include "ops/status.h"
 
 #include "metalbear/server.h"
@@ -3004,8 +3005,17 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         /* Temporary unspecced route — always returns { activated: true } */
         wf_xrpc_server_register_query(server->xrpc,
                                       "com.atproto.temp.checkSignupQueue",
-                                      check_signup_queue, server) != WF_OK) {
-        LOG_ERROR("cannot register email/invite routes");
+                                      check_signup_queue, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+                                          "app.bsky.video.uploadVideo",
+                                          video_upload, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+                                      "app.bsky.video.getJobStatus",
+                                      video_get_job_status, server) != WF_OK ||
+        wf_xrpc_server_register_query(
+            server->xrpc, "app.bsky.video.getUploadLimits",
+            video_get_upload_limits, server) != WF_OK) {
+        LOG_ERROR("cannot register email/invite/video routes");
         goto fail;
     }
 
