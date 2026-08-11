@@ -52,7 +52,7 @@ string(TIMESTAMP METALBEAR_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
 # Override with -DMETALBEAR_RELEASE_STAGE=... per deployment; the default
 # here is the project's own current stage, updated as it matures.
 set(METALBEAR_RELEASE_STAGE
-    "alpha"
+    "beta"
     CACHE
       STRING
       "Where this build sits on the software release life cycle (pre-alpha/alpha/beta/rc/stable)."

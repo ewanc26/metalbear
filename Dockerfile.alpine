@@ -43,7 +43,7 @@ ARG METALBEAR_BUILD_COMMIT=unknown
 # "Release stage" section) -- defaults to CMakeLists.txt's own default,
 # override with --build-arg for a deployment that isn't running the project's
 # own current stage.
-ARG METALBEAR_RELEASE_STAGE=alpha
+ARG METALBEAR_RELEASE_STAGE=beta
 
 # Static internal libraries, so the runtime stage carries one file rather than
 # a binary plus four shared objects that must be kept in step with it.

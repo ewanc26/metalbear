@@ -551,7 +551,7 @@ frontend's landing page, and on the admin-gated `/_debug/health`
 an instance, or anyone reading a bug report can see it without guessing.
 
 The project's own current stage is set by `METALBEAR_RELEASE_STAGE` in
-`CMakeLists.txt` (default `alpha`). Override it per build with
+`CMakeLists.txt` (default `beta`). Override it per build with
 `-DMETALBEAR_RELEASE_STAGE=<stage>`, or via `--build-arg
 METALBEAR_RELEASE_STAGE=<stage>` / docker-compose's `build.args` for a
 Docker build — useful for a self-hosted deployment that wants to declare a
