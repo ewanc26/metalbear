@@ -2,6 +2,7 @@
 #include "../server_internal.h"
 
 #include "metalbear/repo/blob_store.h"
+#include "metalbear/repo/explicit_slurs.h"
 
 #include "wolfram/identity.h"
 #include "wolfram/repo/diff.h"
@@ -368,15 +369,26 @@ static int check_record(const metalbear_pds_repo_bundle *b, const cJSON *body,
 }
 
 /* Reject a syntactically invalid record key with the message the reference
- * uses. Returns 1 when the key is absent (the PDS mints one) or valid. */
+ * uses, and independently reject one containing an explicit slur (matching
+ * the reference's hasExplicitSlur check in prepareCreate/prepareUpdate,
+ * repo/prepare.ts -- a slur check is not a syntax rule, so it stays a
+ * separate condition rather than folding into wf_syntax_record_key_is_valid).
+ * Returns 1 when the key is absent (the PDS mints one) or passes both. */
 static int check_rkey(const cJSON *rkey, wf_xrpc_response *resp) {
     if (!cJSON_IsString(rkey) || !rkey->valuestring[0]) return 1;
-    if (wf_syntax_record_key_is_valid(rkey->valuestring)) return 1;
-    char detail[320];
-    snprintf(detail, sizeof(detail), "Invalid record key: %s",
-             rkey->valuestring);
-    wf_xrpc_response_set_error(resp, 400, "InvalidRequest", detail);
-    return 0;
+    if (!wf_syntax_record_key_is_valid(rkey->valuestring)) {
+        char detail[320];
+        snprintf(detail, sizeof(detail), "Invalid record key: %s",
+                 rkey->valuestring);
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest", detail);
+        return 0;
+    }
+    if (metalbear_has_explicit_slur(rkey->valuestring)) {
+        wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
+                                   "Unacceptable slur in record key");
+        return 0;
+    }
+    return 1;
 }
 
 /* The reference caps createRecord/putRecord/applyWrites request bodies at
