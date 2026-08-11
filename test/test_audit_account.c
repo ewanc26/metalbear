@@ -205,15 +205,15 @@ int main(void) {
 
     /* ---- (b) password ceiling ------------------------------------------- */
     {
-        char longpw[66];
-        memset(longpw, 'x', 65);
-        longpw[65] = '\0';
+        char longpw[258];
+        memset(longpw, 'x', 257);
+        longpw[257] = '\0';
         CHECK(create_account(client, "alice.example.com", longpw,
                              "alice@example.com", NULL, NULL, NULL, err,
                              sizeof(err), message, sizeof(message)) == 400);
         CHECK(strcmp(err, "InvalidRequest") == 0);
         CHECK(strcmp(message,
-                     "Password too long. Maximum length is 64 characters.") ==
+                     "Password too long. Maximum length is 256 characters.") ==
               0);
     }
 
@@ -256,12 +256,12 @@ int main(void) {
                                  &alice_did));
     CHECK(alice_did != NULL);
     {
-        char pw64[65];
-        memset(pw64, 'y', 64);
-        pw64[64] = '\0';
+        char pw256[257];
+        memset(pw256, 'y', 256);
+        pw256[256] = '\0';
         char *bob_token = NULL;
         char *bob_did = NULL;
-        CHECK(create_account_session(client, "bob.example.com", pw64,
+        CHECK(create_account_session(client, "bob.example.com", pw256,
                                      "bob@example.com", &bob_token, &bob_did));
 
         /* ---- (e) taken handle, taken email ------------------------------- */
