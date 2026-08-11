@@ -106,8 +106,8 @@ static cJSON *build_invite_code_json(metalbear_server *server,
 
 /* ---- com.atproto.admin.getAccountInfo (query, admin-gated) ----
  * Mirrors refpds `pdsadmin account list`: look the DID up in the
- * registry and return its did/handle/email/active. Unknown DID is an
- * honest AccountNotFound (404), never a fabricated success. */
+ * registry and return its did/handle/email/active. Unknown DID is
+ * InvalidRequest/NotFound (400), matching getAccountInfo.ts. */
 wf_status admin_get_account_info(void *ctx, const wf_xrpc_request *request,
                                  wf_xrpc_response *response) {
     metalbear_server *server = ctx;
@@ -123,8 +123,8 @@ wf_status admin_get_account_info(void *ctx, const wf_xrpc_request *request,
     if (metalbear_account_registry_find_by_did(
             server->registry, did->valuestring, &entry) != WF_OK ||
         !entry) {
-        wf_xrpc_response_set_error(response, 404, "AccountNotFound",
-                                   "account is not hosted here");
+        wf_xrpc_response_set_error(response, 400, "NotFound",
+                                   "Account not found");
         return WF_OK;
     }
     cJSON *root = cJSON_CreateObject();
@@ -501,8 +501,8 @@ wf_status admin_send_email(void *ctx, const wf_xrpc_request *request,
     if (metalbear_account_registry_find_by_did(
             server->registry, recipient->valuestring, &entry) != WF_OK ||
         !entry) {
-        wf_xrpc_response_set_error(response, 404, "AccountNotFound",
-                                   "recipient account not found");
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "Recipient not found");
         return WF_OK;
     }
     char *email = NULL;
@@ -761,8 +761,10 @@ wf_status admin_update_account_email(void *ctx, const wf_xrpc_request *request,
             server->registry, account->valuestring, &entry);
     }
     if (lookup != WF_OK || !entry) {
-        wf_xrpc_response_set_error(response, 404, "AccountNotFound",
-                                   "Account not found");
+        char detail[320];
+        snprintf(detail, sizeof(detail), "Account does not exist: %s",
+                 account->valuestring);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest", detail);
         return WF_OK;
     }
     char *acct_path = join_path(entry->data_directory, "account.sqlite3");

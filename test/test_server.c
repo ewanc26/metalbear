@@ -911,7 +911,8 @@ int main(void) {
         cJSON_Delete(json);
         wf_response_free(&response);
     }
-    /* Unknown DID -> AccountNotFound (404), never a fabricated account */
+    /* Unknown DID -> NotFound (400, matching getAccountInfo.ts), never a
+     * fabricated account */
     {
         char unknown_url[160];
         snprintf(unknown_url, sizeof(unknown_url),
@@ -928,11 +929,11 @@ int main(void) {
         wf_http_header hdr = {"Authorization", right_hdr};
         CHECK(wf_http_get_with_headers(client, unknown_url, &hdr, 1,
                                        &response) == WF_ERR_HTTP);
-        CHECK(response.status == 404);
+        CHECK(response.status == 400);
         json = json_response(&response);
         CHECK(
             strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
-                   "AccountNotFound") == 0);
+                   "NotFound") == 0);
         cJSON_Delete(json);
         wf_response_free(&response);
     }
