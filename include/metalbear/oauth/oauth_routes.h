@@ -19,7 +19,13 @@ extern "C" {
  *   POST /oauth/revoke
  *   GET  /oauth/authorize
  *   POST /oauth/signin
- *   POST /oauth/signout */
+ *   POST /oauth/signout
+ *   POST /oauth/passkey/register/options
+ *   POST /oauth/passkey/register/verify
+ *   POST /oauth/passkey/authenticate/options
+ *   POST /oauth/passkey/authenticate/verify
+ *   GET  /oauth/passkey/list
+ *   POST /oauth/passkey/remove */
 /*
  * Resolve an account hint (a handle or DID supplied as `login_hint`) to the
  * account's DID. Writes it into `out` and returns 1, or returns 0 when no such
