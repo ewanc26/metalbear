@@ -11,9 +11,7 @@
 	auth.subscribe((s) => (session = s));
 
 	const pathname = $derived($page.url.pathname);
-	const isOAuthPage = $derived(
-		pathname === '/login' || pathname.startsWith('/oauth/') || pathname === '/error'
-	);
+	const isOAuthPage = $derived(pathname === '/login' || pathname.startsWith('/oauth/'));
 
 	async function handleLogout() {
 		try {
