@@ -458,6 +458,37 @@ account pages the way password login's `com.atproto.server.createSession`
 does (see `frontend/src/routes/login/+page.svelte`'s
 `handlePasskeySignIn` comment).
 
+## Account migration and recovery
+
+Three related frontend pages give an account owner a way out that doesn't
+depend on this server staying cooperative:
+
+- `/account` "Download your data" — a thin client wrapper
+  (`downloadRepo` in `frontend/src/lib/pds.ts`) around the public,
+  unauthenticated `com.atproto.sync.getRepo`; not a privileged operation,
+  any relay could already fetch the same CAR file. `downloadRepo` inspects
+  the JSON error body on a non-2xx response and turns the server's
+  `RepoNotFound` (an empty repo — no records written yet) into a friendly
+  message instead of surfacing a bare `getRepo: 400`.
+- `/account/migrate` — a guided walkthrough of the standard migration
+  sequence (create account elsewhere, copy data over via the download
+  above, repoint identity via `requestPlcOperationSignature`), pointing at
+  `goat account migrate` for the parts that need a real client.
+- `/account/recovery-key` — the "PDS MOOver" idea applied here: walks the
+  user through adding a self-held PLC rotation key
+  (`goat key generate` + `goat account plc add-rotation-key`) *before* they
+  ever need to migrate, using the same `requestPlcOperationSignature`
+  email-token flow as `/account/migrate`. The point isn't backups, it's
+  independence — with a rotation key only the user holds, they can redirect
+  their own identity to a new server without this one's cooperation. See
+  David Buchanan's "Adversarial ATProto PDS Migration" (linked from the
+  page) for why that matters.
+
+All three are read-heavy/guidance pages, not new server endpoints — the
+only server-side surface they depend on is already-existing
+`requestPlcOperationSignature` (`com.atproto.identity.requestPlcOperationSignature`)
+and `getRepo`.
+
 ## Identity: the signing key is the interop contract
 
 The single defect that makes a repo unfederatable is a DID document that
