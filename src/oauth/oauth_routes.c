@@ -2,6 +2,9 @@
 
 #include "metalbear/oauth/oauth_routes.h"
 
+#include "metalbear/oauth/webauthn.h"
+#include "wolfram/crypto.h"
+
 #include <cJSON.h>
 #include <curl/curl.h>
 #include <stdbool.h>
@@ -48,6 +51,24 @@ typedef struct oauth_route_ctx {
 /* Percent-encode one query value. Caller frees with curl_free. */
 static char *url_escape(const char *value) {
     return curl_easy_escape(NULL, value, 0);
+}
+
+/* Extract just the host from rctx->public_url (e.g. "bear1.croft.click" from
+ * "https://bear1.croft.click") -- WebAuthn's RP ID is a bare hostname, no
+ * scheme or port, unlike the origin check further down which wants the
+ * whole public_url. Caller frees with free(). */
+static char *rp_id_from_public_url(const char *public_url) {
+    if (!public_url) return NULL;
+    CURLU *parsed = curl_url();
+    if (!parsed) return NULL;
+    char *host = NULL, *result = NULL;
+    if (curl_url_set(parsed, CURLUPART_URL, public_url, 0) == CURLUE_OK &&
+        curl_url_get(parsed, CURLUPART_HOST, &host, 0) == CURLUE_OK && host) {
+        result = strdup(host);
+    }
+    if (host) curl_free(host);
+    curl_url_cleanup(parsed);
+    return result;
 }
 
 /*
@@ -1342,47 +1363,19 @@ static void set_device_cookie(wf_xrpc_response *resp, const char *value,
  * whether a given kind of credential counts as "the account's own" is an
  * account-model question, not an OAuth-routing one.
  */
-static wf_status oauth_signin(void *ctx, const wf_xrpc_request *req,
-                              wf_xrpc_response *resp) {
-    oauth_route_ctx *rctx = ctx;
-    if (!req->params || !cJSON_IsObject(req->params)) {
-        wf_xrpc_response_set_error(resp, 400, "invalid_request",
-                                   "Missing or invalid request body");
-        return WF_OK;
-    }
-    cJSON *identifier =
-        cJSON_GetObjectItemCaseSensitive(req->params, "identifier");
-    cJSON *password = cJSON_GetObjectItemCaseSensitive(req->params, "password");
-    if (!cJSON_IsString(identifier) || !cJSON_IsString(password)) {
-        wf_xrpc_response_set_error(resp, 400, "invalid_request",
-                                   "identifier and password are required");
-        return WF_OK;
-    }
-
-    char subject[256];
-    if (!rctx->verify_credential ||
-        !rctx->verify_credential(rctx->resolver_ctx, identifier->valuestring,
-                                 password->valuestring, subject,
-                                 sizeof(subject))) {
-        /* Timing here is not constant, unlike com.atproto.server.createSession
-         * (which pads to 350ms). This endpoint is reached by a human typing
-         * into a form, not scriptable at a rate where that matters, and
-         * account_verify_credential's scrypt work already dominates any
-         * timing signal an unknown-vs-wrong-password branch could leak. */
-        wf_xrpc_response_set_error(resp, 401, "invalid_grant",
-                                   "Invalid identifier or password");
-        return WF_OK;
-    }
-
-    /*
-     * Signing into this account must not sign the browser out of any OTHER
-     * account already signed in here -- that would make an account picker
-     * pointless, since only ever one account could be signed in at a time.
-     * Keep every other still-valid session; drop any existing session for
-     * THIS subject (a fresh login replaces its own stale one rather than
-     * accumulating a row per login), and evict the oldest once the cap is
-     * reached.
-     */
+/*
+ * Common tail of every path that ends in "the browser is now signed in as
+ * `subject`" -- password sign-in and passkey authentication alike: mint a
+ * device session, fold it into whatever sessions the cookie already carries
+ * (replacing subject's own stale one, evicting the oldest past the cap,
+ * keeping every other account's session untouched so a multi-account
+ * browser doesn't get signed out of accounts it didn't just sign into), set
+ * the cookie, and respond with {"did": subject}.
+ */
+static wf_status finish_device_signin(oauth_route_ctx *rctx,
+                                      const wf_xrpc_request *req,
+                                      wf_xrpc_response *resp,
+                                      const char *subject) {
     device_session_entry existing[MB_DEVICE_MAX_SESSIONS];
     size_t existing_count =
         read_device_sessions(rctx->store, req->cookie_header, existing);
@@ -1424,6 +1417,692 @@ static wf_status oauth_signin(void *ctx, const wf_xrpc_request *req,
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     cJSON_AddStringToObject(root, "did", subject);
+    return json_response(resp, root, "no-store");
+}
+
+static wf_status oauth_signin(void *ctx, const wf_xrpc_request *req,
+                              wf_xrpc_response *resp) {
+    oauth_route_ctx *rctx = ctx;
+    if (!req->params || !cJSON_IsObject(req->params)) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Missing or invalid request body");
+        return WF_OK;
+    }
+    cJSON *identifier =
+        cJSON_GetObjectItemCaseSensitive(req->params, "identifier");
+    cJSON *password = cJSON_GetObjectItemCaseSensitive(req->params, "password");
+    if (!cJSON_IsString(identifier) || !cJSON_IsString(password)) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "identifier and password are required");
+        return WF_OK;
+    }
+
+    char subject[256];
+    if (!rctx->verify_credential ||
+        !rctx->verify_credential(rctx->resolver_ctx, identifier->valuestring,
+                                 password->valuestring, subject,
+                                 sizeof(subject))) {
+        /* Timing here is not constant, unlike com.atproto.server.createSession
+         * (which pads to 350ms). This endpoint is reached by a human typing
+         * into a form, not scriptable at a rate where that matters, and
+         * account_verify_credential's scrypt work already dominates any
+         * timing signal an unknown-vs-wrong-password branch could leak. */
+        wf_xrpc_response_set_error(resp, 401, "invalid_grant",
+                                   "Invalid identifier or password");
+        return WF_OK;
+    }
+
+    return finish_device_signin(rctx, req, resp, subject);
+}
+
+/* True if `subject` is among the accounts the presented device-session
+ * cookie is currently signed into. Every passkey account-management route
+ * below (register, list, remove) uses this as its authorization check --
+ * the same "already proved a password once" bar oauth_signin's cookie sets,
+ * not a separate credential. */
+static bool device_session_authorizes(oauth_route_ctx *rctx,
+                                      const wf_xrpc_request *req,
+                                      const char *subject) {
+    device_session_entry sessions[MB_DEVICE_MAX_SESSIONS];
+    size_t count =
+        read_device_sessions(rctx->store, req->cookie_header, sessions);
+    bool authorized = false;
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(sessions[i].subject, subject) == 0) authorized = true;
+    }
+    free_device_sessions(sessions, count);
+    return authorized;
+}
+
+/*
+ * POST /oauth/passkey/register/options (not part of the OAuth spec).
+ * Requires an existing device session for the account named by `did` in
+ * the request body -- registering a passkey is an account-management
+ * action, reached only from an already-authenticated account/security
+ * page, never pre-login.
+ */
+static wf_status passkey_register_options(void *ctx, const wf_xrpc_request *req,
+                                          wf_xrpc_response *resp) {
+    oauth_route_ctx *rctx = ctx;
+    if (!req->params || !cJSON_IsObject(req->params)) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Missing or invalid request body");
+        return WF_OK;
+    }
+    cJSON *did_item = cJSON_GetObjectItemCaseSensitive(req->params, "did");
+    if (!cJSON_IsString(did_item) || !did_item->valuestring[0]) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "did is required");
+        return WF_OK;
+    }
+    const char *subject = did_item->valuestring;
+    if (!device_session_authorizes(rctx, req, subject)) {
+        wf_xrpc_response_set_error(resp, 401, "invalid_grant",
+                                   "No device session for this account");
+        return WF_OK;
+    }
+
+    char *rp_id = rp_id_from_public_url(rctx->public_url);
+    if (!rp_id) return WF_ERR_INTERNAL;
+
+    char *challenge = NULL;
+    if (metalbear_oauth_passkey_challenge_create(
+            rctx->store, METALBEAR_WEBAUTHN_CEREMONY_REGISTRATION, subject,
+            &challenge) != WF_OK) {
+        free(rp_id);
+        wf_xrpc_response_set_error(resp, 500, "internal_error",
+                                   "Could not start registration");
+        return WF_OK;
+    }
+
+    metalbear_oauth_passkey_info *existing = NULL;
+    size_t existing_count = 0;
+    metalbear_oauth_passkey_list(rctx->store, subject, &existing,
+                                 &existing_count);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        free(rp_id);
+        free(challenge);
+        metalbear_oauth_passkey_info_list_free(existing, existing_count);
+        return WF_ERR_ALLOC;
+    }
+    cJSON_AddStringToObject(root, "challenge", challenge);
+
+    cJSON *rp = cJSON_CreateObject();
+    cJSON_AddStringToObject(rp, "id", rp_id);
+    cJSON_AddStringToObject(rp, "name", "MetalBear");
+    cJSON_AddItemToObject(root, "rp", rp);
+
+    /* WebAuthn user.id just needs to be an opaque, non-secret handle -- the
+     * challenge's own random bytes serve fine, sparing this endpoint a
+     * separate RNG call. */
+    cJSON *user = cJSON_CreateObject();
+    cJSON_AddStringToObject(user, "id", challenge);
+    cJSON_AddStringToObject(user, "name", subject);
+    cJSON_AddStringToObject(user, "displayName", subject);
+    cJSON_AddItemToObject(root, "user", user);
+
+    cJSON *params = cJSON_CreateArray();
+    cJSON *es256 = cJSON_CreateObject();
+    cJSON_AddStringToObject(es256, "type", "public-key");
+    cJSON_AddNumberToObject(es256, "alg", -7);
+    cJSON_AddItemToArray(params, es256);
+    cJSON_AddItemToObject(root, "pubKeyCredParams", params);
+
+    cJSON_AddStringToObject(root, "attestation", "none");
+
+    cJSON *selection = cJSON_CreateObject();
+    cJSON_AddStringToObject(selection, "residentKey", "required");
+    cJSON_AddStringToObject(selection, "userVerification", "preferred");
+    cJSON_AddItemToObject(root, "authenticatorSelection", selection);
+
+    cJSON *exclude = cJSON_CreateArray();
+    for (size_t i = 0; i < existing_count; i++) {
+        cJSON *cred = cJSON_CreateObject();
+        cJSON_AddStringToObject(cred, "type", "public-key");
+        cJSON_AddStringToObject(cred, "id", existing[i].id);
+        cJSON_AddItemToArray(exclude, cred);
+    }
+    cJSON_AddItemToObject(root, "excludeCredentials", exclude);
+
+    metalbear_oauth_passkey_info_list_free(existing, existing_count);
+    free(rp_id);
+    free(challenge);
+    return json_response(resp, root, "no-store");
+}
+
+/*
+ * POST /oauth/passkey/register/verify (not part of the OAuth spec). Same
+ * device-session requirement as .../register/options. Verifies the
+ * WebAuthn registration ceremony -- challenge, origin, RP ID hash -- under
+ * "none" attestation, so there is no attestation statement signature to
+ * check, only that the ceremony itself came from this origin with a
+ * challenge this server actually issued -- and stores the new credential.
+ */
+static wf_status passkey_register_verify(void *ctx, const wf_xrpc_request *req,
+                                         wf_xrpc_response *resp) {
+    oauth_route_ctx *rctx = ctx;
+    unsigned char *client_data = NULL, *attestation_object = NULL;
+    size_t client_data_len = 0, attestation_object_len = 0;
+    char *rp_id = NULL;
+    cJSON *client_data_json = NULL;
+    metalbear_webauthn_attested_credential cred;
+    memset(&cred, 0, sizeof(cred));
+
+    if (!req->params || !cJSON_IsObject(req->params)) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Missing or invalid request body");
+        return WF_OK;
+    }
+    cJSON *did_item = cJSON_GetObjectItemCaseSensitive(req->params, "did");
+    cJSON *response_item =
+        cJSON_GetObjectItemCaseSensitive(req->params, "response");
+    cJSON *name_item = cJSON_GetObjectItemCaseSensitive(req->params, "name");
+    if (!cJSON_IsString(did_item) || !did_item->valuestring[0] ||
+        !cJSON_IsObject(response_item)) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "did and response are required");
+        return WF_OK;
+    }
+    const char *subject = did_item->valuestring;
+    const char *name = cJSON_IsString(name_item) && name_item->valuestring[0]
+                           ? name_item->valuestring
+                           : NULL;
+    if (!device_session_authorizes(rctx, req, subject)) {
+        wf_xrpc_response_set_error(resp, 401, "invalid_grant",
+                                   "No device session for this account");
+        return WF_OK;
+    }
+
+    cJSON *client_data_b64 =
+        cJSON_GetObjectItemCaseSensitive(response_item, "clientDataJSON");
+    cJSON *attestation_b64 =
+        cJSON_GetObjectItemCaseSensitive(response_item, "attestationObject");
+    if (!cJSON_IsString(client_data_b64) || !cJSON_IsString(attestation_b64) ||
+        wf_crypto_base64url_decode(client_data_b64->valuestring, &client_data,
+                                   &client_data_len) != WF_OK ||
+        wf_crypto_base64url_decode(attestation_b64->valuestring,
+                                   &attestation_object,
+                                   &attestation_object_len) != WF_OK) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Malformed registration response");
+        goto fail;
+    }
+
+    client_data_json =
+        cJSON_ParseWithLength((const char *)client_data, client_data_len);
+    {
+        cJSON *type =
+            cJSON_GetObjectItemCaseSensitive(client_data_json, "type");
+        cJSON *origin =
+            cJSON_GetObjectItemCaseSensitive(client_data_json, "origin");
+        cJSON *challenge =
+            cJSON_GetObjectItemCaseSensitive(client_data_json, "challenge");
+        /* crossOrigin is optional per spec (older clients omit it), so only
+         * reject when a client explicitly says the ceremony ran inside a
+         * cross-origin iframe -- e.g. this login page framed on another
+         * site to clickjack a passkey ceremony -- not merely absent. */
+        cJSON *cross_origin =
+            cJSON_GetObjectItemCaseSensitive(client_data_json, "crossOrigin");
+        if (!cJSON_IsObject(client_data_json) || !cJSON_IsString(type) ||
+            strcmp(type->valuestring, "webauthn.create") != 0 ||
+            !cJSON_IsString(origin) || !rctx->public_url ||
+            strcmp(origin->valuestring, rctx->public_url) != 0 ||
+            !cJSON_IsString(challenge) ||
+            (cJSON_IsBool(cross_origin) && cJSON_IsTrue(cross_origin))) {
+            wf_xrpc_response_set_error(resp, 401, "invalid_grant",
+                                       "Registration ceremony did not verify");
+            goto fail;
+        }
+
+        char challenge_subject[256];
+        if (metalbear_oauth_passkey_challenge_consume(
+                rctx->store, challenge->valuestring,
+                METALBEAR_WEBAUTHN_CEREMONY_REGISTRATION, challenge_subject,
+                sizeof(challenge_subject)) != WF_OK ||
+            strcmp(challenge_subject, subject) != 0) {
+            wf_xrpc_response_set_error(resp, 401, "invalid_grant",
+                                       "Registration ceremony did not verify");
+            goto fail;
+        }
+    }
+
+    rp_id = rp_id_from_public_url(rctx->public_url);
+    if (!rp_id) {
+        wf_xrpc_response_set_error(resp, 500, "internal_error",
+                                   "Could not verify registration");
+        goto fail;
+    }
+    {
+        const unsigned char *auth_data = NULL;
+        size_t auth_data_len = 0;
+        unsigned char expected_rp_id_hash[32];
+        if (metalbear_webauthn_parse_attestation_object(
+                attestation_object, attestation_object_len, &auth_data,
+                &auth_data_len) != WF_OK ||
+            metalbear_webauthn_parse_registration_auth_data(
+                auth_data, auth_data_len, &cred) != WF_OK ||
+            wf_crypto_sha256((const unsigned char *)rp_id, strlen(rp_id),
+                             expected_rp_id_hash) != WF_OK ||
+            memcmp(cred.rp_id_hash, expected_rp_id_hash, 32) != 0 ||
+            !(cred.flags & METALBEAR_WEBAUTHN_FLAG_UP)) {
+            wf_xrpc_response_set_error(resp, 401, "invalid_grant",
+                                       "Registration ceremony did not verify");
+            goto fail;
+        }
+    }
+
+    {
+        wf_status add_status = metalbear_oauth_passkey_add(
+            rctx->store, subject, cred.credential_id, cred.credential_id_len,
+            cred.public_key.x, cred.public_key.y, name);
+        if (add_status == WF_ERR_DUPLICATE) {
+            wf_xrpc_response_set_error(resp, 409, "invalid_request",
+                                       "This passkey is already registered");
+            goto fail;
+        }
+        if (add_status != WF_OK) {
+            wf_xrpc_response_set_error(resp, 500, "internal_error",
+                                       "Could not save the passkey");
+            goto fail;
+        }
+    }
+
+    {
+        cJSON *root = cJSON_CreateObject();
+        free(client_data);
+        free(attestation_object);
+        free(rp_id);
+        cJSON_Delete(client_data_json);
+        metalbear_webauthn_attested_credential_free(&cred);
+        if (!root) return WF_ERR_ALLOC;
+        cJSON_AddBoolToObject(root, "ok", true);
+        return json_response(resp, root, "no-store");
+    }
+
+fail:
+    free(client_data);
+    free(attestation_object);
+    free(rp_id);
+    cJSON_Delete(client_data_json);
+    metalbear_webauthn_attested_credential_free(&cred);
+    return WF_OK;
+}
+
+/*
+ * POST /oauth/passkey/authenticate/options (not part of the OAuth spec).
+ * Unauthenticated -- reached pre-login, from the same place the password
+ * form lives. Resolves `identifier` the way oauth_signin's password path
+ * resolves one internally, but never distinguishes "unknown account" from
+ * "no passkeys registered" in the response: both look identical
+ * ({"available": false}), so this endpoint cannot be used to enumerate
+ * which handles exist.
+ */
+static wf_status passkey_authenticate_options(void *ctx,
+                                              const wf_xrpc_request *req,
+                                              wf_xrpc_response *resp) {
+    oauth_route_ctx *rctx = ctx;
+    if (!req->params || !cJSON_IsObject(req->params)) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Missing or invalid request body");
+        return WF_OK;
+    }
+    cJSON *identifier_item =
+        cJSON_GetObjectItemCaseSensitive(req->params, "identifier");
+    if (!cJSON_IsString(identifier_item) || !identifier_item->valuestring[0]) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "identifier is required");
+        return WF_OK;
+    }
+
+    char subject[256] = "";
+    bool resolved =
+        rctx->resolve_subject &&
+        rctx->resolve_subject(rctx->resolver_ctx, identifier_item->valuestring,
+                              subject, sizeof(subject));
+    int has_passkeys = 0;
+    if (resolved)
+        metalbear_oauth_passkey_exists(rctx->store, subject, &has_passkeys);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    if (!resolved || !has_passkeys) {
+        cJSON_AddBoolToObject(root, "available", false);
+        return json_response(resp, root, "no-store");
+    }
+
+    metalbear_oauth_passkey_info *items = NULL;
+    size_t item_count = 0;
+    char *challenge = NULL;
+    char *rp_id = NULL;
+    if (metalbear_oauth_passkey_list(rctx->store, subject, &items,
+                                     &item_count) != WF_OK ||
+        metalbear_oauth_passkey_challenge_create(
+            rctx->store, METALBEAR_WEBAUTHN_CEREMONY_AUTHENTICATION, subject,
+            &challenge) != WF_OK ||
+        !(rp_id = rp_id_from_public_url(rctx->public_url))) {
+        metalbear_oauth_passkey_info_list_free(items, item_count);
+        free(challenge);
+        free(rp_id);
+        cJSON_Delete(root);
+        wf_xrpc_response_set_error(resp, 500, "internal_error",
+                                   "Could not start authentication");
+        return WF_OK;
+    }
+
+    cJSON_AddBoolToObject(root, "available", true);
+    cJSON_AddStringToObject(root, "challenge", challenge);
+    cJSON_AddStringToObject(root, "rpId", rp_id);
+    cJSON_AddStringToObject(root, "userVerification", "preferred");
+    cJSON *allow = cJSON_CreateArray();
+    for (size_t i = 0; i < item_count; i++) {
+        cJSON *cred = cJSON_CreateObject();
+        cJSON_AddStringToObject(cred, "type", "public-key");
+        cJSON_AddStringToObject(cred, "id", items[i].id);
+        cJSON_AddItemToArray(allow, cred);
+    }
+    cJSON_AddItemToObject(root, "allowCredentials", allow);
+
+    metalbear_oauth_passkey_info_list_free(items, item_count);
+    free(challenge);
+    free(rp_id);
+    return json_response(resp, root, "no-store");
+}
+
+/*
+ * POST /oauth/passkey/authenticate/verify (not part of the OAuth spec).
+ * Unauthenticated. Verifies a WebAuthn assertion -- challenge, origin, RP ID
+ * hash, and (unlike registration) the ES256 signature itself, over
+ * authenticatorData || SHA256(clientDataJSON), using the P-256 public key
+ * stored at registration -- and on success ends the same way password
+ * sign-in does.
+ */
+static wf_status passkey_authenticate_verify(void *ctx,
+                                             const wf_xrpc_request *req,
+                                             wf_xrpc_response *resp) {
+    oauth_route_ctx *rctx = ctx;
+    unsigned char *credential_id = NULL, *client_data = NULL,
+                  *authenticator_data = NULL, *signature_der = NULL;
+    size_t credential_id_len = 0, client_data_len = 0,
+           authenticator_data_len = 0, signature_der_len = 0;
+    char *rp_id = NULL;
+    cJSON *client_data_json = NULL;
+
+    if (!req->params || !cJSON_IsObject(req->params)) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Missing or invalid request body");
+        return WF_OK;
+    }
+    cJSON *id_item = cJSON_GetObjectItemCaseSensitive(req->params, "id");
+    cJSON *response_item =
+        cJSON_GetObjectItemCaseSensitive(req->params, "response");
+    if (!cJSON_IsString(id_item) || !cJSON_IsObject(response_item) ||
+        wf_crypto_base64url_decode(id_item->valuestring, &credential_id,
+                                   &credential_id_len) != WF_OK) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Malformed authentication response");
+        goto fail;
+    }
+    {
+        cJSON *client_data_b64 =
+            cJSON_GetObjectItemCaseSensitive(response_item, "clientDataJSON");
+        cJSON *auth_data_b64 = cJSON_GetObjectItemCaseSensitive(
+            response_item, "authenticatorData");
+        cJSON *signature_b64 =
+            cJSON_GetObjectItemCaseSensitive(response_item, "signature");
+        if (!cJSON_IsString(client_data_b64) ||
+            !cJSON_IsString(auth_data_b64) || !cJSON_IsString(signature_b64) ||
+            wf_crypto_base64url_decode(client_data_b64->valuestring,
+                                       &client_data,
+                                       &client_data_len) != WF_OK ||
+            wf_crypto_base64url_decode(auth_data_b64->valuestring,
+                                       &authenticator_data,
+                                       &authenticator_data_len) != WF_OK ||
+            wf_crypto_base64url_decode(signature_b64->valuestring,
+                                       &signature_der,
+                                       &signature_der_len) != WF_OK) {
+            wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                       "Malformed authentication response");
+            goto fail;
+        }
+    }
+
+    char subject[256];
+    unsigned char stored_x[32], stored_y[32];
+    uint32_t stored_sign_count = 0;
+    if (metalbear_oauth_passkey_lookup(
+            rctx->store, credential_id, credential_id_len, subject,
+            sizeof(subject), stored_x, stored_y, &stored_sign_count) != WF_OK) {
+        wf_xrpc_response_set_error(resp, 401, "invalid_grant",
+                                   "Unknown passkey");
+        goto fail;
+    }
+
+    client_data_json =
+        cJSON_ParseWithLength((const char *)client_data, client_data_len);
+    {
+        cJSON *type =
+            cJSON_GetObjectItemCaseSensitive(client_data_json, "type");
+        cJSON *origin =
+            cJSON_GetObjectItemCaseSensitive(client_data_json, "origin");
+        cJSON *challenge =
+            cJSON_GetObjectItemCaseSensitive(client_data_json, "challenge");
+        cJSON *cross_origin =
+            cJSON_GetObjectItemCaseSensitive(client_data_json, "crossOrigin");
+        if (!cJSON_IsObject(client_data_json) || !cJSON_IsString(type) ||
+            strcmp(type->valuestring, "webauthn.get") != 0 ||
+            !cJSON_IsString(origin) || !rctx->public_url ||
+            strcmp(origin->valuestring, rctx->public_url) != 0 ||
+            !cJSON_IsString(challenge) ||
+            (cJSON_IsBool(cross_origin) && cJSON_IsTrue(cross_origin))) {
+            wf_xrpc_response_set_error(
+                resp, 401, "invalid_grant",
+                "Authentication ceremony did not verify");
+            goto fail;
+        }
+
+        char challenge_subject[256];
+        if (metalbear_oauth_passkey_challenge_consume(
+                rctx->store, challenge->valuestring,
+                METALBEAR_WEBAUTHN_CEREMONY_AUTHENTICATION, challenge_subject,
+                sizeof(challenge_subject)) != WF_OK ||
+            strcmp(challenge_subject, subject) != 0) {
+            wf_xrpc_response_set_error(
+                resp, 401, "invalid_grant",
+                "Authentication ceremony did not verify");
+            goto fail;
+        }
+    }
+
+    rp_id = rp_id_from_public_url(rctx->public_url);
+    unsigned char flags = 0;
+    uint32_t new_sign_count = 0;
+    {
+        unsigned char rp_id_hash[32], expected_rp_id_hash[32];
+        if (!rp_id ||
+            metalbear_webauthn_parse_assertion_auth_data(
+                authenticator_data, authenticator_data_len, rp_id_hash, &flags,
+                &new_sign_count) != WF_OK ||
+            wf_crypto_sha256((const unsigned char *)rp_id, strlen(rp_id),
+                             expected_rp_id_hash) != WF_OK ||
+            memcmp(rp_id_hash, expected_rp_id_hash, 32) != 0 ||
+            !(flags & METALBEAR_WEBAUTHN_FLAG_UP)) {
+            wf_xrpc_response_set_error(
+                resp, 401, "invalid_grant",
+                "Authentication ceremony did not verify");
+            goto fail;
+        }
+    }
+
+    /* WebAuthn assertion signatures cover authenticatorData ||
+     * SHA256(clientDataJSON) (§7.2 step 21) and are DER-encoded -- convert
+     * to the raw r||s form wf_crypto_p256_verify_allow_malleable expects. */
+    {
+        unsigned char client_data_hash[32];
+        if (wf_crypto_sha256(client_data, client_data_len, client_data_hash) !=
+            WF_OK) {
+            wf_xrpc_response_set_error(resp, 500, "internal_error",
+                                       "Could not verify authentication");
+            goto fail;
+        }
+        size_t signed_data_len =
+            authenticator_data_len + sizeof(client_data_hash);
+        unsigned char *signed_data = malloc(signed_data_len);
+        if (!signed_data) {
+            free(credential_id);
+            free(client_data);
+            free(authenticator_data);
+            free(signature_der);
+            free(rp_id);
+            cJSON_Delete(client_data_json);
+            return WF_ERR_ALLOC;
+        }
+        memcpy(signed_data, authenticator_data, authenticator_data_len);
+        memcpy(signed_data + authenticator_data_len, client_data_hash,
+               sizeof(client_data_hash));
+
+        unsigned char signature_raw[64];
+        wf_status sig_status = wf_crypto_ecdsa_der_to_raw(
+            signature_der, signature_der_len, signature_raw);
+        bool signature_valid =
+            sig_status == WF_OK &&
+            wf_crypto_p256_verify_allow_malleable(
+                stored_x, stored_y, signed_data, signed_data_len, signature_raw,
+                sizeof(signature_raw)) == WF_OK;
+        free(signed_data);
+
+        /* WebAuthn explicitly allows an authenticator to never increment its
+         * counter at all (many resident-key/passkey providers, e.g. a
+         * platform passkey synced across devices, always report 0) -- that
+         * is not itself a cloning signal, so a counter that has ALWAYS been
+         * 0 is exempted. But a counter that WAS incrementing and then drops
+         * back to 0, or repeats/decreases a nonzero value, is exactly the
+         * signal this check exists to catch, and must still fail. */
+        bool counter_ok = (new_sign_count == 0 && stored_sign_count == 0) ||
+                          new_sign_count > stored_sign_count;
+        if (!signature_valid || !counter_ok) {
+            wf_xrpc_response_set_error(
+                resp, 401, "invalid_grant",
+                "Authentication ceremony did not verify");
+            goto fail;
+        }
+    }
+
+    metalbear_oauth_passkey_touch(rctx->store, credential_id, credential_id_len,
+                                  new_sign_count);
+
+    free(credential_id);
+    free(client_data);
+    free(authenticator_data);
+    free(signature_der);
+    free(rp_id);
+    cJSON_Delete(client_data_json);
+    return finish_device_signin(rctx, req, resp, subject);
+
+fail:
+    free(credential_id);
+    free(client_data);
+    free(authenticator_data);
+    free(signature_der);
+    free(rp_id);
+    cJSON_Delete(client_data_json);
+    return WF_OK;
+}
+
+/*
+ * GET /oauth/passkey/list?did=... (not part of the OAuth spec). Same
+ * device-session requirement as registration.
+ */
+static wf_status passkey_list(void *ctx, const wf_xrpc_request *req,
+                              wf_xrpc_response *resp) {
+    oauth_route_ctx *rctx = ctx;
+    const char *subject = NULL;
+    if (req->params && cJSON_IsObject(req->params)) {
+        cJSON *did_item = cJSON_GetObjectItemCaseSensitive(req->params, "did");
+        if (cJSON_IsString(did_item) && did_item->valuestring[0])
+            subject = did_item->valuestring;
+    }
+    if (!subject || !device_session_authorizes(rctx, req, subject)) {
+        wf_xrpc_response_set_error(resp, 401, "invalid_grant",
+                                   "No device session for this account");
+        return WF_OK;
+    }
+
+    metalbear_oauth_passkey_info *items = NULL;
+    size_t item_count = 0;
+    if (metalbear_oauth_passkey_list(rctx->store, subject, &items,
+                                     &item_count) != WF_OK) {
+        wf_xrpc_response_set_error(resp, 500, "internal_error",
+                                   "Could not list passkeys");
+        return WF_OK;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        metalbear_oauth_passkey_info_list_free(items, item_count);
+        return WF_ERR_ALLOC;
+    }
+    cJSON *list = cJSON_CreateArray();
+    for (size_t i = 0; i < item_count; i++) {
+        cJSON *entry = cJSON_CreateObject();
+        cJSON_AddStringToObject(entry, "id", items[i].id);
+        if (items[i].name)
+            cJSON_AddStringToObject(entry, "name", items[i].name);
+        cJSON_AddNumberToObject(entry, "createdAt",
+                                (double)items[i].created_at);
+        if (items[i].last_used_at > 0)
+            cJSON_AddNumberToObject(entry, "lastUsedAt",
+                                    (double)items[i].last_used_at);
+        cJSON_AddItemToArray(list, entry);
+    }
+    cJSON_AddItemToObject(root, "passkeys", list);
+    metalbear_oauth_passkey_info_list_free(items, item_count);
+    return json_response(resp, root, "no-store");
+}
+
+/*
+ * POST /oauth/passkey/remove (not part of the OAuth spec). `id` is one of
+ * the credential IDs GET /oauth/passkey/list returned. Same device-session
+ * requirement as registration.
+ */
+static wf_status passkey_remove(void *ctx, const wf_xrpc_request *req,
+                                wf_xrpc_response *resp) {
+    oauth_route_ctx *rctx = ctx;
+    if (!req->params || !cJSON_IsObject(req->params)) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "Missing or invalid request body");
+        return WF_OK;
+    }
+    cJSON *did_item = cJSON_GetObjectItemCaseSensitive(req->params, "did");
+    cJSON *id_item = cJSON_GetObjectItemCaseSensitive(req->params, "id");
+    if (!cJSON_IsString(did_item) || !did_item->valuestring[0] ||
+        !cJSON_IsString(id_item) || !id_item->valuestring[0]) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_request",
+                                   "did and id are required");
+        return WF_OK;
+    }
+    const char *subject = did_item->valuestring;
+    if (!device_session_authorizes(rctx, req, subject)) {
+        wf_xrpc_response_set_error(resp, 401, "invalid_grant",
+                                   "No device session for this account");
+        return WF_OK;
+    }
+
+    wf_status status = metalbear_oauth_passkey_remove(rctx->store, subject,
+                                                      id_item->valuestring);
+    if (status == WF_ERR_NOT_FOUND) {
+        wf_xrpc_response_set_error(resp, 404, "not_found", "Unknown passkey");
+        return WF_OK;
+    }
+    if (status != WF_OK) {
+        wf_xrpc_response_set_error(resp, 500, "internal_error",
+                                   "Could not remove the passkey");
+        return WF_OK;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
     return json_response(resp, root, "no-store");
 }
 
@@ -1602,7 +2281,24 @@ wf_status metalbear_oauth_routes_register(
         wf_xrpc_server_register_http_route(server, "GET", "/oauth/session",
                                            oauth_session, ctx) != WF_OK ||
         wf_xrpc_server_register_http_route(server, "POST", "/oauth/signout",
-                                           oauth_signout, ctx) != WF_OK) {
+                                           oauth_signout, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(
+            server, "POST", "/oauth/passkey/register/options",
+            passkey_register_options, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(
+            server, "POST", "/oauth/passkey/register/verify",
+            passkey_register_verify, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(
+            server, "POST", "/oauth/passkey/authenticate/options",
+            passkey_authenticate_options, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(
+            server, "POST", "/oauth/passkey/authenticate/verify",
+            passkey_authenticate_verify, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(server, "GET", "/oauth/passkey/list",
+                                           passkey_list, ctx) != WF_OK ||
+        wf_xrpc_server_register_http_route(server, "POST",
+                                           "/oauth/passkey/remove",
+                                           passkey_remove, ctx) != WF_OK) {
         free(ctx->public_url);
         free(ctx);
         return WF_ERR_INTERNAL;
