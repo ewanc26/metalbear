@@ -1552,8 +1552,14 @@ static wf_status passkey_register_options(void *ctx, const wf_xrpc_request *req,
 
     cJSON_AddStringToObject(root, "attestation", "none");
 
+    /* "preferred", not "required": a resident/discoverable credential is
+     * only useful for usernameless login, which this implementation never
+     * does -- passkey_authenticate_options always requires an identifier
+     * and supplies allowCredentials explicitly. Requiring one here would
+     * reject registration outright on authenticators that support WebAuthn
+     * but not resident keys, for no benefit this server actually uses. */
     cJSON *selection = cJSON_CreateObject();
-    cJSON_AddStringToObject(selection, "residentKey", "required");
+    cJSON_AddStringToObject(selection, "residentKey", "preferred");
     cJSON_AddStringToObject(selection, "userVerification", "preferred");
     cJSON_AddItemToObject(root, "authenticatorSelection", selection);
 
