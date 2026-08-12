@@ -2624,6 +2624,20 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     wf_xrpc_server_set_route_rate_limiter(server->xrpc, "POST",
                                           "/xrpc/com.atproto.repo.uploadBlob",
                                           wf_rate_limiter_new(1000, 86400, 0));
+    /* Passkey authentication had no route-specific limit, only the generous
+     * global-ip budget above (3000/5min default) -- unlike createSession,
+     * which gets its own 30/5min tier. Forging a valid assertion without the
+     * private key stays infeasible regardless of request volume, so this
+     * isn't closing an auth bypass; it bounds the compute cost (base64
+     * decode, DB lookup, ECDSA verify per attempt) of hammering the one
+     * pre-auth passkey endpoint that does real crypto work. IP-only (not
+     * identifier+IP like createSession): unlike a password/username,
+     * credential_id isn't something a client chooses or types, so there's no
+     * "attacker hammers one victim's identifier from many IPs" case to guard
+     * against separately. */
+    wf_xrpc_server_set_route_rate_limiter(server->xrpc, "POST",
+                                          "/oauth/passkey/authenticate/verify",
+                                          wf_rate_limiter_new(30, 300, 0));
 
     /* Initialize email module if configured */
     if (config->smtp_host && config->smtp_host[0] && config->from_address &&
