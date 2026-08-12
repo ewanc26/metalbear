@@ -179,6 +179,11 @@
 					>
 				</li>
 				<li>
+					<a href="/account/migrate" class="text-emerald-500 hover:text-emerald-400"
+						>Migrate to another server →</a
+					>
+				</li>
+				<li>
 					<a href="/account/danger-zone" class="text-red-400 hover:text-red-300">Danger zone →</a>
 				</li>
 			</ul>
