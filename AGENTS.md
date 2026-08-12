@@ -201,11 +201,13 @@ stays stale or a daemon rebuilds the same state twice.
    docker compose up -d bear-pds` in `/Volumes/Storage/Server/bear` with that
    variable exported. Skipping the export silently degrades `commit` in
    `operator.json`/`/_debug/health` to `"unknown"` instead of failing the
-   build, so this is easy to miss. When the
-   frontend changed, copy the fresh `frontend/build/` over
-   `/Volumes/Storage/Server/stack/nginx/bear1-site` (nginx serves it read-only
-   from a bind mount, so no restart is needed). Finally write the deployed
-   commit pair to `.last-build-commit` as `<metalbear HEAD>:<wolfram HEAD>` —
+   build, so this is easy to miss. When the frontend changed, `npm run
+   build` in `frontend/` (step 1) is the entire deploy step — edge-gateway
+   bind-mounts `frontend/build` directly at `/srv/bear1-site`
+   (`/Volumes/Storage/Server/stack/docker-compose.edge-gateway.yaml`), so
+   nginx picks up the fresh build with no copy and no restart needed.
+   Finally write the deployed commit pair to `.last-build-commit` as
+   `<metalbear HEAD>:<wolfram HEAD>` —
    the daemon at `/Volumes/Storage/Server/stack/server-daemon.sh` rebuilds
    whenever that marker differs from the checkouts' current HEADs, so syncing
    it is what stops a duplicate build. Verify on the public ingress, not
@@ -251,12 +253,13 @@ token), never `com.atproto.repo.getRecord` alone.
 
 `GET /` on the PDS port serves `landing_handler`'s static HTML and is almost
 never seen. The public page at bear1.croft.click is the SvelteKit frontend in
-`frontend/`, prerendered to `build/` and copied to
-`/Volumes/Storage/Server/stack/nginx/bear1-site`. Copy the *entire* `build/`
-directory, not just `index.html`/`_app/`/`robots.txt` — every prerendered
+`frontend/`, prerendered to `build/` and served by edge-gateway directly from
+there via a bind mount at `/srv/bear1-site`
+(`/Volumes/Storage/Server/stack/docker-compose.edge-gateway.yaml`) — `npm run
+build` is the whole deploy step, nothing copies it anymore. Every prerendered
 page (`login.html`, `account.html`, `account/app-passwords.html`,
 `oauth/consent.html`, and whatever a future route adds) is a separate static
-file, and nginx needs each one on disk to serve it. The page reads what it
+file, and nginx needs each one to exist in `build/`. The page reads what it
 displays from the server at request time, so anything it shows must come
 from a public endpoint a browser can fetch — `operator.json` carries
 `software.version` and `software.wolframVersion` for exactly that reason. A
