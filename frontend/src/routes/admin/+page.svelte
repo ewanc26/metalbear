@@ -9,9 +9,10 @@
 		adminSetAccountInvitesEnabled,
 		adminGetInviteCodes,
 		adminDisableInviteCodes,
-		resolveHandle
+		resolveHandle,
+		listReposPage
 	} from '$lib/pds';
-	import type { AdminAccountView, SubjectStatus, AdminInviteCode } from '$lib/pds';
+	import type { AdminAccountView, SubjectStatus, AdminInviteCode, RepoInfo } from '$lib/pds';
 	import { onMount } from 'svelte';
 
 	let password = $state<string | null>(null);
@@ -159,6 +160,34 @@
 		}
 	}
 
+	/* ---- Accounts (browse) ---- */
+	let repos = $state<RepoInfo[]>([]);
+	let reposCursor = $state<string | undefined>(undefined);
+	let reposLoading = $state(false);
+	let reposError = $state('');
+	let reposLoaded = $state(false);
+
+	async function loadRepos(cursor?: string) {
+		reposLoading = true;
+		reposError = '';
+		try {
+			const result = await listReposPage(cursor);
+			repos = cursor ? [...repos, ...result.repos] : result.repos;
+			reposCursor = result.cursor;
+			reposLoaded = true;
+		} catch (err) {
+			reposError = err instanceof Error ? err.message : 'Failed to load accounts';
+		} finally {
+			reposLoading = false;
+		}
+	}
+
+	function handleBrowseLookup(did: string) {
+		lookupInput = did;
+		handleLookup(new Event('submit'));
+		window.scrollTo({ top: 0, behavior: 'smooth' });
+	}
+
 	onMount(() => {
 		if (password) loadInviteCodes();
 	});
@@ -300,6 +329,62 @@
 						</p>
 					{/if}
 				</div>
+			{/if}
+		</section>
+
+		<!-- Accounts (browse) -->
+		<section class="mb-8 rounded-lg border border-slate-800 bg-slate-900/30 p-6">
+			<h2 class="mb-4 text-sm font-semibold tracking-widest text-slate-500 uppercase">
+				Accounts
+			</h2>
+
+			{#if reposError}
+				<p
+					class="mb-4 rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-2.5 text-sm text-red-300"
+				>
+					{reposError}
+				</p>
+			{/if}
+
+			{#if !reposLoaded}
+				<button
+					onclick={() => loadRepos()}
+					disabled={reposLoading}
+					class="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-600 hover:text-white disabled:opacity-50"
+				>
+					{reposLoading ? 'Loading…' : 'Browse accounts'}
+				</button>
+			{:else if repos.length === 0}
+				<p class="text-sm text-slate-500">No accounts hosted.</p>
+			{:else}
+				<ul class="divide-y divide-slate-800">
+					{#each repos as r (r.did)}
+						<li class="flex items-center justify-between gap-4 py-3">
+							<div class="min-w-0">
+								<code class="text-sm break-all text-slate-200">{r.did}</code>
+								<div class="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
+									<span>{r.active ? 'active' : (r.status ?? 'inactive')}</span>
+								</div>
+							</div>
+							<button
+								onclick={() => handleBrowseLookup(r.did)}
+								class="shrink-0 text-sm text-emerald-500 hover:text-emerald-400"
+							>
+								Look up →
+							</button>
+						</li>
+					{/each}
+				</ul>
+
+				{#if reposCursor}
+					<button
+						onclick={() => loadRepos(reposCursor)}
+						disabled={reposLoading}
+						class="mt-4 rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-600 hover:text-white disabled:opacity-50"
+					>
+						{reposLoading ? 'Loading…' : 'Load more'}
+					</button>
+				{/if}
 			{/if}
 		</section>
 
