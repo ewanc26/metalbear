@@ -656,6 +656,17 @@ export async function requestAccountDelete(): Promise<void> {
 	await xrpcPost<Record<string, never>>('com.atproto.server.requestAccountDelete', {});
 }
 
+/*
+ * First step of moving this account's identity to a different PDS (see
+ * /account/migrate): emails a token that identity.signPlcOperation on this
+ * server needs to co-sign the PLC operation the destination server
+ * prepares. Requesting this has no effect on its own -- it doesn't change
+ * where the account is hosted -- so it's safe to trigger from a guided UI.
+ */
+export async function requestPlcOperationSignature(): Promise<void> {
+	await xrpcPost<Record<string, never>>('com.atproto.identity.requestPlcOperationSignature', {});
+}
+
 /* Unauthenticated per the lexicon: the token+password together are the
  * credential, matching how deleteAccount is implemented server-side (it
  * looks the account up by `did`, not by session). */
