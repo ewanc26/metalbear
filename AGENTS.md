@@ -576,3 +576,21 @@ it locally.
     lines touched by the PR. After editing long string literals in the usage or
     help text, run `clang-format -i src/cli/main.c` and commit the formatted
     result — do not hand-format or leave alignment-based spacing.
+
+## Raspberry Pi 1 / Zero target
+
+- MetalBear's minor cross-compile target is a Raspberry Pi 1B/Zero
+  (ARM1176JZF-S, ARMv6Z). Since MetalBear pulls wolfram in via
+  `add_subdirectory` (see `WOLFRAM_SOURCE_DIR` in `CMakeLists.txt`), one
+  top-level configure cross-compiles both: `cmake
+  -DCMAKE_TOOLCHAIN_FILE=../wolfram/.devdeps/rpi1.cmake -B build-rpi1`. See
+  that file's header comment for the required toolchain/rootfs — a generic
+  Debian/Ubuntu "armhf" cross toolchain targets ARMv7 and produces a
+  SIGILL-on-boot binary for this CPU, and 64-bit atomics (the metrics
+  counters in `src/ops/metrics.c`, wolfram's DID-cache refcounts) need
+  `-march=armv6zk` specifically, not plain `armv6`, to lower to inline
+  LDREXD/STREXD rather than needing a libatomic call.
+- 256MB (rev1) or 512MB (rev2+) RAM, single core @ 700MHz. Not yet
+  benchmarked or verified on real hardware — the toolchain file only
+  establishes that the cross-build compiles/links; correctness and
+  performance on-device are unverified.
