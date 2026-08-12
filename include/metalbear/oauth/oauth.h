@@ -72,7 +72,14 @@ wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
                                     char **out_code, char **out_redirect_uri,
                                     char **out_state);
 
-/* Exchange a code using S256 PKCE and the same DPoP key used at PAR. */
+/* Exchange a code using S256 PKCE and the same DPoP key used at PAR.
+ * `dpop_jkt` is mandatory (WF_ERR_INVALID_ARG if NULL/empty) -- atproto's
+ * OAuth profile requires DPoP for every client with no exemptions, and the
+ * caller must have already cryptographically verified an actual DPoP proof
+ * to produce this value (see oauth_routes.c's verified_token_endpoint_jkt);
+ * it is compared against whatever jkt was established at PAR/authorization
+ * time and the exchange fails on any mismatch, including "nothing was
+ * established". */
 wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
                                         const char *code, const char *client_id,
                                         const char *redirect_uri,
@@ -80,7 +87,8 @@ wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
                                         const char *dpop_jkt,
                                         metalbear_oauth_grant *out);
 
-/* Rotate a refresh token and retain its client, scope, and DPoP binding. */
+/* Rotate a refresh token and retain its client, scope, and DPoP binding.
+ * `dpop_jkt` is mandatory -- see metalbear_oauth_exchange_code. */
 wf_status metalbear_oauth_refresh(metalbear_oauth_store *store,
                                   const char *refresh_token,
                                   const char *client_id, const char *dpop_jkt,
