@@ -475,6 +475,22 @@ export function passkeyRemove(did: string, id: string): Promise<void> {
 	return passkeyFetch('/oauth/passkey/remove', { did, id });
 }
 
+/*
+ * A full CAR export of the caller's own repo -- com.atproto.sync.getRepo is
+ * a public, unauthenticated endpoint (any relay can sync any account; that
+ * is the point of the protocol), so this is a thin convenience wrapper
+ * around what the account owner could already curl themselves, not a
+ * privileged operation. Returns a Blob the caller hands to an <a download>
+ * or URL.createObjectURL.
+ */
+export async function downloadRepo(did: string): Promise<Blob> {
+	const url = new URL('/xrpc/com.atproto.sync.getRepo', window.location.origin);
+	url.searchParams.set('did', did);
+	const res = await fetch(url, { headers: { accept: 'application/vnd.ipld.car' } });
+	if (!res.ok) throw new Error(`getRepo: ${res.status}`);
+	return res.blob();
+}
+
 export async function getSession(): Promise<SessionResponse> {
 	const session = currentSession();
 	if (!session) throw new Error('Not authenticated');
