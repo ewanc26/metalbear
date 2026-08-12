@@ -383,6 +383,13 @@ if(METALBEAR_BUILD_TESTS)
   add_test(NAME metalbear_oauth_device_session
            COMMAND test_metalbear_oauth_device_session)
 
+  add_executable(test_metalbear_oauth_passkey test/test_oauth_passkey.c)
+  target_link_libraries(test_metalbear_oauth_passkey
+                        PRIVATE metalbear_core OpenSSL::Crypto)
+  target_include_directories(test_metalbear_oauth_passkey
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_oauth_passkey COMMAND test_metalbear_oauth_passkey)
+
   add_executable(test_metalbear_oauth_multi_device_session
                  test/test_oauth_multi_device_session.c)
   target_link_libraries(test_metalbear_oauth_multi_device_session
