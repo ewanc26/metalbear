@@ -2,6 +2,7 @@
 	import { auth } from '$lib/stores/auth';
 	import { listDevices, revokeDevice } from '$lib/pds';
 	import type { DeviceInfo } from '$lib/pds';
+	import { formatDate } from '$lib/format';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
@@ -46,11 +47,7 @@
 	}
 
 	function formatExpiry(expiresAt: number): string {
-		return new Date(expiresAt * 1000).toLocaleDateString(undefined, {
-			year: 'numeric',
-			month: 'short',
-			day: 'numeric'
-		});
+		return formatDate(expiresAt);
 	}
 </script>
 
