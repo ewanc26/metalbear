@@ -409,6 +409,55 @@ account's log, public reads gated on an unrelated account's active flag, and
 `/.well-known/atproto-did` answering every unknown hostname with one account's
 identity — a wrong answer rather than a missing one.
 
+## Passkey (WebAuthn) login
+
+An alternative to password login, layered on the same device-session cookie
+`POST /oauth/signin` sets — passkey authentication ends by calling the same
+`finish_device_signin` helper, so everything downstream of "the browser has a
+device session" (`/oauth/authorize`'s approval step, account-management
+pages) treats the two identically. Routes (`src/oauth/oauth_routes.c`,
+registered in `metalbear_oauth_routes_register`):
+
+- `POST /oauth/passkey/register/options` / `.../register/verify` — requires
+  an existing device session for the target `did` (registering a passkey is
+  an account-management action, reached from `/account/security`, never
+  pre-login).
+- `POST /oauth/passkey/authenticate/options` / `.../authenticate/verify` —
+  unauthenticated, reached from the login page. `.../options` never
+  distinguishes "unknown account" from "no passkeys registered" in its
+  response (both look like `{"available": false}`), so it cannot be used to
+  enumerate handles.
+- `GET /oauth/passkey/list` / `POST /oauth/passkey/remove` — device-session
+  gated, scoped so one account can never list or remove another's passkey.
+
+The CBOR (attestationObject/authenticatorData/COSE_Key) and ceremony
+verification (challenge/origin/RP-ID-hash checks, ES256 signature
+verification, sign-counter clone detection) live in `src/oauth/webauthn.c` —
+a purpose-built parser, not wolfram's `wf_cbor_parse`: that decoder enforces
+DAG-CBOR's canonical map-key ordering, a real invariant for repo commits
+this SDK produces itself, but not one the WebAuthn spec places on a
+browser's `attestationObject` encoding, so reusing it risked silently
+failing registration on browsers that don't happen to match. Storage
+(passkeys, single-use challenges with a 120s TTL) is in `src/oauth/oauth.c`
+alongside `device_session`, in the same `metalbear_oauth_store`/SQLite file.
+
+Attestation is always requested as `"none"` (no attestation statement is
+ever verified) — the security property comes from the device-session cookie
+already proving password ownership at registration time, not from trusting
+the authenticator's make/model. Signature verification uses
+`wf_crypto_p256_verify_allow_malleable`, not `wf_crypto_p256_verify`: a
+WebAuthn authenticator's signature is not guaranteed low-S normalized the
+way this codebase's own P-256 signing is, and requiring it would reject
+otherwise-valid assertions from real hardware.
+
+Not implemented: usernameless/discoverable login (the login page always
+collects an identifier first, matching the password flow) and a JWT session
+bridge — passkey login only ever establishes a device session, so it can
+complete an OAuth consent redirect but cannot sign a user into the plain
+account pages the way password login's `com.atproto.server.createSession`
+does (see `frontend/src/routes/login/+page.svelte`'s
+`handlePasskeySignIn` comment).
+
 ## Identity: the signing key is the interop contract
 
 The single defect that makes a repo unfederatable is a DID document that
