@@ -438,7 +438,8 @@ if(METALBEAR_BUILD_TESTS)
            COMMAND test_metalbear_repo_store_resolver)
 
   add_executable(test_metalbear_blob_store test/test_blob_store.c)
-  target_link_libraries(test_metalbear_blob_store PRIVATE metalbear_core)
+  target_link_libraries(test_metalbear_blob_store
+                        PRIVATE metalbear_core Threads::Threads)
   target_include_directories(test_metalbear_blob_store
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_blob_store COMMAND test_metalbear_blob_store)
