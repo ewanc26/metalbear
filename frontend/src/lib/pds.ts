@@ -487,7 +487,15 @@ export async function downloadRepo(did: string): Promise<Blob> {
 	const url = new URL('/xrpc/com.atproto.sync.getRepo', window.location.origin);
 	url.searchParams.set('did', did);
 	const res = await fetch(url, { headers: { accept: 'application/vnd.ipld.car' } });
-	if (!res.ok) throw new Error(`getRepo: ${res.status}`);
+	if (!res.ok) {
+		const body = await res.json().catch(() => null);
+		if (body?.error === 'RepoNotFound') {
+			throw new Error(
+				"Your repository is empty — there's nothing to export yet. Create a post or update your profile first."
+			);
+		}
+		throw new Error(body?.message ?? `getRepo: ${res.status}`);
+	}
 	return res.blob();
 }
 
