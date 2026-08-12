@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { auth } from '$lib/stores/auth';
-	import { getSession, refreshSession } from '$lib/pds';
+	import { getSession, refreshSession, downloadRepo } from '$lib/pds';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
@@ -8,6 +8,8 @@
 	let current = $state<import('$lib/pds').SessionResponse | null>(null);
 	let error = $state('');
 	let loading = $state(true);
+	let downloadPending = $state(false);
+	let downloadError = $state('');
 
 	auth.subscribe((s) => (session = s));
 
@@ -43,6 +45,27 @@
 			current = updated;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to refresh session';
+		}
+	}
+
+	async function handleDownload() {
+		if (!current) return;
+		downloadError = '';
+		downloadPending = true;
+		try {
+			const blob = await downloadRepo(current.did);
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = `${current.handle}-${new Date().toISOString().slice(0, 10)}.car`;
+			document.body.appendChild(link);
+			link.click();
+			link.remove();
+			URL.revokeObjectURL(url);
+		} catch (err) {
+			downloadError = err instanceof Error ? err.message : 'Failed to download your data';
+		} finally {
+			downloadPending = false;
 		}
 	}
 </script>
@@ -107,6 +130,30 @@
 		>
 			Refresh tokens
 		</button>
+
+		<section class="mt-8 rounded-lg border border-slate-800 bg-slate-900/30 p-6">
+			<h2 class="mb-1 text-sm font-semibold tracking-widest text-slate-500 uppercase">
+				Your data
+			</h2>
+			<p class="mb-4 text-sm text-slate-400">
+				Download a full export of your repository as a CAR file — your posts, profile, and every
+				other record you own, signed and portable to any other AT Protocol server.
+			</p>
+			<button
+				onclick={handleDownload}
+				disabled={downloadPending}
+				class="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+			>
+				{downloadPending ? 'Preparing download…' : 'Download your data'}
+			</button>
+			{#if downloadError}
+				<p
+					class="mt-4 rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-2.5 text-sm text-red-300"
+				>
+					{downloadError}
+				</p>
+			{/if}
+		</section>
 
 		<section class="mt-8 rounded-lg border border-slate-800 bg-slate-900/30 p-6">
 			<h2 class="mb-4 text-sm font-semibold tracking-widest text-slate-500 uppercase">Manage</h2>
