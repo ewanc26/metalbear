@@ -25,6 +25,7 @@
 
 #include "metalbear/server.h"
 #include "wolfram/oauth.h"
+#include "wolfram/oauth/dpop.h"
 #include "wolfram/xrpc.h"
 
 #include <cJSON.h>
@@ -96,11 +97,12 @@ static wf_status oauth_post(wf_xrpc_client *client, const char *base,
 
 static wf_status oauth_form_post(wf_xrpc_client *client, const char *base,
                                  const char *path, const char *body,
-                                 wf_response *out) {
+                                 const wf_http_header *extra,
+                                 size_t extra_count, wf_response *out) {
     char url[256];
     snprintf(url, sizeof(url), "%s%s", base, path);
     return wf_http_post(client, url, "application/x-www-form-urlencoded", body,
-                        NULL, 0, out);
+                        extra, extra_count, out);
 }
 
 static char *extract_cookie_pair(const char *set_cookie) {
@@ -130,7 +132,12 @@ static char *sign_in_device(wf_xrpc_client *client, const char *base,
 }
 
 /* Full PAR -> authorize -> code exchange, seeding a real oauth_refresh row
- * (a "connected app") for `handle`'s account under `client_id`. */
+ * (a "connected app") for `handle`'s account under `client_id`. The token
+ * endpoint now requires and cryptographically verifies a real DPoP proof
+ * for every grant (atproto's OAuth profile mandates DPoP with no
+ * exemptions), so this generates a real key and uses its real RFC 7638
+ * thumbprint at both PAR and token exchange -- a placeholder jkt at PAR
+ * would just make the later, verified exchange fail on mismatch. */
 static bool seed_grant(wf_xrpc_client *client, const char *base,
                        const char *handle, const char *device_cookie,
                        const char *client_id, const char *seed) {
@@ -140,6 +147,14 @@ static bool seed_grant(wf_xrpc_client *client, const char *base,
     wf_oauth_pkce pkce = {0};
     if (wf_oauth_pkce_from_verifier(verifier, &pkce) != WF_OK) return false;
 
+    wf_oauth_dpop_key *dpop_key = NULL;
+    char real_jkt[44] = {0};
+    if (wf_oauth_dpop_key_generate(&dpop_key) != WF_OK ||
+        wf_oauth_dpop_key_thumbprint(dpop_key, real_jkt) != WF_OK) {
+        wf_oauth_dpop_key_free(dpop_key);
+        return false;
+    }
+
     char *enc_cid = curl_easy_escape(NULL, client_id, 0);
     char *enc_redir =
         curl_easy_escape(NULL, "https://client.example/callback", 0);
@@ -147,15 +162,16 @@ static bool seed_grant(wf_xrpc_client *client, const char *base,
     snprintf(par_body, sizeof(par_body),
              "client_id=%s&redirect_uri=%s&scope=atproto&state=xyz&"
              "code_challenge=%s&"
-             "dpop_jkt=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-             enc_cid, enc_redir, pkce.challenge);
+             "dpop_jkt=%s",
+             enc_cid, enc_redir, pkce.challenge, real_jkt);
     wf_response response = {0};
-    if (oauth_form_post(client, base, "/oauth/par", par_body, &response) !=
-            WF_OK ||
+    if (oauth_form_post(client, base, "/oauth/par", par_body, NULL, 0,
+                        &response) != WF_OK ||
         response.status != 201) {
         wf_response_free(&response);
         curl_free(enc_cid);
         curl_free(enc_redir);
+        wf_oauth_dpop_key_free(dpop_key);
         return false;
     }
     cJSON *par_json = json_response(&response);
@@ -168,6 +184,7 @@ static bool seed_grant(wf_xrpc_client *client, const char *base,
     if (!request_uri[0]) {
         curl_free(enc_cid);
         curl_free(enc_redir);
+        wf_oauth_dpop_key_free(dpop_key);
         return false;
     }
 
@@ -200,6 +217,7 @@ static bool seed_grant(wf_xrpc_client *client, const char *base,
     if (!code[0]) {
         curl_free(enc_cid);
         curl_free(enc_redir);
+        wf_oauth_dpop_key_free(dpop_key);
         return false;
     }
 
@@ -207,13 +225,30 @@ static bool seed_grant(wf_xrpc_client *client, const char *base,
     snprintf(token_body, sizeof(token_body),
              "grant_type=authorization_code&code=%s&client_id=%s&"
              "redirect_uri=%s&code_verifier=%s&"
-             "dpop_jkt=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-             code, enc_cid, enc_redir, pkce.verifier);
+             "dpop_jkt=%s",
+             code, enc_cid, enc_redir, pkce.verifier, real_jkt);
     curl_free(enc_cid);
     curl_free(enc_redir);
-    bool ok = oauth_form_post(client, base, "/oauth/token", token_body,
-                              &response) == WF_OK &&
-              response.status == 200;
+
+    /* did:web:pds.example.com (this test's service_did) derives a public_url
+     * of https://pds.example.com (no port) -- see
+     * public_url_from_service_did in server.c -- which is what the token
+     * endpoint validates the DPoP proof's htu against, not `base`
+     * (http://127.0.0.1:PORT), the literal socket this test connects to. */
+    char *dpop_proof = NULL;
+    wf_oauth_dpop_proof_options opts = {
+        "POST", "https://pds.example.com/oauth/token", NULL, NULL, NULL, 0};
+    bool ok =
+        wf_oauth_dpop_proof_create(dpop_key, &opts, &dpop_proof) == WF_OK &&
+        dpop_proof != NULL;
+    if (ok) {
+        wf_http_header dpop_hdr = {"DPoP", dpop_proof};
+        ok = oauth_form_post(client, base, "/oauth/token", token_body,
+                             &dpop_hdr, 1, &response) == WF_OK &&
+             response.status == 200;
+    }
+    free(dpop_proof);
+    wf_oauth_dpop_key_free(dpop_key);
     if (ok) {
         cJSON *tj = json_response(&response);
         ok = cJSON_GetObjectItemCaseSensitive(tj, "refresh_token") != NULL;

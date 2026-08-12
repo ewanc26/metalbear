@@ -292,7 +292,13 @@ static bool valid_request(const metalbear_oauth_request *request) {
         strlen(request->code_challenge) != 43)
         return false;
 
-    if (request->dpop_jkt && strlen(request->dpop_jkt) != 43) return false;
+    /* atproto's OAuth profile mandates DPoP for every client with no
+     * exemptions (atproto.com/specs/oauth) -- dpop_jkt must always be
+     * present. Failing fast here, rather than only at token exchange
+     * (which independently requires and verifies it too -- see
+     * verified_token_endpoint_jkt in oauth_routes.c), gives a caller an
+     * honest error at the point the omission actually happened. */
+    if (!request->dpop_jkt || strlen(request->dpop_jkt) != 43) return false;
 
     /* The "atproto" scope token is required for all OAuth flows.
      * Check for it as a space-separated token, not a substring. */
@@ -643,7 +649,7 @@ wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
                                         const char *dpop_jkt,
                                         metalbear_oauth_grant *out) {
     if (!store || !code || !client_id || !redirect_uri || !code_verifier ||
-        !out)
+        !dpop_jkt || !dpop_jkt[0] || !out)
         return WF_ERR_INVALID_ARG;
     unsigned char hash[32];
     token_hash(code, hash);
@@ -680,7 +686,11 @@ wf_status metalbear_oauth_exchange_code(metalbear_oauth_store *store,
         else if (strcmp(stored_client, client_id) ||
                  strcmp(stored_redirect, redirect_uri) ||
                  strcmp(challenge, pkce.challenge) ||
-                 (dpop_jkt && (!jkt || strcmp(jkt, dpop_jkt) != 0)))
+                 /* dpop_jkt is always non-NULL here (checked above); a
+                  * NULL/mismatched stored jkt means either PAR never
+                  * established one or the client is presenting a
+                  * different key now -- reject either way. */
+                 !jkt || strcmp(jkt, dpop_jkt) != 0)
             status = WF_ERR_PERMISSION;
     }
     sqlite3_finalize(stmt);
@@ -713,7 +723,8 @@ wf_status metalbear_oauth_refresh(metalbear_oauth_store *store,
                                   const char *refresh_token,
                                   const char *client_id, const char *dpop_jkt,
                                   metalbear_oauth_grant *out) {
-    if (!store || !refresh_token || !client_id || !out)
+    if (!store || !refresh_token || !client_id || !dpop_jkt || !dpop_jkt[0] ||
+        !out)
         return WF_ERR_INVALID_ARG;
     unsigned char hash[32];
     token_hash(refresh_token, hash);
@@ -741,8 +752,8 @@ wf_status metalbear_oauth_refresh(metalbear_oauth_store *store,
         subject = column_copy(stmt, 3);
         if (!stored_client || !scope || !subject)
             status = WF_ERR_ALLOC;
-        else if (strcmp(stored_client, client_id) ||
-                 (dpop_jkt && (!jkt || strcmp(jkt, dpop_jkt) != 0)))
+        else if (strcmp(stored_client, client_id) || !jkt ||
+                 strcmp(jkt, dpop_jkt) != 0)
             status = WF_ERR_PERMISSION;
     }
     sqlite3_finalize(stmt);

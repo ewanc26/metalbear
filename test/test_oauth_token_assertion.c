@@ -20,6 +20,7 @@
 
 #include "metalbear/oauth/oauth.h"
 #include "metalbear/oauth/oauth_routes.h"
+#include "wolfram/oauth/dpop.h"
 #include "wolfram/xrpc_server.h"
 
 #include "test.h"
@@ -255,8 +256,8 @@ static enum MHD_Result metadata_handler(void *cls, struct MHD_Connection *conn,
 /* ------------------------------------------------------------------ */
 
 static int raw_post(const char *host, uint16_t port, const char *path,
-                    const char *content_type, const char *body,
-                    unsigned char **out_body, size_t *out_len,
+                    const char *content_type, const char *dpop_header,
+                    const char *body, unsigned char **out_body, size_t *out_len,
                     long *out_status) {
     *out_body = NULL;
     *out_len = 0;
@@ -277,12 +278,27 @@ static int raw_post(const char *host, uint16_t port, const char *path,
         return -1;
     }
 
-    char head[512];
-    int hh = snprintf(head, sizeof(head),
+    char head[2048];
+    int hh;
+    if (dpop_header) {
+        hh = snprintf(head, sizeof(head),
+                      "POST %s HTTP/1.1\r\nHost: %s:%u\r\n"
+                      "Content-Type: %s\r\nContent-Length: %zu\r\n"
+                      "DPoP: %s\r\n"
+                      "Connection: close\r\n\r\n",
+                      path, host, (unsigned)port, content_type, strlen(body),
+                      dpop_header);
+    } else {
+        hh = snprintf(head, sizeof(head),
                       "POST %s HTTP/1.1\r\nHost: %s:%u\r\n"
                       "Content-Type: %s\r\nContent-Length: %zu\r\n"
                       "Connection: close\r\n\r\n",
                       path, host, (unsigned)port, content_type, strlen(body));
+    }
+    if (hh < 0 || (size_t)hh >= sizeof(head)) {
+        close(sock);
+        return -1;
+    }
     if (send(sock, head, (size_t)hh, 0) < 0 ||
         send(sock, body, strlen(body), 0) < 0) {
         close(sock);
@@ -371,9 +387,12 @@ static int has_bytes(const void *hay, size_t hay_len, const char *needle) {
 
 /* Seed a valid refresh token through the store. Refresh tokens rotate on use,
  * so each happy-path case needs its own; `seed` differentiates the PKCE
- * verifier. Returns a caller-owned refresh token. */
+ * verifier. `dpop_jkt` must be the real thumbprint of the key the caller
+ * will later present a genuine DPoP proof for -- the token endpoint now
+ * requires and verifies one, so a fake jkt would only fail exchange later.
+ * Returns a caller-owned refresh token. */
 static char *seed_refresh(metalbear_oauth_store *store, const char *client_id,
-                          const char *seed) {
+                          const char *seed, const char *dpop_jkt) {
     char verifier[128];
     snprintf(verifier, sizeof(verifier),
              "v3ry-long-test-verifier-with-enough-entropy-%s", seed);
@@ -385,7 +404,7 @@ static char *seed_refresh(metalbear_oauth_store *store, const char *client_id,
         .scope = "atproto",
         .state = "state-123",
         .code_challenge = pkce.challenge,
-        .dpop_jkt = CLIENT_JKT,
+        .dpop_jkt = dpop_jkt,
     };
     char *request_uri = NULL, *code = NULL, *redirect_uri = NULL, *state = NULL;
     int64_t par_exp = 0;
@@ -428,6 +447,22 @@ static int run(void) {
     char *jwk = client_jwk_json(client_ec, CLIENT_KID);
     WF_CHECK(jwk != NULL);
 
+    /* Real DPoP proof-of-possession key, separate from the private_key_jwt
+     * client-assertion key above: RFC 7523 client authentication and RFC
+     * 9449 DPoP sender-constraint are independent mechanisms with
+     * independent keys in real clients. The token endpoint now requires
+     * and cryptographically verifies an actual DPoP proof for every grant
+     * (atproto's OAuth profile mandates DPoP with no exemptions), so the
+     * happy-path cases below need a real key and a real thumbprint, not
+     * the placeholder CLIENT_JKT string the negative-path cases still use
+     * (they fail on client authentication before DPoP is ever checked, so
+     * a fake jkt there is harmless). */
+    wf_oauth_dpop_key *dpop_key = NULL;
+    WF_CHECK(wf_oauth_dpop_key_generate(&dpop_key) == WF_OK);
+    char real_jkt[44] = {0};
+    WF_CHECK(dpop_key &&
+             wf_oauth_dpop_key_thumbprint(dpop_key, real_jkt) == WF_OK);
+
     /* Client metadata stub. */
     struct MHD_Daemon *stub_daemon =
         MHD_start_daemon(MHD_USE_INTERNAL_POLLING_THREAD, 0, NULL, NULL,
@@ -455,6 +490,7 @@ static int run(void) {
     if (!store) {
         if (client_ec) EC_KEY_free(client_ec);
         if (other_ec) EC_KEY_free(other_ec);
+        wf_oauth_dpop_key_free(dpop_key);
         free(jwk);
         MHD_stop_daemon(stub_daemon);
         unlink(path);
@@ -467,6 +503,7 @@ static int run(void) {
         metalbear_oauth_store_free(store);
         if (client_ec) EC_KEY_free(client_ec);
         if (other_ec) EC_KEY_free(other_ec);
+        wf_oauth_dpop_key_free(dpop_key);
         free(jwk);
         MHD_stop_daemon(stub_daemon);
         unlink(path);
@@ -479,7 +516,7 @@ static int run(void) {
 
     /* Seed a valid refresh token through the same store the server serves. */
     char *enc_cid = urlencode(client_id);
-    char *refresh_token = seed_refresh(store, client_id, "assert-1");
+    char *refresh_token = seed_refresh(store, client_id, "assert-1", real_jkt);
     WF_CHECK(refresh_token != NULL);
     char *enc_rt = urlencode(refresh_token);
 
@@ -487,13 +524,21 @@ static int run(void) {
     unsigned char *body = NULL;
     size_t len = 0;
     long status = 0;
-    char *assertion = NULL, *form = NULL;
+    char *assertion = NULL, *form = NULL, *dpop_hdr = NULL;
+    char token_htu[300];
+    snprintf(token_htu, sizeof(token_htu), "%s/oauth/token", ISSUER);
 
-    /* Happy path: assertion signed with the published key. */
+    /* Happy path: assertion signed with the published key, plus a real
+     * DPoP proof matching real_jkt -- the token endpoint now requires and
+     * verifies one for every grant. */
     assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
                                ISSUER, "jti-ok-1", now, now + 60, NULL);
     WF_CHECK(assertion != NULL);
     {
+        wf_oauth_dpop_proof_options opts = {"POST", token_htu,       NULL,
+                                            NULL,   "jti-dpop-ok-1", now};
+        WF_CHECK(wf_oauth_dpop_proof_create(dpop_key, &opts, &dpop_hdr) ==
+                 WF_OK);
         char *enc_ass = urlencode(assertion);
         size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) + 200;
         form = malloc(fl);
@@ -502,32 +547,39 @@ static int run(void) {
                  "&dpop_jkt=%s"
                  "&client_assertion_type=urn:ietf:params:oauth:client-"
                  "assertion-type:jwt-bearer&client_assertion=%s",
-                 enc_rt, enc_cid, CLIENT_JKT, enc_ass);
+                 enc_rt, enc_cid, real_jkt, enc_ass);
         free(enc_ass);
     }
     WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                      "application/x-www-form-urlencoded", form, &body, &len,
-                      &status) == 0);
+                      "application/x-www-form-urlencoded", dpop_hdr, form,
+                      &body, &len, &status) == 0);
     WF_CHECK(status == 200);
     WF_CHECK(body && has_bytes(body, len, "\"access_token\"") != 0);
     free(body);
     body = NULL;
     free(form);
     form = NULL;
+    free(dpop_hdr);
+    dpop_hdr = NULL;
     free(assertion);
     assertion = NULL;
 
     /* Happy path via jwks_uri instead of inline jwks. Refresh tokens
-     * rotate on use, so this case gets a freshly seeded one. */
+     * rotate on use, so this case gets a freshly seeded one -- and a fresh
+     * DPoP proof, since each token request needs its own. */
     stub.auth_method = METADATA_JWKS_URI;
     free(refresh_token);
     free(enc_rt);
-    refresh_token = seed_refresh(store, client_id, "assert-2");
+    refresh_token = seed_refresh(store, client_id, "assert-2", real_jkt);
     WF_CHECK(refresh_token != NULL);
     enc_rt = urlencode(refresh_token);
     assertion = make_assertion(client_ec, CLIENT_KID, client_id, client_id,
                                ISSUER, "jti-ok-2", now, now + 60, NULL);
     {
+        wf_oauth_dpop_proof_options opts = {"POST", token_htu,       NULL,
+                                            NULL,   "jti-dpop-ok-2", now};
+        WF_CHECK(wf_oauth_dpop_proof_create(dpop_key, &opts, &dpop_hdr) ==
+                 WF_OK);
         char *enc_ass = urlencode(assertion);
         size_t fl = strlen(enc_cid) + strlen(enc_rt) + strlen(enc_ass) + 200;
         form = malloc(fl);
@@ -536,17 +588,19 @@ static int run(void) {
                  "&dpop_jkt=%s"
                  "&client_assertion_type=urn:ietf:params:oauth:client-"
                  "assertion-type:jwt-bearer&client_assertion=%s",
-                 enc_rt, enc_cid, CLIENT_JKT, enc_ass);
+                 enc_rt, enc_cid, real_jkt, enc_ass);
         free(enc_ass);
     }
     WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                      "application/x-www-form-urlencoded", form, &body, &len,
-                      &status) == 0);
+                      "application/x-www-form-urlencoded", dpop_hdr, form,
+                      &body, &len, &status) == 0);
     WF_CHECK(status == 200);
     free(body);
     body = NULL;
     free(form);
     form = NULL;
+    free(dpop_hdr);
+    dpop_hdr = NULL;
     free(assertion);
     assertion = NULL;
 
@@ -567,8 +621,8 @@ static int run(void) {
         free(enc_ass);
     }
     WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                      "application/x-www-form-urlencoded", form, &body, &len,
-                      &status) == 0);
+                      "application/x-www-form-urlencoded", dpop_hdr, form,
+                      &body, &len, &status) == 0);
     WF_CHECK(status == 400);
     WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
@@ -595,8 +649,8 @@ static int run(void) {
         free(enc_ass);
     }
     WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                      "application/x-www-form-urlencoded", form, &body, &len,
-                      &status) == 0);
+                      "application/x-www-form-urlencoded", dpop_hdr, form,
+                      &body, &len, &status) == 0);
     WF_CHECK(status == 400);
     WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
@@ -624,8 +678,8 @@ static int run(void) {
         free(enc_ass);
     }
     WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                      "application/x-www-form-urlencoded", form, &body, &len,
-                      &status) == 0);
+                      "application/x-www-form-urlencoded", dpop_hdr, form,
+                      &body, &len, &status) == 0);
     WF_CHECK(status == 400);
     WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
@@ -652,8 +706,8 @@ static int run(void) {
         free(enc_ass);
     }
     WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                      "application/x-www-form-urlencoded", form, &body, &len,
-                      &status) == 0);
+                      "application/x-www-form-urlencoded", dpop_hdr, form,
+                      &body, &len, &status) == 0);
     WF_CHECK(status == 400);
     WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
@@ -678,8 +732,8 @@ static int run(void) {
         free(enc_ass);
     }
     WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                      "application/x-www-form-urlencoded", form, &body, &len,
-                      &status) == 0);
+                      "application/x-www-form-urlencoded", dpop_hdr, form,
+                      &body, &len, &status) == 0);
     WF_CHECK(status == 400);
     WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
@@ -708,8 +762,8 @@ static int run(void) {
         free(enc_ass);
     }
     WF_CHECK(raw_post("127.0.0.1", port, "/oauth/token",
-                      "application/x-www-form-urlencoded", form, &body, &len,
-                      &status) == 0);
+                      "application/x-www-form-urlencoded", dpop_hdr, form,
+                      &body, &len, &status) == 0);
     WF_CHECK(status == 400);
     WF_CHECK(body && has_bytes(body, len, "invalid_client") != 0);
     free(body);
@@ -728,6 +782,7 @@ static int run(void) {
     MHD_stop_daemon(stub_daemon);
     EC_KEY_free(client_ec);
     EC_KEY_free(other_ec);
+    wf_oauth_dpop_key_free(dpop_key);
     free(jwk);
     unlink(path);
     char sidecar[256];
