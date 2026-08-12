@@ -129,6 +129,50 @@ static int run_create_account_limit(wf_xrpc_client *client) {
     return failures == failures_before ? 0 : 1;
 }
 
+/* passkey authenticate/verify's route-specific budget is 30/300s, IP-keyed
+ * -- unlike createAccount/createSession this is a plain HTTP route
+ * (registered via wf_xrpc_server_register_http_route, not an XRPC
+ * procedure), so it's driven with wf_http_post directly rather than
+ * wf_xrpc_procedure. `{}` is a well-formed JSON object missing the
+ * required "id" field, so it reaches the handler's own 400 before the
+ * limiter would ever need real credential data to fire. */
+static int run_passkey_authenticate_limit(wf_xrpc_client *client,
+                                          const char *base) {
+    int failures_before = failures;
+    wf_response response = {0};
+    bool reached_handler = false;
+    wf_status s = WF_OK;
+    int attempts = 0;
+    char url[256];
+    snprintf(url, sizeof(url), "%s/oauth/passkey/authenticate/verify", base);
+
+    for (; attempts < 400; attempts++) {
+        wf_response_free(&response);
+        s = wf_http_post(client, url, "application/json", "{}", NULL, 0,
+                         &response);
+        if (s == WF_ERR_HTTP && response.status == 429) break;
+        if (s != WF_OK && s != WF_ERR_HTTP) {
+            fprintf(stderr,
+                    "FAIL passkey authenticate attempt %d: transport error "
+                    "%d\n",
+                    attempts, (int)s);
+            failures++;
+        }
+        if (s == WF_ERR_HTTP && response.status == 400) reached_handler = true;
+    }
+    CHECK(s == WF_ERR_HTTP && response.status == 429);
+    CHECK(reached_handler);
+    cJSON *body = cJSON_ParseWithLength(response.body ? response.body : "",
+                                        response.body_len);
+    cJSON *err = body ? cJSON_GetObjectItemCaseSensitive(body, "error") : NULL;
+    CHECK(cJSON_IsString(err) &&
+          strcmp(err->valuestring, "RateLimitExceeded") == 0);
+    cJSON_Delete(body);
+    wf_response_free(&response);
+
+    return failures == failures_before ? 0 : 1;
+}
+
 /* createSession's tighter tier is 30/300s, keyed by "<identifier>-<ip>".
  * Wrong-password attempts for one identifier must not affect a different
  * identifier from the same (loopback) IP. */
@@ -424,6 +468,13 @@ int main(void) {
             fprintf(stderr, "createAccount rate limit test failed\n");
         } else {
             printf("PASS: createAccount rate limit (100/300s, IP-keyed)\n");
+        }
+
+        if (run_passkey_authenticate_limit(client, base) != 0) {
+            fprintf(stderr, "passkey authenticate rate limit test failed\n");
+        } else {
+            printf("PASS: passkey authenticate rate limit (30/300s, "
+                   "IP-keyed)\n");
         }
 
         wf_xrpc_client_free(client);
