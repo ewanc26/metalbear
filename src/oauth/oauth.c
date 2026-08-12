@@ -57,7 +57,8 @@ static wf_status token_hash(const char *token, unsigned char out[32]) {
 static void prune(metalbear_oauth_store *store, int64_t now) {
     sqlite3_stmt *stmt = NULL;
     static const char *const tables[] = {"oauth_par", "oauth_code",
-                                         "oauth_refresh", "device_session"};
+                                         "oauth_refresh", "device_session",
+                                         "passkey_challenge"};
     for (size_t i = 0; i < sizeof(tables) / sizeof(tables[0]); i++) {
         char sql[96];
         int length = snprintf(sql, sizeof(sql),
@@ -225,6 +226,16 @@ wf_status metalbear_oauth_store_open(const char *path, const char *issuer,
                            "CREATE TABLE IF NOT EXISTS device_session("
                            "token_hash BLOB PRIMARY KEY,subject TEXT NOT NULL,"
                            "expires_at INTEGER NOT NULL);"
+                           "CREATE TABLE IF NOT EXISTS passkey("
+                           "credential_id BLOB PRIMARY KEY,subject TEXT NOT "
+                           "NULL,public_key_x BLOB NOT NULL,public_key_y BLOB "
+                           "NOT NULL,sign_count INTEGER NOT NULL DEFAULT 0,"
+                           "name TEXT,created_at INTEGER NOT NULL,"
+                           "last_used_at INTEGER);"
+                           "CREATE TABLE IF NOT EXISTS passkey_challenge("
+                           "challenge TEXT PRIMARY KEY,ceremony INTEGER NOT "
+                           "NULL,subject TEXT NOT NULL,"
+                           "expires_at INTEGER NOT NULL);"
                            "CREATE INDEX IF NOT EXISTS oauth_par_expiry ON "
                            "oauth_par(expires_at);"
                            "CREATE INDEX IF NOT EXISTS oauth_code_expiry ON "
@@ -232,7 +243,12 @@ wf_status metalbear_oauth_store_open(const char *path, const char *issuer,
                            "CREATE INDEX IF NOT EXISTS oauth_refresh_expiry ON "
                            "oauth_refresh(expires_at);"
                            "CREATE INDEX IF NOT EXISTS device_session_expiry "
-                           "ON device_session(expires_at);") != WF_OK ||
+                           "ON device_session(expires_at);"
+                           "CREATE INDEX IF NOT EXISTS passkey_subject ON "
+                           "passkey(subject);"
+                           "CREATE INDEX IF NOT EXISTS "
+                           "passkey_challenge_expiry ON "
+                           "passkey_challenge(expires_at);") != WF_OK ||
         load_or_create_key(store) != WF_OK ||
         wf_oauth_trusted_keys_new(&store->trusted_keys) != WF_OK ||
         wf_oauth_dpop_replay_cache_new(&store->replay) != WF_OK)
@@ -1087,6 +1103,324 @@ wf_status metalbear_oauth_grants_revoke(metalbear_oauth_store *store,
         sqlite3_bind_text(stmt, 1, subject, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 2, client_id, -1, SQLITE_TRANSIENT);
         status = sqlite3_step(stmt) == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+/* ── Passkeys (WebAuthn) ────────────────────────────────────────────── */
+
+wf_status metalbear_oauth_passkey_challenge_create(
+    metalbear_oauth_store *store, metalbear_webauthn_ceremony ceremony,
+    const char *subject, char **out_challenge) {
+    if (!store || !subject || !subject[0] || !out_challenge)
+        return WF_ERR_INVALID_ARG;
+    *out_challenge = NULL;
+    char *challenge = NULL;
+    wf_status status = random_value(32, &challenge);
+    if (status != WF_OK) return status;
+    int64_t expires_at =
+        (int64_t)time(NULL) + METALBEAR_WEBAUTHN_CHALLENGE_LIFETIME_SECONDS;
+
+    pthread_mutex_lock(&store->mutex);
+    prune(store, (int64_t)time(NULL));
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(
+            store->db,
+            "INSERT INTO passkey_challenge(challenge,ceremony,subject,"
+            "expires_at) VALUES(?,?,?,?);",
+            -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, challenge, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 2, (int)ceremony);
+        sqlite3_bind_text(stmt, 3, subject, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 4, expires_at);
+        status = sqlite3_step(stmt) == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
+    } else {
+        status = WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+
+    if (status != WF_OK) {
+        free(challenge);
+        return status;
+    }
+    *out_challenge = challenge;
+    return WF_OK;
+}
+
+wf_status metalbear_oauth_passkey_challenge_consume(
+    metalbear_oauth_store *store, const char *challenge,
+    metalbear_webauthn_ceremony ceremony, char *out, size_t out_len) {
+    if (!store || !out || out_len == 0) return WF_ERR_INVALID_ARG;
+    out[0] = '\0';
+    if (!challenge || !challenge[0]) return WF_ERR_NOT_FOUND;
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_NOT_FOUND;
+    if (sqlite3_prepare_v2(store->db,
+                           "SELECT subject FROM passkey_challenge WHERE "
+                           "challenge=? AND ceremony=? AND expires_at>?;",
+                           -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, challenge, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 2, (int)ceremony);
+        sqlite3_bind_int64(stmt, 3, (int64_t)time(NULL));
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *subject = (const char *)sqlite3_column_text(stmt, 0);
+            if (subject) {
+                snprintf(out, out_len, "%s", subject);
+                status = WF_OK;
+            }
+        }
+    }
+    sqlite3_finalize(stmt);
+    if (status == WF_OK) {
+        /* Single-use: delete now. No TOCTOU risk from splitting SELECT and
+         * DELETE across statements -- store->mutex is held for this whole
+         * call, so no other thread can observe the row between them. */
+        sqlite3_stmt *del = NULL;
+        if (sqlite3_prepare_v2(
+                store->db, "DELETE FROM passkey_challenge WHERE challenge=?;",
+                -1, &del, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(del, 1, challenge, -1, SQLITE_TRANSIENT);
+            sqlite3_step(del);
+        }
+        sqlite3_finalize(del);
+    }
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status metalbear_oauth_passkey_add(metalbear_oauth_store *store,
+                                      const char *subject,
+                                      const unsigned char *credential_id,
+                                      size_t credential_id_len,
+                                      const unsigned char public_key_x[32],
+                                      const unsigned char public_key_y[32],
+                                      const char *name) {
+    if (!store || !subject || !subject[0] || !credential_id ||
+        credential_id_len == 0 || !public_key_x || !public_key_y)
+        return WF_ERR_INVALID_ARG;
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(
+            store->db,
+            "INSERT INTO passkey(credential_id,subject,public_key_x,"
+            "public_key_y,sign_count,name,created_at) "
+            "VALUES(?,?,?,?,0,?,?);",
+            -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_blob(stmt, 1, credential_id, (int)credential_id_len,
+                          SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, subject, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_blob(stmt, 3, public_key_x, 32, SQLITE_TRANSIENT);
+        sqlite3_bind_blob(stmt, 4, public_key_y, 32, SQLITE_TRANSIENT);
+        if (name && name[0])
+            sqlite3_bind_text(stmt, 5, name, -1, SQLITE_TRANSIENT);
+        else
+            sqlite3_bind_null(stmt, 5);
+        sqlite3_bind_int64(stmt, 6, (int64_t)time(NULL));
+        int result = sqlite3_step(stmt);
+        if (result == SQLITE_DONE)
+            status = WF_OK;
+        else if (result == SQLITE_CONSTRAINT)
+            status = WF_ERR_DUPLICATE;
+        else
+            status = WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status metalbear_oauth_passkey_lookup(
+    metalbear_oauth_store *store, const unsigned char *credential_id,
+    size_t credential_id_len, char *out_subject, size_t out_subject_len,
+    unsigned char public_key_x[32], unsigned char public_key_y[32],
+    uint32_t *out_sign_count) {
+    if (!store || !credential_id || credential_id_len == 0 || !out_subject ||
+        out_subject_len == 0 || !public_key_x || !public_key_y ||
+        !out_sign_count)
+        return WF_ERR_INVALID_ARG;
+    out_subject[0] = '\0';
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_NOT_FOUND;
+    if (sqlite3_prepare_v2(store->db,
+                           "SELECT subject,public_key_x,public_key_y,"
+                           "sign_count FROM passkey WHERE credential_id=?;",
+                           -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_blob(stmt, 1, credential_id, (int)credential_id_len,
+                          SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *subject = (const char *)sqlite3_column_text(stmt, 0);
+            const void *x = sqlite3_column_blob(stmt, 1);
+            const void *y = sqlite3_column_blob(stmt, 2);
+            if (subject && x && sqlite3_column_bytes(stmt, 1) == 32 && y &&
+                sqlite3_column_bytes(stmt, 2) == 32) {
+                snprintf(out_subject, out_subject_len, "%s", subject);
+                memcpy(public_key_x, x, 32);
+                memcpy(public_key_y, y, 32);
+                *out_sign_count = (uint32_t)sqlite3_column_int64(stmt, 3);
+                status = WF_OK;
+            }
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status metalbear_oauth_passkey_touch(metalbear_oauth_store *store,
+                                        const unsigned char *credential_id,
+                                        size_t credential_id_len,
+                                        uint32_t new_sign_count) {
+    if (!store || !credential_id || credential_id_len == 0)
+        return WF_ERR_INVALID_ARG;
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db,
+                           "UPDATE passkey SET sign_count=?,last_used_at=? "
+                           "WHERE credential_id=?;",
+                           -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, (int64_t)new_sign_count);
+        sqlite3_bind_int64(stmt, 2, (int64_t)time(NULL));
+        sqlite3_bind_blob(stmt, 3, credential_id, (int)credential_id_len,
+                          SQLITE_TRANSIENT);
+        status = sqlite3_step(stmt) == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status metalbear_oauth_passkey_list(metalbear_oauth_store *store,
+                                       const char *subject,
+                                       metalbear_oauth_passkey_info **out_items,
+                                       size_t *out_count) {
+    if (!store || !subject || !subject[0] || !out_items || !out_count)
+        return WF_ERR_INVALID_ARG;
+    *out_items = NULL;
+    *out_count = 0;
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(
+            store->db,
+            "SELECT credential_id,name,created_at,last_used_at FROM passkey "
+            "WHERE subject=? ORDER BY created_at DESC;",
+            -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, subject, -1, SQLITE_TRANSIENT);
+        size_t cap = 0, n = 0;
+        metalbear_oauth_passkey_info *items = NULL;
+        status = WF_OK;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            if (n == cap) {
+                cap = cap ? cap * 2 : 8;
+                metalbear_oauth_passkey_info *grown =
+                    realloc(items, cap * sizeof(*items));
+                if (!grown) {
+                    status = WF_ERR_ALLOC;
+                    break;
+                }
+                items = grown;
+            }
+            const void *cred_id = sqlite3_column_blob(stmt, 0);
+            int cred_id_len = sqlite3_column_bytes(stmt, 0);
+            const char *name = (const char *)sqlite3_column_text(stmt, 1);
+            char *id_b64 = NULL;
+            if (!cred_id || cred_id_len <= 0 ||
+                wf_crypto_base64url_encode(cred_id, (size_t)cred_id_len,
+                                           &id_b64) != WF_OK) {
+                status = WF_ERR_INTERNAL;
+                break;
+            }
+            items[n].id = id_b64;
+            items[n].name = name ? strdup(name) : NULL;
+            items[n].created_at = sqlite3_column_int64(stmt, 2);
+            items[n].last_used_at = sqlite3_column_type(stmt, 3) == SQLITE_NULL
+                                        ? 0
+                                        : sqlite3_column_int64(stmt, 3);
+            n++;
+        }
+        if (status == WF_OK) {
+            *out_items = items;
+            *out_count = n;
+        } else {
+            for (size_t i = 0; i < n; i++) {
+                free(items[i].id);
+                free(items[i].name);
+            }
+            free(items);
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+void metalbear_oauth_passkey_info_list_free(metalbear_oauth_passkey_info *items,
+                                            size_t count) {
+    if (!items) return;
+    for (size_t i = 0; i < count; i++) {
+        free(items[i].id);
+        free(items[i].name);
+    }
+    free(items);
+}
+
+wf_status metalbear_oauth_passkey_remove(metalbear_oauth_store *store,
+                                         const char *subject, const char *id) {
+    if (!store || !subject || !subject[0] || !id || !id[0])
+        return WF_ERR_INVALID_ARG;
+    unsigned char *credential_id = NULL;
+    size_t credential_id_len = 0;
+    if (wf_crypto_base64url_decode(id, &credential_id, &credential_id_len) !=
+        WF_OK)
+        return WF_ERR_INVALID_ARG;
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(
+            store->db,
+            "DELETE FROM passkey WHERE credential_id=? AND subject=?;", -1,
+            &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_blob(stmt, 1, credential_id, (int)credential_id_len,
+                          SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, subject, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_DONE) {
+            status = sqlite3_changes(store->db) > 0 ? WF_OK : WF_ERR_NOT_FOUND;
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    free(credential_id);
+    return status;
+}
+
+wf_status metalbear_oauth_passkey_exists(metalbear_oauth_store *store,
+                                         const char *subject, int *out_exists) {
+    if (!store || !subject || !subject[0] || !out_exists)
+        return WF_ERR_INVALID_ARG;
+    *out_exists = 0;
+
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db,
+                           "SELECT 1 FROM passkey WHERE subject=? LIMIT 1;", -1,
+                           &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, subject, -1, SQLITE_TRANSIENT);
+        *out_exists = sqlite3_step(stmt) == SQLITE_ROW ? 1 : 0;
+        status = WF_OK;
     }
     sqlite3_finalize(stmt);
     pthread_mutex_unlock(&store->mutex);
