@@ -10,6 +10,7 @@
 import { auth } from './stores/auth';
 import type { Session } from './stores/auth';
 import { adminAuth } from './stores/adminAuth';
+import type { RegistrationOptions } from './webauthn';
 
 export interface ServerInfo {
 	did: string;
@@ -395,6 +396,83 @@ export async function signOutDevice(did?: string): Promise<void> {
 		headers: { 'content-type': 'application/json', accept: 'application/json' },
 		body: JSON.stringify(did ? { did } : {})
 	});
+}
+
+/* ---- Passkeys (WebAuthn) ----
+ * Registration/listing/removal require a device session for `did` (see
+ * oauth_routes.c's passkey_register_options and friends) -- the same
+ * "already proved a password once" cookie signInDevice sets, checked here
+ * implicitly since these are same-origin fetches and the cookie rides
+ * along automatically. */
+
+async function passkeyFetch<T>(path: string, body: unknown): Promise<T> {
+	const res = await fetch(new URL(path, window.location.origin), {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', accept: 'application/json' },
+		body: JSON.stringify(body)
+	});
+	if (!res.ok) {
+		const parsed = (await res.json().catch(() => null)) as { message?: string } | null;
+		throw new Error(parsed?.message ?? `${path}: ${res.status}`);
+	}
+	return res.json() as Promise<T>;
+}
+
+export type PasskeyRegistrationOptions = RegistrationOptions;
+
+export function passkeyRegisterOptions(did: string): Promise<PasskeyRegistrationOptions> {
+	return passkeyFetch('/oauth/passkey/register/options', { did });
+}
+
+export function passkeyRegisterVerify(
+	did: string,
+	name: string | undefined,
+	response: { id: string; response: { clientDataJSON: string; attestationObject: string } }
+): Promise<{ ok: true }> {
+	return passkeyFetch('/oauth/passkey/register/verify', {
+		did,
+		name,
+		response: response.response
+	});
+}
+
+export interface PasskeyAuthenticateOptions {
+	available: boolean;
+	challenge?: string;
+	rpId?: string;
+	userVerification?: string;
+	allowCredentials?: Array<{ type: 'public-key'; id: string }>;
+}
+
+export function passkeyAuthenticateOptions(identifier: string): Promise<PasskeyAuthenticateOptions> {
+	return passkeyFetch('/oauth/passkey/authenticate/options', { identifier });
+}
+
+export function passkeyAuthenticateVerify(response: {
+	id: string;
+	response: { clientDataJSON: string; authenticatorData: string; signature: string };
+}): Promise<{ did: string }> {
+	return passkeyFetch('/oauth/passkey/authenticate/verify', response);
+}
+
+export interface PasskeyInfo {
+	id: string;
+	name?: string;
+	createdAt: number;
+	lastUsedAt?: number;
+}
+
+export async function passkeyList(did: string): Promise<PasskeyInfo[]> {
+	const url = new URL('/oauth/passkey/list', window.location.origin);
+	url.searchParams.set('did', did);
+	const res = await fetch(url, { headers: { accept: 'application/json' } });
+	if (!res.ok) throw new Error(`passkey/list: ${res.status}`);
+	const body = (await res.json()) as { passkeys: PasskeyInfo[] };
+	return body.passkeys;
+}
+
+export function passkeyRemove(did: string, id: string): Promise<void> {
+	return passkeyFetch('/oauth/passkey/remove', { did, id });
 }
 
 export async function getSession(): Promise<SessionResponse> {

@@ -8,9 +8,14 @@
 		updateEmail,
 		requestEmailConfirmation,
 		confirmEmail,
-		updateHandle
+		updateHandle,
+		passkeyList,
+		passkeyRegisterOptions,
+		passkeyRegisterVerify,
+		passkeyRemove
 	} from '$lib/pds';
-	import type { SessionResponse } from '$lib/pds';
+	import type { SessionResponse, PasskeyInfo } from '$lib/pds';
+	import { createPasskey, isWebAuthnSupported } from '$lib/webauthn';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
@@ -28,6 +33,7 @@
 		}
 		try {
 			current = await getSession();
+			passkeys = await passkeyList(session.did).catch(() => []);
 		} catch (err) {
 			loadError = err instanceof Error ? err.message : 'Failed to load session';
 		} finally {
@@ -184,6 +190,45 @@
 			handleError = err instanceof Error ? err.message : 'Failed to update handle';
 		} finally {
 			handlePending = false;
+		}
+	}
+
+	/* ---- Passkeys ---- */
+	let passkeys = $state<PasskeyInfo[]>([]);
+	let passkeyName = $state('');
+	let passkeyPending = $state(false);
+	let passkeyError = $state('');
+	let removingPasskeyId = $state<string | null>(null);
+
+	async function addPasskey(e: Event) {
+		e.preventDefault();
+		if (!session) return;
+		passkeyError = '';
+		passkeyPending = true;
+		try {
+			const options = await passkeyRegisterOptions(session.did);
+			const credential = await createPasskey(options);
+			await passkeyRegisterVerify(session.did, passkeyName || undefined, credential);
+			passkeys = await passkeyList(session.did);
+			passkeyName = '';
+		} catch (err) {
+			passkeyError = err instanceof Error ? err.message : 'Failed to add passkey';
+		} finally {
+			passkeyPending = false;
+		}
+	}
+
+	async function removePasskey(id: string) {
+		if (!session) return;
+		removingPasskeyId = id;
+		passkeyError = '';
+		try {
+			await passkeyRemove(session.did, id);
+			passkeys = passkeys.filter((p) => p.id !== id);
+		} catch (err) {
+			passkeyError = err instanceof Error ? err.message : 'Failed to remove passkey';
+		} finally {
+			removingPasskeyId = null;
 		}
 	}
 </script>
@@ -438,6 +483,67 @@
 				>
 					{handleError}
 				</p>
+			{/if}
+		</section>
+
+		<!-- Passkeys -->
+		<section class="mb-8 rounded-lg border border-slate-800 bg-slate-900/30 p-6">
+			<h2 class="mb-1 text-sm font-semibold tracking-widest text-slate-500 uppercase">Passkeys</h2>
+			<p class="mb-4 text-sm text-slate-400">
+				Sign in without a password using a device passkey (fingerprint, face, or security key).
+			</p>
+
+			{#if !isWebAuthnSupported()}
+				<p class="text-sm text-slate-500">This browser doesn't support passkeys.</p>
+			{:else}
+				{#if passkeys.length > 0}
+					<ul class="mb-4 divide-y divide-slate-800">
+						{#each passkeys as p (p.id)}
+							<li class="flex items-center justify-between gap-4 py-3">
+								<div>
+									<span class="text-sm text-slate-200">{p.name ?? 'Unnamed passkey'}</span>
+									<div class="mt-0.5 text-xs text-slate-500">
+										Added {new Date(p.createdAt * 1000).toLocaleDateString()}
+										{#if p.lastUsedAt}
+											· last used {new Date(p.lastUsedAt * 1000).toLocaleDateString()}
+										{/if}
+									</div>
+								</div>
+								<button
+									onclick={() => removePasskey(p.id)}
+									disabled={removingPasskeyId === p.id}
+									class="shrink-0 text-sm text-red-400 hover:text-red-300 disabled:opacity-50"
+								>
+									{removingPasskeyId === p.id ? 'Removing…' : 'Remove'}
+								</button>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+
+				<form onsubmit={addPasskey} class="flex flex-col gap-4 sm:flex-row sm:items-start">
+					<input
+						type="text"
+						bind:value={passkeyName}
+						placeholder="Name this passkey (optional)"
+						class="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+					/>
+					<button
+						type="submit"
+						disabled={passkeyPending}
+						class="shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+					>
+						{passkeyPending ? 'Adding…' : 'Add a passkey'}
+					</button>
+				</form>
+
+				{#if passkeyError}
+					<p
+						class="mt-4 rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-2.5 text-sm text-red-300"
+					>
+						{passkeyError}
+					</p>
+				{/if}
 			{/if}
 		</section>
 	{/if}
