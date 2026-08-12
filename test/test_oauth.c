@@ -194,7 +194,13 @@ int main(void) {
         free(token_b);
     }
 
-    /* dpop_jkt is optional for PAR and token exchange (loopback clients). */
+    /* dpop_jkt is mandatory throughout -- atproto's OAuth profile requires
+     * DPoP for every client with no exemptions (atproto.com/specs/oauth).
+     * A prior version of this server treated it as optional for "loopback
+     * clients"; that was never a real exemption in the spec, and let a
+     * DPoP-unbound token be minted and then bound to any attacker-chosen
+     * key on first resource-server use, defeating DPoP's sender constraint
+     * entirely. Verify each stage now fails closed without it. */
     {
         metalbear_oauth_request no_jkt = {
             .client_id = "https://client.example/metadata2.json",
@@ -207,34 +213,72 @@ int main(void) {
         char *request_uri2 = NULL;
         int64_t expires2 = 0;
         CHECK(metalbear_oauth_create_par(store, &no_jkt, &request_uri2,
-                                         &expires2) == WF_OK);
-        CHECK(request_uri2 != NULL);
+                                         &expires2) != WF_OK);
+        CHECK(request_uri2 == NULL);
 
-        char *code2 = NULL, *redirect2 = NULL, *state2 = NULL;
-        CHECK(metalbear_oauth_authorize(store, request_uri2, no_jkt.client_id,
-                                        "did:plc:alice", &code2, &redirect2,
-                                        &state2) == WF_OK);
-        CHECK(code2 && code2[0]);
+        /* Even a legitimately-issued code/refresh token (real jkt
+         * established at PAR) must not be exchangeable/refreshable without
+         * presenting a matching dpop_jkt -- exercise both the "omitted
+         * entirely" and "wrong key" cases against the real flow set up
+         * below. */
+        metalbear_oauth_request real = {
+            .client_id = "https://client.example/metadata3.json",
+            .redirect_uri = "https://client.example/callback3",
+            .scope = "atproto",
+            .state = "state-real-jkt",
+            .code_challenge = pkce.challenge,
+            .dpop_jkt = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        };
+        char *request_uri3 = NULL;
+        int64_t expires3 = 0;
+        CHECK(metalbear_oauth_create_par(store, &real, &request_uri3,
+                                         &expires3) == WF_OK);
+        CHECK(request_uri3 != NULL);
 
-        metalbear_oauth_grant grant2 = {0};
-        CHECK(metalbear_oauth_exchange_code(store, code2, no_jkt.client_id,
-                                            no_jkt.redirect_uri, pkce.verifier,
-                                            NULL, &grant2) == WF_OK);
-        CHECK(grant2.access_token && grant2.access_token[0]);
-        CHECK(grant2.refresh_token && grant2.refresh_token[0]);
+        char *code3 = NULL, *redirect3 = NULL, *state3 = NULL;
+        CHECK(metalbear_oauth_authorize(store, request_uri3, real.client_id,
+                                        "did:plc:alice", &code3, &redirect3,
+                                        &state3) == WF_OK);
+        CHECK(code3 && code3[0]);
 
-        metalbear_oauth_grant rotated2 = {0};
-        CHECK(metalbear_oauth_refresh(store, grant2.refresh_token,
-                                      no_jkt.client_id, NULL,
-                                      &rotated2) == WF_OK);
-        CHECK(rotated2.access_token && rotated2.access_token[0]);
+        metalbear_oauth_grant grant3 = {0};
+        CHECK(metalbear_oauth_exchange_code(
+                  store, code3, real.client_id, real.redirect_uri,
+                  pkce.verifier, NULL, &grant3) == WF_ERR_INVALID_ARG);
+        CHECK(!grant3.access_token);
+        CHECK(metalbear_oauth_exchange_code(
+                  store, code3, real.client_id, real.redirect_uri,
+                  pkce.verifier, "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+                  &grant3) != WF_OK);
+        CHECK(!grant3.access_token);
+        CHECK(metalbear_oauth_exchange_code(store, code3, real.client_id,
+                                            real.redirect_uri, pkce.verifier,
+                                            real.dpop_jkt, &grant3) == WF_OK);
+        CHECK(grant3.access_token && grant3.access_token[0]);
+        CHECK(grant3.refresh_token && grant3.refresh_token[0]);
 
+        metalbear_oauth_grant rotated3 = {0};
+        CHECK(metalbear_oauth_refresh(store, grant3.refresh_token,
+                                      real.client_id, NULL,
+                                      &rotated3) == WF_ERR_INVALID_ARG);
+        CHECK(!rotated3.access_token);
+        CHECK(metalbear_oauth_refresh(
+                  store, grant3.refresh_token, real.client_id,
+                  "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+                  &rotated3) != WF_OK);
+        CHECK(!rotated3.access_token);
+        CHECK(metalbear_oauth_refresh(store, grant3.refresh_token,
+                                      real.client_id, real.dpop_jkt,
+                                      &rotated3) == WF_OK);
+        CHECK(rotated3.access_token && rotated3.access_token[0]);
+
+        free(request_uri3);
+        free(code3);
+        free(redirect3);
+        free(state3);
+        metalbear_oauth_grant_free(&grant3);
+        metalbear_oauth_grant_free(&rotated3);
         free(request_uri2);
-        free(code2);
-        free(redirect2);
-        free(state2);
-        metalbear_oauth_grant_free(&grant2);
-        metalbear_oauth_grant_free(&rotated2);
     }
 
     metalbear_oauth_store_free(store);

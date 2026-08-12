@@ -1188,6 +1188,53 @@ done:
     return status;
 }
 
+/* RFC 9449 requires a real DPoP proof on every token request, and atproto's
+ * OAuth profile mandates DPoP for every client with no exceptions
+ * (atproto.com/specs/oauth: "mandates use of DPoP for all client types...
+ * no exemptions for loopback clients, development environments, or public
+ * clients"). This computes the token-binding key thumbprint from that
+ * proof -- unlike the request body's `dpop_jkt` field (a client's
+ * unverified claim, legitimate only as the PAR-time declaration RFC 9449
+ * §10 describes, never as proof of possession), this is cryptographically
+ * confirmed: the client must actually hold the private key.
+ *
+ * `metalbear_oauth_exchange_code`/`metalbear_oauth_refresh` already compare
+ * whatever `dpop_jkt` they're given against the value established at
+ * PAR/authorization time and reject on any mismatch (including "verified
+ * value present but nothing was established" -- a NULL stored jkt with a
+ * non-NULL comparand rejects too), so feeding them this verified value
+ * closes the loophole where the body field was trusted directly: no path
+ * exists anymore to mint a token bound to a key whose possession was never
+ * actually proven.
+ *
+ * jti replay is not checked here (unlike resource-server DPoP proofs,
+ * which pass a real replay cache to wf_oauth_verify_dpop): the
+ * authorization code / refresh token this proof accompanies is itself
+ * single-use, deleted from storage on the same exchange that consumes it,
+ * so replaying the identical token-exchange request already fails for
+ * that reason regardless of the DPoP proof's jti. */
+static wf_status verified_token_endpoint_jkt(oauth_route_ctx *rctx,
+                                             const wf_xrpc_request *req,
+                                             char parsed_dpop_jkt[64]) {
+    parsed_dpop_jkt[0] = '\0';
+    if (!req->dpop_header) return WF_ERR_INVALID_ARG;
+    char htu[512];
+    int n = snprintf(htu, sizeof(htu), "%s/oauth/token",
+                     rctx->public_url ? rctx->public_url : "");
+    if (n <= 0 || (size_t)n >= sizeof(htu)) return WF_ERR_INVALID_ARG;
+    wf_oauth_verified_token *verified = NULL;
+    wf_status status = wf_oauth_verify_dpop(req->dpop_header, NULL, "POST", htu,
+                                            NULL, &verified);
+    if (status != WF_OK) return status;
+    if (!verified || !verified->dpop_jkt) {
+        wf_oauth_verified_token_free(verified);
+        return WF_ERR_INVALID_ARG;
+    }
+    strncpy(parsed_dpop_jkt, verified->dpop_jkt, 63);
+    wf_oauth_verified_token_free(verified);
+    return WF_OK;
+}
+
 static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
                              wf_xrpc_response *resp) {
     oauth_route_ctx *rctx = ctx;
@@ -1239,6 +1286,19 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
         }
     }
 
+    /* DPoP is mandatory on every token request -- see
+     * verified_token_endpoint_jkt's header comment. Computed once, up
+     * front, for both grant types: neither may mint a token without a
+     * cryptographically real, freshly-proven key thumbprint. */
+    char parsed_dpop_jkt[64];
+    if (verified_token_endpoint_jkt(rctx, req, parsed_dpop_jkt) != WF_OK) {
+        cJSON_Delete(body);
+        free(auth_client_id);
+        wf_xrpc_response_set_error(resp, 400, "invalid_dpop_proof",
+                                   "A valid DPoP proof is required");
+        return WF_OK;
+    }
+
     metalbear_oauth_grant grant = {0};
     wf_status status = WF_ERR_INVALID_ARG;
 
@@ -1248,7 +1308,6 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
         cJSON *redir = cJSON_GetObjectItemCaseSensitive(body, "redirect_uri");
         cJSON *verifier =
             cJSON_GetObjectItemCaseSensitive(body, "code_verifier");
-        cJSON *jkt = cJSON_GetObjectItemCaseSensitive(body, "dpop_jkt");
 
         if (!cJSON_IsString(code) || !cJSON_IsString(cid) ||
             !cJSON_IsString(redir) || !cJSON_IsString(verifier)) {
@@ -1260,13 +1319,11 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
         status = metalbear_oauth_exchange_code(
             rctx->store, code->valuestring,
             auth_client_id ? auth_client_id : cid->valuestring,
-            redir->valuestring, verifier->valuestring,
-            cJSON_IsString(jkt) ? jkt->valuestring : NULL, &grant);
+            redir->valuestring, verifier->valuestring, parsed_dpop_jkt, &grant);
     } else if (strcmp(grant_type->valuestring, "refresh_token") == 0) {
         cJSON *refresh =
             cJSON_GetObjectItemCaseSensitive(body, "refresh_token");
         cJSON *cid = cJSON_GetObjectItemCaseSensitive(body, "client_id");
-        cJSON *jkt = cJSON_GetObjectItemCaseSensitive(body, "dpop_jkt");
 
         if (!cJSON_IsString(refresh) || !cJSON_IsString(cid)) {
             cJSON_Delete(body);
@@ -1274,10 +1331,10 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
                                        "Missing required parameters");
             return WF_OK;
         }
-        status = metalbear_oauth_refresh(
-            rctx->store, refresh->valuestring,
-            auth_client_id ? auth_client_id : cid->valuestring,
-            cJSON_IsString(jkt) ? jkt->valuestring : NULL, &grant);
+        status = metalbear_oauth_refresh(rctx->store, refresh->valuestring,
+                                         auth_client_id ? auth_client_id
+                                                        : cid->valuestring,
+                                         parsed_dpop_jkt, &grant);
     }
 
     cJSON_Delete(body);
