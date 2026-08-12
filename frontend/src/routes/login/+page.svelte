@@ -34,9 +34,18 @@
 		error = '';
 		loading = true;
 		try {
+			/*
+			 * Always establish a device session on password login, not just
+			 * for the OAuth redirect case: it's the same proof either way
+			 * ("this browser just presented the account password"), and
+			 * /account/security's passkey registration needs one to exist no
+			 * matter how the user got there -- reaching security settings
+			 * through a plain top-level login is the common case, not the
+			 * OAuth-consent one.
+			 */
 			const [session] = await Promise.all([
 				createSession(identifier, password),
-				isOauthRedirect(redirectTo) ? signInDevice(identifier, password) : Promise.resolve()
+				signInDevice(identifier, password)
 			]);
 			auth.login({
 				accessJwt: session.accessJwt,
