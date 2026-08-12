@@ -179,6 +179,11 @@
 					>
 				</li>
 				<li>
+					<a href="/account/recovery-key" class="text-emerald-500 hover:text-emerald-400"
+						>Personal recovery key →</a
+					>
+				</li>
+				<li>
 					<a href="/account/migrate" class="text-emerald-500 hover:text-emerald-400"
 						>Migrate to another server →</a
 					>
