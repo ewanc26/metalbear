@@ -118,6 +118,7 @@ add_library(
   src/oauth/oauth_account_routes.c
   src/oauth/oauth_scope.c
   src/oauth/oauth_credentials.c
+  src/oauth/webauthn.c
   cpp/metalbear/key_rotation.cpp
   src/repo/repo_store.c
   src/repo/repo_routes.c
