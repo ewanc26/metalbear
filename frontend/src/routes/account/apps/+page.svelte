@@ -3,6 +3,7 @@
 	import { listGrants, revokeGrant } from '$lib/pds';
 	import type { GrantInfo } from '$lib/pds';
 	import { humanizeScopes } from '$lib/oauthScopes';
+	import { formatDate } from '$lib/format';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
@@ -47,11 +48,7 @@
 	}
 
 	function formatExpiry(expiresAt: number): string {
-		return new Date(expiresAt * 1000).toLocaleDateString(undefined, {
-			year: 'numeric',
-			month: 'short',
-			day: 'numeric'
-		});
+		return formatDate(expiresAt);
 	}
 </script>
 
