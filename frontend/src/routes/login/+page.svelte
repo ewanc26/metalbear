@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { auth } from '$lib/stores/auth';
-	import { createSession, signInDevice } from '$lib/pds';
+	import { createSession, signInDevice, passkeyAuthenticateOptions, passkeyAuthenticateVerify } from '$lib/pds';
+	import { authenticateWithPasskey, isWebAuthnSupported } from '$lib/webauthn';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
@@ -11,6 +12,7 @@
 	let error = $state('');
 	let loading = $state(false);
 	let showPassword = $state(false);
+	let passkeyPending = $state(false);
 
 	let redirectTo = $state('');
 
@@ -53,6 +55,45 @@
 			error = err instanceof Error ? err.message : 'Login failed';
 		} finally {
 			loading = false;
+		}
+	}
+
+	/*
+	 * Passkey sign-in only establishes an OAuth device session (the cookie
+	 * /oauth/authorize checks) -- it has no equivalent of createSession's
+	 * accessJwt/refreshJwt, so it cannot populate the `auth` store the rest
+	 * of this app (account pages, etc.) depends on. Scoped to the OAuth
+	 * consent redirect for that reason: that is the one flow a device
+	 * session alone actually completes. A plain top-level login still needs
+	 * a password (or a future JWT-issuance path bridged from a device
+	 * session, which does not exist yet).
+	 */
+	async function handlePasskeySignIn() {
+		if (!identifier) {
+			error = 'Enter your handle or email first';
+			return;
+		}
+		error = '';
+		passkeyPending = true;
+		try {
+			const options = await passkeyAuthenticateOptions(identifier);
+			if (!options.available || !options.challenge || !options.rpId) {
+				error = 'No passkey is registered for this account';
+				return;
+			}
+			const credential = await authenticateWithPasskey({
+				challenge: options.challenge,
+				rpId: options.rpId,
+				userVerification:
+					(options.userVerification as UserVerificationRequirement) ?? 'preferred',
+				allowCredentials: options.allowCredentials ?? []
+			});
+			await passkeyAuthenticateVerify(credential);
+			goto(redirectTo);
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Passkey sign-in failed';
+		} finally {
+			passkeyPending = false;
 		}
 	}
 </script>
@@ -121,6 +162,17 @@
 		>
 			{loading ? 'Signing in…' : 'Sign in'}
 		</button>
+
+		{#if isOauthRedirect(redirectTo) && isWebAuthnSupported()}
+			<button
+				type="button"
+				onclick={handlePasskeySignIn}
+				disabled={passkeyPending || !identifier}
+				class="rounded-lg border border-slate-700 px-4 py-2.5 text-sm text-slate-300 transition hover:border-slate-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+			>
+				{passkeyPending ? 'Waiting for passkey…' : 'Sign in with a passkey instead'}
+			</button>
+		{/if}
 	</form>
 
 	<p class="mt-4 text-center text-sm text-slate-500">
