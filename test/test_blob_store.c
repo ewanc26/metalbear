@@ -29,6 +29,8 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -823,6 +825,154 @@ static int test_reference_tracking_file_backed(void) {
     return fail;
 }
 
+/* ------------------------------------------------------------------ */
+/* 6. Concurrent dissociate-to-zero vs. associate race                  */
+/* ------------------------------------------------------------------ */
+
+struct blob_race_ctx {
+    metalbear_blob_store *store;
+    char cid[32];
+    const char *record_uri;
+    wf_status result;
+    atomic_int *go; /* shared release gate; every thread spins until non-zero */
+};
+
+static void *race_dissociate_thread(void *arg) {
+    struct blob_race_ctx *ctx = arg;
+    while (!atomic_load_explicit(ctx->go, memory_order_acquire)) { /* spin */
+    }
+    ctx->result =
+        metalbear_blob_store_dissociate(ctx->store, ctx->cid, ctx->record_uri);
+    return NULL;
+}
+
+static void *race_associate_thread(void *arg) {
+    struct blob_race_ctx *ctx = arg;
+    while (!atomic_load_explicit(ctx->go, memory_order_acquire)) { /* spin */
+    }
+    ctx->result =
+        metalbear_blob_store_associate(ctx->store, ctx->cid, ctx->record_uri);
+    return NULL;
+}
+
+/*
+ * Regression test for a TOCTOU race: dissociate() dropping a blob's last
+ * reference used to unlock the store mutex before calling the separate,
+ * re-locking delete() -- a concurrent associate() on the same CID could
+ * slip in during that window, find the not-yet-deleted node, and append its
+ * reference, only for the pending delete to remove the node anyway and
+ * silently destroy that fresh reference. Fixed by deleting within the same
+ * locked section that drops the count to zero (blob_store_delete_locked).
+ *
+ * The fix makes the two operations fully mutex-serialized, so there is no
+ * longer a timing window to land in -- this test instead asserts the
+ * invariant the bug violated: a successful associate must never be undone
+ * by a racing dissociate, and if the blob is gone, associate must have
+ * failed closed with NOT_FOUND rather than reporting success.
+ *
+ * Every dissociate/associate thread spins on a shared release gate rather
+ * than starting work as soon as pthread_create returns: creating threads
+ * one at a time otherwise gives the first-created thread such a head start
+ * that it finishes its whole (dissociate -> delete) sequence before the
+ * second thread's OS thread has even started running, so the two never
+ * actually overlap and the original bug never reproduced under that
+ * design. Holding every thread at the gate until all are created and
+ * releasing them together, across many independent CIDs at once, gives the
+ * scheduler real contention to land a bad interleaving in.
+ */
+static int test_concurrent_dissociate_associate_race(void) {
+    const int pairs = 64;
+    metalbear_blob_store *store = metalbear_blob_store_new(NULL);
+    if (!store) {
+        fprintf(stderr, "FAIL: store (race)\n");
+        return 1;
+    }
+
+    const unsigned char payload[] = {7};
+    const char *uri_a = "at://did:plc:alice/app.bsky.feed.post/aaa";
+    const char *uri_b = "at://did:plc:bob/app.bsky.feed.post/bbb";
+
+    struct blob_race_ctx *dctx = calloc((size_t)pairs, sizeof(*dctx));
+    struct blob_race_ctx *actx = calloc((size_t)pairs, sizeof(*actx));
+    pthread_t *td = calloc((size_t)pairs, sizeof(*td));
+    pthread_t *ta = calloc((size_t)pairs, sizeof(*ta));
+    atomic_int go = 0;
+    if (!dctx || !actx || !td || !ta) {
+        fprintf(stderr, "FAIL: alloc (race)\n");
+        free(dctx);
+        free(actx);
+        free(td);
+        free(ta);
+        metalbear_blob_store_free(store);
+        return 1;
+    }
+
+    int fail = 0;
+    for (int i = 0; i < pairs; i++) {
+        snprintf(dctx[i].cid, sizeof(dctx[i].cid), "bafyracetest%d", i);
+        if (metalbear_blob_store_put(store, dctx[i].cid, "text/plain", payload,
+                                     sizeof(payload)) != WF_OK ||
+            metalbear_blob_store_associate(store, dctx[i].cid, uri_a) !=
+                WF_OK) {
+            fprintf(stderr, "FAIL: setup (race, pair %d)\n", i);
+            fail = 1;
+        }
+        dctx[i].store = store;
+        dctx[i].record_uri = uri_a;
+        dctx[i].result = WF_OK;
+        dctx[i].go = &go;
+        snprintf(actx[i].cid, sizeof(actx[i].cid), "%s", dctx[i].cid);
+        actx[i].store = store;
+        actx[i].record_uri = uri_b;
+        actx[i].result = WF_OK;
+        actx[i].go = &go;
+    }
+    if (fail) {
+        free(dctx);
+        free(actx);
+        free(td);
+        free(ta);
+        metalbear_blob_store_free(store);
+        return 1;
+    }
+
+    for (int i = 0; i < pairs; i++) {
+        pthread_create(&td[i], NULL, race_dissociate_thread, &dctx[i]);
+        pthread_create(&ta[i], NULL, race_associate_thread, &actx[i]);
+    }
+    atomic_store_explicit(&go, 1, memory_order_release);
+    for (int i = 0; i < pairs; i++) {
+        pthread_join(td[i], NULL);
+        pthread_join(ta[i], NULL);
+    }
+
+    for (int i = 0; i < pairs; i++) {
+        wf_status exists = metalbear_blob_store_exists(store, dctx[i].cid);
+        if (actx[i].result == WF_OK && exists != WF_OK) {
+            fprintf(stderr,
+                    "FAIL: associate succeeded but blob was deleted "
+                    "(pair %d)\n",
+                    i);
+            fail = 1;
+        }
+        if (exists == WF_ERR_NOT_FOUND && actx[i].result != WF_ERR_NOT_FOUND) {
+            fprintf(stderr,
+                    "FAIL: blob gone but associate did not fail closed "
+                    "(pair %d)\n",
+                    i);
+            fail = 1;
+        }
+    }
+
+    free(dctx);
+    free(actx);
+    free(td);
+    free(ta);
+    metalbear_blob_store_free(store);
+    if (!fail) printf("PASS: concurrent dissociate/associate race\n");
+    return fail;
+}
+
 int main(void) {
     int failures = 0;
     failures += test_unit_memory();
@@ -832,6 +982,7 @@ int main(void) {
     failures += test_walk_refs();
     failures += test_reference_tracking();
     failures += test_reference_tracking_file_backed();
+    failures += test_concurrent_dissociate_associate_race();
     if (failures == 0) printf("ALL PASS: blob_store\n");
     return failures;
 }

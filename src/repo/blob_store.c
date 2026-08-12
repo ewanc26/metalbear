@@ -554,16 +554,18 @@ wf_status metalbear_blob_store_exists(metalbear_blob_store *store,
     return WF_ERR_NOT_FOUND;
 }
 
-wf_status metalbear_blob_store_delete(metalbear_blob_store *store,
-                                      const char *cid) {
-    if (!store || !blob_cid_is_valid(cid)) return WF_ERR_INVALID_ARG;
-
-    pthread_mutex_lock(&store->mutex);
-
+/* Deletes the node for `cid`. Assumes the caller already holds
+ * store->mutex and leaves it held on return -- factored out so
+ * metalbear_blob_store_dissociate can delete a just-zeroed blob within the
+ * same critical section it dropped the last reference in, rather than
+ * unlocking and calling back in, which would open a window for a
+ * concurrent associate to re-reference the blob just before this deletes
+ * it out from under that fresh reference. */
+static wf_status blob_store_delete_locked(metalbear_blob_store *store,
+                                          const char *cid) {
     metalbear_blob_node **link = &store->head;
     while (*link && strcmp((*link)->cid, cid) != 0) link = &(*link)->next;
     if (!*link) {
-        pthread_mutex_unlock(&store->mutex);
         return WF_ERR_NOT_FOUND;
     }
 
@@ -586,7 +588,6 @@ wf_status metalbear_blob_store_delete(metalbear_blob_store *store,
         free(saved_cid);
         free(saved_data);
         free(saved_mime);
-        pthread_mutex_unlock(&store->mutex);
         return WF_ERR_ALLOC;
     }
 
@@ -650,13 +651,20 @@ wf_status metalbear_blob_store_delete(metalbear_blob_store *store,
         free(saved_cid);
         free(saved_data);
         free(saved_mime);
-        pthread_mutex_unlock(&store->mutex);
         return st;
     }
 
     (void)rev_copy;
-    pthread_mutex_unlock(&store->mutex);
     return WF_OK;
+}
+
+wf_status metalbear_blob_store_delete(metalbear_blob_store *store,
+                                      const char *cid) {
+    if (!store || !blob_cid_is_valid(cid)) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    wf_status st = blob_store_delete_locked(store, cid);
+    pthread_mutex_unlock(&store->mutex);
+    return st;
 }
 
 wf_status metalbear_blob_store_list(metalbear_blob_store *store,
@@ -834,10 +842,14 @@ wf_status metalbear_blob_store_dissociate(metalbear_blob_store *store,
     if (n->ref_count == 0) {
         /* Dereferenced: garbage, matching the reference PDS's
          * deleteDereferencedBlobs. Delete outright rather than waiting on a
-         * timer — see metalbear_blob_store_dissociate's header comment. */
-        /* Unlock before delete (which re-locks) to avoid recursion. */
+         * timer — see metalbear_blob_store_dissociate's header comment.
+         * Delete within this same locked section (blob_store_delete_locked,
+         * not the public metalbear_blob_store_delete) so a concurrent
+         * associate can't slip a fresh reference onto this node between
+         * dropping to zero and the delete happening. */
+        wf_status del_st = blob_store_delete_locked(store, cid);
         pthread_mutex_unlock(&store->mutex);
-        return metalbear_blob_store_delete(store, cid);
+        return del_st;
     }
     persist_refs(store, n);
     pthread_mutex_unlock(&store->mutex);
