@@ -16,6 +16,7 @@
 	} from '$lib/pds';
 	import type { SessionResponse, PasskeyInfo } from '$lib/pds';
 	import { createPasskey, isWebAuthnSupported } from '$lib/webauthn';
+	import { formatDate } from '$lib/format';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
@@ -503,9 +504,9 @@
 								<div>
 									<span class="text-sm text-slate-200">{p.name ?? 'Unnamed passkey'}</span>
 									<div class="mt-0.5 text-xs text-slate-500">
-										Added {new Date(p.createdAt * 1000).toLocaleDateString()}
+										Added {formatDate(p.createdAt)}
 										{#if p.lastUsedAt}
-											· last used {new Date(p.lastUsedAt * 1000).toLocaleDateString()}
+											· last used {formatDate(p.lastUsedAt)}
 										{/if}
 									</div>
 								</div>
