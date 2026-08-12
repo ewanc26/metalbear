@@ -255,6 +255,15 @@ export async function listRepos(): Promise<RepoInfo[]> {
 	return repos ?? [];
 }
 
+export async function listReposPage(
+	cursor?: string,
+	limit = 50
+): Promise<{ repos: RepoInfo[]; cursor?: string }> {
+	const params: Record<string, string> = { limit: String(limit) };
+	if (cursor) params.cursor = cursor;
+	return xrpc<{ repos: RepoInfo[]; cursor?: string }>('com.atproto.sync.listRepos', params);
+}
+
 export async function health(): Promise<string | null> {
 	try {
 		const { version } = await xrpc<{ version: string }>('_health');
