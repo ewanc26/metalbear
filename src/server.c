@@ -1810,7 +1810,33 @@ static wf_status handle_well_known_did(void *ctx,
     if (server->service_did &&
         strncmp(server->service_did, "did:web:", 8) == 0) {
         const char *service_host = server->service_did + 8;
-        if (strcmp(hostname, service_host) == 0) {
+        bool service_host_matches;
+        if (strstr(service_host, "%3A") || strstr(service_host, "%3a")) {
+            /* A percent-encoded port (e.g. a local dev instance's
+             * did:web:localhost%3A2583) is part of the identity: decode it
+             * and compare against the raw Host header, which carries the
+             * port as a literal colon -- `hostname` above has already had
+             * it stripped and can't distinguish this case. */
+            char decoded_service_host[256];
+            size_t di = 0;
+            for (const char *p = service_host;
+                 *p && di + 1 < sizeof(decoded_service_host);) {
+                if (p[0] == '%' && p[1] == '3' &&
+                    (p[2] == 'A' || p[2] == 'a')) {
+                    decoded_service_host[di++] = ':';
+                    p += 3;
+                } else {
+                    decoded_service_host[di++] = *p++;
+                }
+            }
+            decoded_service_host[di] = '\0';
+            service_host_matches =
+                request->host_header &&
+                strcmp(request->host_header, decoded_service_host) == 0;
+        } else {
+            service_host_matches = strcmp(hostname, service_host) == 0;
+        }
+        if (service_host_matches) {
             free(hostname);
             cJSON *doc = cJSON_CreateObject();
             if (!doc) {
