@@ -25,6 +25,44 @@ sibling Wolfram SDK. C is the default language for all new code; C++ is permitte
 CMake defaults to the sibling `../wolfram` checkout. Set
 `-DWOLFRAM_SOURCE_DIR=/path/to/wolfram` to use another checkout.
 
+### Running a local instance
+
+`scripts/setup.sh --local` builds MetalBear and starts it on
+`http://localhost:2583` with no hostname, TLS, DNS, or federation required:
+
+```sh
+scripts/setup.sh --local
+```
+
+This is a real running PDS, not a mock: `createAccount`, repo writes, OAuth,
+and the firehose all work the same as a production instance. What's
+different is the identity:
+
+- `service_did` is `did:web:localhost%3A2583` — did:web's port is
+  percent-encoded (`%3A`), and Wolfram's did:web resolver special-cases a
+  `localhost`/`localhost:<port>` host to resolve over plain HTTP instead of
+  HTTPS, so no reverse proxy or certificate is needed.
+- No `identity.plc_url` is set, so accounts mint a self-certifying `did:key`
+  instead of a `did:plc` (`account_routes.c` falls back to `did:key`
+  precisely when `plc_url` is unset). This matters beyond convenience: a
+  `did:plc` genesis operation is a permanent, public write to the live PLC
+  directory, and a throwaway dev account has no business making one. Set
+  `--dns-token`/`--dns-zone` and rerun without `--local` against a real
+  hostname when you actually need to test `did:plc` or federation.
+- `firehose.crawlers` is empty, so the instance never announces itself to a
+  relay.
+
+Handle and DID resolution for accounts on the instance stay entirely local —
+`com.atproto.identity.resolveHandle` checks the account registry before ever
+reaching for the network — so a client that insists on resolving over the
+open internet rather than asking the PDS directly won't find them. Point
+your client's PDS URL at `http://localhost:2583` directly.
+
+`--local` implies `--dev` (the landing page says plainly that this is a
+testing instance). Combine it with the usual flags — `--port`, `--data`,
+`--config`, `--open` — as needed; see `scripts/setup.sh --help` for the full
+list.
+
 ## Validation
 
 - Run `ctest --test-dir build --output-on-failure` before declaring a slice done.

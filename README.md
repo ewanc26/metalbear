@@ -334,6 +334,11 @@ bear.yml`) — the dialect is still chosen by its extension.
 Re-running is safe: existing secrets are carried over, so a rebuild never
 changes the identity authority that signed DIDs already minted.
 
+Pass `--local` instead of `--hostname` for a local dev instance on
+`http://localhost:2583` — no TLS, DNS, or federation, and accounts mint
+`did:key` instead of `did:plc` so nothing reaches the live PLC directory.
+See [CONTRIBUTING.md](CONTRIBUTING.md#running-a-local-instance).
+
 ## Configuration
 
 Settings live in a config file — TOML or YAML, chosen by extension — read
