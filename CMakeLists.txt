@@ -475,6 +475,15 @@ if(METALBEAR_BUILD_TESTS)
   add_test(NAME metalbear_handle_plc_update
           COMMAND test_metalbear_handle_plc_update)
 
+  add_executable(test_metalbear_well_known_did_port
+                 test/test_well_known_did_port.c)
+  target_link_libraries(test_metalbear_well_known_did_port
+                        PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_well_known_did_port
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_well_known_did_port
+          COMMAND test_metalbear_well_known_did_port)
+
   add_executable(test_metalbear_explicit_slurs test/test_explicit_slurs.c)
   target_link_libraries(test_metalbear_explicit_slurs PRIVATE metalbear_core)
   target_include_directories(test_metalbear_explicit_slurs
