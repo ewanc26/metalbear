@@ -19,6 +19,10 @@
 #                       the dialect, since the loader dispatches on extension)
 #   --open              allow registration without invite codes
 #   --dev               mark as a testing instance (says so on the landing page)
+#   --local             development instance on http://localhost:<port>: no
+#                       --hostname needed, did:web resolves over plain HTTP
+#                       (Wolfram special-cases the "localhost" host for this),
+#                       no crawler is announced to, and --dev is implied
 #   --operator <name>   operator name shown on the landing page
 #   --email <addr>      admin contact, published via describeServer
 #   --operator-url <u>  operator's own page
@@ -41,6 +45,7 @@ FORMAT="yaml"
 CONFIG_FILE_ARG=""
 INVITE_REQUIRED="true"
 DEVELOPMENT="false"
+LOCAL_DEV="false"
 OPERATOR_NAME=""
 OPERATOR_EMAIL=""
 OPERATOR_URL=""
@@ -59,6 +64,7 @@ while [ $# -gt 0 ]; do
 		--config)   CONFIG_FILE_ARG="${2:-}"; shift 2 ;;
 		--open)     INVITE_REQUIRED="false"; shift ;;
 		--dev)      DEVELOPMENT="true"; shift ;;
+		--local)    LOCAL_DEV="true"; DEVELOPMENT="true"; shift ;;
 		--operator) OPERATOR_NAME="${2:-}"; shift 2 ;;
 		--email)    OPERATOR_EMAIL="${2:-}"; shift 2 ;;
 		--operator-url) OPERATOR_URL="${2:-}"; shift 2 ;;
@@ -67,7 +73,7 @@ while [ $# -gt 0 ]; do
 		--dns-token)    DNS_TOKEN="${2:-}"; shift 2 ;;
 		--dns-zone)     DNS_ZONE="${2:-}"; shift 2 ;;
 		--no-start) START=0; shift ;;
-		-h|--help)  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help)  sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -77,13 +83,24 @@ case "$FORMAT" in
 	*) echo "error: --format must be 'yaml' or 'toml', got '$FORMAT'" >&2; exit 2 ;;
 esac
 
-if [ -z "$HOSTNAME_ARG" ]; then
-	echo "error: --hostname is required (e.g. --hostname pds.example.com)" >&2
-	exit 2
-fi
-
 say() { printf '\033[32m==>\033[0m %s\n' "$1"; }
 warn() { printf '\033[33m==>\033[0m %s\n' "$1" >&2; }
+
+if [ -z "$HOSTNAME_ARG" ]; then
+	if [ "$LOCAL_DEV" = "true" ]; then
+		HOSTNAME_ARG="localhost"
+	else
+		echo "error: --hostname is required (e.g. --hostname pds.example.com)" >&2
+		exit 2
+	fi
+fi
+
+# did:web's http fallback (Wolfram's did_web_build_url) only triggers for a
+# host that is exactly "localhost" or "localhost:<port>" -- a subdomain like
+# "pds.localhost" still resolves over https and needs its own TLS.
+if [ "$LOCAL_DEV" = "true" ] && [ "$HOSTNAME_ARG" != "localhost" ]; then
+	warn "--local with --hostname $HOSTNAME_ARG: did:web resolution stays https unless the hostname is exactly 'localhost'."
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -158,10 +175,93 @@ random_pw()  { openssl rand -base64 24 | tr -d '/+=' | cut -c1-24; }
 [ -n "$DNS_TOKEN" ] || DNS_TOKEN="$(keep METALBEAR_DNS_API_TOKEN api_token)"
 [ -n "$DNS_ZONE" ]  || DNS_ZONE="$(keep METALBEAR_DNS_ZONE_ID zone_id)"
 
-PLC_KEY="$(keep METALBEAR_PLC_ROTATION_KEY plc_rotation_key)"
 ADMIN_PW="$(keep METALBEAR_ADMIN_PASSWORD admin_password)"
-[ -n "$PLC_KEY" ] || { PLC_KEY="$(random_hex 32)"; NEW_PLC=1; }
 [ -n "$ADMIN_PW" ] || { ADMIN_PW="$(random_pw)"; NEW_ADMIN=1; }
+
+# A local dev instance has no identity.plc_url, so createAccount mints a
+# self-certifying did:key instead of a did:plc (account_routes.c falls back
+# to did:key precisely when plc_url is unset) -- no PLC rotation key is ever
+# used, and generating one would just be a secret to lose track of. Skipping
+# plc_url here is also what keeps account creation from reaching the live
+# PLC directory at all: a did:plc genesis operation is a permanent, public
+# write to a production registry that a throwaway dev account has no
+# business making.
+if [ "$LOCAL_DEV" != "true" ]; then
+	PLC_KEY="$(keep METALBEAR_PLC_ROTATION_KEY plc_rotation_key)"
+	[ -n "$PLC_KEY" ] || { PLC_KEY="$(random_hex 32)"; NEW_PLC=1; }
+fi
+
+# A local dev instance is addressed directly at http://<host>:<port> --
+# there's no reverse proxy terminating TLS in front of it -- so the DID and
+# public URL must say so explicitly rather than deriving the usual
+# https://<host> shape. did:web percent-encodes the port as %3A.
+if [ "$LOCAL_DEV" = "true" ]; then
+	SERVICE_DID="did:web:${HOSTNAME_ARG}%3A${PORT}"
+	PUBLIC_URL="http://${HOSTNAME_ARG}:${PORT}"
+	IDENTITY_YAML='identity:
+  # No plc_url: accounts mint a self-certifying did:key instead of a
+  # did:plc, so account creation never reaches the live PLC directory. Set
+  # plc_url (and rerun without --local) to test did:plc for real.
+  did_cache_ttl_seconds: 300
+  did_cache_entries: 64'
+	IDENTITY_TOML='[identity]
+# No plc_url: accounts mint a self-certifying did:key instead of a
+# did:plc, so account creation never reaches the live PLC directory. Set
+# plc_url (and rerun without --local) to test did:plc for real.
+did_cache_ttl_seconds = 300
+did_cache_entries     = 64'
+	FIREHOSE_YAML='firehose:
+  # A local dev instance is not meant to federate, so no crawler is announced
+  # to. Add one back (e.g. crawlers: ["https://bsky.network"]) if this host
+  # needs to reach a real relay.
+  crawl_notify_seconds: 1200
+  ping_seconds: 20
+  retention_max_age_seconds: 2592000
+  retention_min_events: 1000'
+	FIREHOSE_TOML='[firehose]
+# A local dev instance is not meant to federate, so no crawler is announced
+# to. Add one back (e.g. crawlers = ["https://bsky.network"]) if this host
+# needs to reach a real relay.
+crawl_notify_seconds = 1200
+ping_seconds         = 20
+retention_max_age_seconds = 2592000
+retention_min_events      = 1000'
+else
+	SERVICE_DID="did:web:${HOSTNAME_ARG}"
+	PUBLIC_URL="https://${HOSTNAME_ARG}"
+	IDENTITY_YAML='identity:
+  plc_url: "https://plc.directory"
+
+  # Signs the genesis PLC operation for every DID this host mints. Losing it
+  # orphans those DIDs: their operations cannot be updated without it.
+  plc_rotation_key: "'"${PLC_KEY}"'"
+
+  did_cache_ttl_seconds: 300
+  did_cache_entries: 64'
+	IDENTITY_TOML='[identity]
+plc_url = "https://plc.directory"
+
+# Signs the genesis PLC operation for every DID this host mints. Losing it
+# orphans those DIDs: their operations cannot be updated without it.
+plc_rotation_key = "'"${PLC_KEY}"'"
+
+did_cache_ttl_seconds = 300
+did_cache_entries     = 64'
+	FIREHOSE_YAML='firehose:
+  # Without a crawler a quiet host is never crawled and never federates.
+  crawlers: ["https://bsky.network"]
+  crawl_notify_seconds: 1200
+  ping_seconds: 20
+  retention_max_age_seconds: 2592000
+  retention_min_events: 1000'
+	FIREHOSE_TOML='[firehose]
+# Without a crawler a quiet host is never crawled and never federates.
+crawlers             = ["https://bsky.network"]
+crawl_notify_seconds = 1200
+ping_seconds         = 20
+retention_max_age_seconds = 2592000
+retention_min_events      = 1000'
+fi
 
 say "Writing $CONFIG_FILE ($FORMAT)"
 umask 077
@@ -178,8 +278,8 @@ server:
   port: ${PORT}
   threads: 4
   data: "${DATA_DIR}"
-  service_did: "did:web:${HOSTNAME_ARG}"
-  public_url: "https://${HOSTNAME_ARG}"
+  service_did: "${SERVICE_DID}"
+  public_url: "${PUBLIC_URL}"
   user_domain: ".${HOSTNAME_ARG}"
 
 operator:
@@ -194,15 +294,7 @@ operator:
   # Marks a testing instance; the landing page says so plainly.
   development: ${DEVELOPMENT}
 
-identity:
-  plc_url: "https://plc.directory"
-
-  # Signs the genesis PLC operation for every DID this host mints. Losing it
-  # orphans those DIDs: their operations cannot be updated without it.
-  plc_rotation_key: "${PLC_KEY}"
-
-  did_cache_ttl_seconds: 300
-  did_cache_entries: 64
+${IDENTITY_YAML}
 
 accounts:
   # HTTP Basic 'admin:<password>' for admin endpoints, including invite codes.
@@ -216,13 +308,7 @@ limits:
   rate_limit_window_seconds: 60
   blob_upload_bytes: 5242880
 
-firehose:
-  # Without a crawler a quiet host is never crawled and never federates.
-  crawlers: ["https://bsky.network"]
-  crawl_notify_seconds: 1200
-  ping_seconds: 20
-  retention_max_age_seconds: 2592000
-  retention_min_events: 1000
+${FIREHOSE_YAML}
 
 appview:
   url: "https://api.bsky.app"
@@ -241,8 +327,8 @@ listen      = "127.0.0.1"
 port        = ${PORT}
 threads     = 4
 data        = "${DATA_DIR}"
-service_did = "did:web:${HOSTNAME_ARG}"
-public_url  = "https://${HOSTNAME_ARG}"
+service_did = "${SERVICE_DID}"
+public_url  = "${PUBLIC_URL}"
 user_domain = ".${HOSTNAME_ARG}"
 
 [operator]
@@ -257,15 +343,7 @@ description = "${INSTANCE_DESC}"
 # Marks a testing instance; the landing page says so plainly.
 development = ${DEVELOPMENT}
 
-[identity]
-plc_url = "https://plc.directory"
-
-# Signs the genesis PLC operation for every DID this host mints. Losing it
-# orphans those DIDs: their operations cannot be updated without it.
-plc_rotation_key = "${PLC_KEY}"
-
-did_cache_ttl_seconds = 300
-did_cache_entries     = 64
+${IDENTITY_TOML}
 
 [accounts]
 # HTTP Basic 'admin:<password>' for admin endpoints, including invite codes.
@@ -279,13 +357,7 @@ rate_limit                = 3000
 rate_limit_window_seconds = 60
 blob_upload_bytes         = 5242880
 
-[firehose]
-# Without a crawler a quiet host is never crawled and never federates.
-crawlers             = ["https://bsky.network"]
-crawl_notify_seconds = 1200
-ping_seconds         = 20
-retention_max_age_seconds = 2592000
-retention_min_events      = 1000
+${FIREHOSE_TOML}
 
 [appview]
 url = "https://api.bsky.app"
@@ -359,15 +431,41 @@ if ! curl -sf "http://127.0.0.1:${PORT}/xrpc/_health" >/dev/null 2>&1; then
 	exit 1
 fi
 
-if [ -n "$DNS_TOKEN" ] && [ -n "$DNS_ZONE" ]; then
-	DNS_NOTE="Handle TXT records are written automatically on account creation."
+say "Healthy: $(curl -s "http://127.0.0.1:${PORT}/xrpc/_health")"
+
+if [ "$LOCAL_DEV" = "true" ]; then
+cat <<EOF
+
+Next steps
+  1. This is a local dev instance: no TLS, no DNS, no crawler. Talk to it
+     directly at ${PUBLIC_URL}.
+  2. Create the first account:
+
+     CODE=\$(curl -sS -u "admin:${ADMIN_PW}" -X POST \\
+       -H 'Content-Type: application/json' --data '{"useCount":1}' \\
+       ${PUBLIC_URL}/xrpc/com.atproto.server.createInviteCode \\
+       | sed -E 's/.*"code":"([^"]+)".*/\\1/')
+
+     curl -sS -X POST -H 'Content-Type: application/json' --data \\
+       "{\\"handle\\":\\"you.${HOSTNAME_ARG}\\",\\"email\\":\\"you@example.com\\",
+         \\"password\\":\\"...\\",\\"inviteCode\\":\\"\$CODE\\"}" \\
+       ${PUBLIC_URL}/xrpc/com.atproto.server.createAccount
+
+  3. Point your client's PDS URL at ${PUBLIC_URL}. Handle and DID resolution
+     for accounts on this host stay local -- no DNS or plc.directory lookup
+     leaves the machine -- so an app that insists on resolving over the open
+     network (rather than asking this PDS directly) will not find them.
+
+EOF
 else
-	DNS_NOTE="Handles under .${HOSTNAME_ARG} need a DNS TXT record to resolve:
+	if [ -n "$DNS_TOKEN" ] && [ -n "$DNS_ZONE" ]; then
+		DNS_NOTE="Handle TXT records are written automatically on account creation."
+	else
+		DNS_NOTE="Handles under .${HOSTNAME_ARG} need a DNS TXT record to resolve:
        _atproto.you.${HOSTNAME_ARG}  TXT  \"did=did:plc:...\"
      Pass --dns-token and --dns-zone to have MetalBear write them."
-fi
+	fi
 
-say "Healthy: $(curl -s "http://127.0.0.1:${PORT}/xrpc/_health")"
 cat <<EOF
 
 Next steps
@@ -392,5 +490,6 @@ Next steps
      seq -1 means registered but never consumed; a rising seq means federating.
 
 EOF
+fi
 
 wait $PID
