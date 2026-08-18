@@ -10,3 +10,7 @@ config.yaml
 config.yml
 bear.yml
 metalbear.env
+
+# IDE
+.vscode/
+frontend/.vscode/
