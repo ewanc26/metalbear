@@ -11,7 +11,7 @@ follows, or the deployment it unblocks. Link the issue if there is one.
       and schema conformance
 - [ ] Tests clean up every SQLite file and blob directory they create
 - [ ] Commits are atomic and conventional (`feat(server)`, `fix(auth)`, `docs(readme)`)
-- [ ] No `Co-authored-by:` trailer crediting an AI agent
+- [ ] `Co-authored-by:` trailers accurately reflect all contributors, human and AI
 - [ ] No secrets, live credentials, signing keys, or PDS data in the diff
 - [ ] Docs updated if behaviour or configuration changed
 
