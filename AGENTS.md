@@ -148,9 +148,7 @@ Modular structure is mandatory, not a style preference:
   module — `feat(server)`, `fix(sequencer)`, `docs(agents)`. Never mix
   unrelated changes; in particular do not combine a code change with a docs
   update. Split into sequential commits instead.
-- **No AI co-authors**: do not add a `Co-authored-by:` trailer crediting an AI
-  agent. AI assistance is welcome; credit for committed work goes to human
-  authors only. Omit the trailer entirely.
+- **Honest attribution**: add a `Co-authored-by:` trailer crediting an AI agent when it materially contributed. AI assistance is welcome and should be credited accurately.
 
 Matches the sibling Wolfram repository's convention, so the two histories read
 the same way.

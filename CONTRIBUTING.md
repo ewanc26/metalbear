@@ -14,7 +14,7 @@ sibling Wolfram SDK. C is the default language for all new code; C++ is permitte
 
 - Follow the surrounding file's indentation and brace style.
 - Atomic conventional commits: every commit must contain exactly one logical change. Scope by module — `feat(server)`, `fix(auth)`, `docs(readme)`, etc.
-- No AI co-authors: commits must not add a `Co-authored-by:` trailer crediting an AI agent.
+- Honest attribution: commits may add a `Co-authored-by:` trailer crediting an AI agent when it materially contributed.
 
 ## Development workflow
 
