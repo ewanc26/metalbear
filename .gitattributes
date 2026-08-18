@@ -1,0 +1,12 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+
+# Lockfiles
+**/package-lock.json linguist-generated
+
+# Agent / tooling configuration
+**/.agents/** linguist-vendored
+.claude/** linguist-vendored
+.opencode/** linguist-vendored
+.letta/** linguist-vendored
