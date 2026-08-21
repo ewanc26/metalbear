@@ -374,6 +374,21 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_proxy COMMAND test_metalbear_proxy)
 
+  add_executable(test_metalbear_appview_route_classification
+                 test/test_appview_route_classification.c)
+  target_link_libraries(test_metalbear_appview_route_classification
+                        PRIVATE metalbear_core Threads::Threads)
+  target_include_directories(test_metalbear_appview_route_classification
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_appview_route_classification
+          COMMAND test_metalbear_appview_route_classification)
+
+  # THROWAWAY -- adversarial concurrency review, remove before finishing.
+  add_executable(test_metalbear_seq_shutdown_race
+                 test/test_seq_shutdown_race.c)
+  target_link_libraries(test_metalbear_seq_shutdown_race
+                        PRIVATE metalbear_core Threads::Threads)
+
   add_executable(test_metalbear_oauth_device_session
                  test/test_oauth_device_session.c)
   target_link_libraries(test_metalbear_oauth_device_session
