@@ -1010,18 +1010,14 @@ wf_status appview_get_starter_packs(void *ctx, const wf_xrpc_request *req,
 wf_status appview_get_unread_notifications(void *ctx,
                                            const wf_xrpc_request *req,
                                            wf_xrpc_response *resp) {
-    (void)ctx;
-    (void)req;
-    // Return empty unread count for public AppView; local AppView can be
-    // implemented later
-    cJSON *root = cJSON_CreateObject();
-    if (!root) {
-        wf_xrpc_response_set_error(resp, 500, "InternalError",
-                                   "Failed to create response");
-        return WF_OK;
-    }
-    cJSON_AddNumberToObject(root, "count", 0);
-    return set_json(resp, root);
+    /* Notification state lives entirely on the AppView (it's computed from
+     * the firehose, not stored as a PDS record), so this has to proxy like
+     * listNotifications does -- there is no local answer to "return". A
+     * hardcoded {"count":0} used to sit here: a real client polling this for
+     * an unread badge would see a permanent, silent "0" regardless of actual
+     * state, which is exactly the fabricated-success AGENTS.md forbids for a
+     * stub, just without the honesty of an error. */
+    return appview_private(ctx, req, resp);
 }
 wf_status appview_get_notifications(void *ctx, const wf_xrpc_request *req,
                                     wf_xrpc_response *resp) {
