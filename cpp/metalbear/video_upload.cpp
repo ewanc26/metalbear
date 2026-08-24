@@ -237,15 +237,13 @@ assemble_upload(metalbear_video_upload_store *store,
     assembled = (job_directory / "assembled.tmp").string();
     std::FILE *output = std::fopen(assembled.c_str(), "wb");
     if (!output) return METALBEAR_VIDEO_UPLOAD_SERVICE_OVERLOADED;
-    wf_cid_hasher *hasher = wf_cid_hasher_new();
-    if (!hasher) {
-        std::fclose(output);
-        std::remove(assembled.c_str());
-        return METALBEAR_VIDEO_UPLOAD_INTERNAL;
-    }
     std::array<unsigned char, 64 * 1024> buffer{};
     uint64_t total = 0;
     bool valid_header = false;
+    /* The local wolfram dropped the streaming wf_cid_hasher API; accumulate the
+     * assembled bytes and compute the raw CID with wf_cid_of_bytes at the end
+     * (identical result to the old incremental hasher). */
+    std::string assembled_bytes;
     metalbear_video_upload_result result = METALBEAR_VIDEO_UPLOAD_OK;
     for (uint32_t part = 1; part <= status.part_count; ++part) {
         char filename[32]{};
@@ -265,11 +263,12 @@ assemble_upload(metalbear_video_upload_store *store,
                         std::memcmp(buffer.data() + 4, "ftyp", 4) == 0;
                 if (total > status.size_bytes ||
                     got > status.size_bytes - total ||
-                    std::fwrite(buffer.data(), 1, got, output) != got ||
-                    wf_cid_hasher_update(hasher, buffer.data(), got) != WF_OK) {
+                    std::fwrite(buffer.data(), 1, got, output) != got) {
                     result = METALBEAR_VIDEO_UPLOAD_INTERNAL;
                     break;
                 }
+                assembled_bytes.append(
+                    reinterpret_cast<const char *>(buffer.data()), got);
                 total += got;
             }
             if (got < buffer.size()) {
@@ -290,7 +289,9 @@ assemble_upload(metalbear_video_upload_store *store,
         result = METALBEAR_VIDEO_UPLOAD_UNSUPPORTED_CONTENT_TYPE;
     wf_cid cid{};
     if (result == METALBEAR_VIDEO_UPLOAD_OK &&
-        wf_cid_hasher_finish_raw(hasher, &cid) == WF_OK) {
+        wf_cid_of_bytes(
+            reinterpret_cast<const unsigned char *>(assembled_bytes.data()),
+            assembled_bytes.size(), &cid) == WF_OK) {
         char *encoded = wf_cid_to_string(&cid);
         if (encoded) {
             cid_string = encoded;
@@ -301,7 +302,6 @@ assemble_upload(metalbear_video_upload_store *store,
     } else if (result == METALBEAR_VIDEO_UPLOAD_OK) {
         result = METALBEAR_VIDEO_UPLOAD_INTERNAL;
     }
-    wf_cid_hasher_free(hasher);
     if (result != METALBEAR_VIDEO_UPLOAD_OK) std::remove(assembled.c_str());
     return result;
 }
