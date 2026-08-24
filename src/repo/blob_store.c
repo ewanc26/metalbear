@@ -275,6 +275,41 @@ static wf_status blob_write_file(const char *path, const void *data,
     return ok ? WF_OK : WF_ERR_INTERNAL;
 }
 
+static wf_status blob_copy_file(const char *source_path, const char *dest_path,
+                                size_t expected_len) {
+    FILE *source = fopen(source_path, "rb");
+    if (!source) return WF_ERR_NOT_FOUND;
+    FILE *dest = fopen(dest_path, "wb");
+    if (!dest) {
+        fclose(source);
+        return WF_ERR_INTERNAL;
+    }
+    unsigned char buffer[64 * 1024];
+    size_t total = 0;
+    bool ok = true;
+    while (ok) {
+        size_t got = fread(buffer, 1, sizeof(buffer), source);
+        if (got > 0) {
+            if (total > expected_len || got > expected_len - total ||
+                fwrite(buffer, 1, got, dest) != got) {
+                ok = false;
+                break;
+            }
+            total += got;
+        }
+        if (got < sizeof(buffer)) {
+            if (ferror(source)) ok = false;
+            break;
+        }
+    }
+    if (total != expected_len) ok = false;
+    if (fflush(dest) != 0) ok = false;
+    if (fclose(dest) != 0) ok = false;
+    if (fclose(source) != 0) ok = false;
+    if (!ok) (void)remove(dest_path);
+    return ok ? WF_OK : WF_ERR_INTERNAL;
+}
+
 /* Persist payload and MIME bytes before publishing their metadata in the
  * in-memory index. Temporary files keep readers from observing partial
  * writes; callers hold store->mutex while this runs. */
@@ -511,6 +546,90 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
     persist_rev(store, store->head); /* push inserts at head */
     pthread_mutex_unlock(&store->mutex);
     return WF_OK;
+}
+
+wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
+                                        const char *cid,
+                                        const char *mime_type,
+                                        const char *source_path,
+                                        size_t expected_len) {
+    if (!store || !blob_cid_is_valid(cid) || !mime_type || !source_path)
+        return WF_ERR_INVALID_ARG;
+
+    if (!store->file_backed) {
+        unsigned char *data = NULL;
+        size_t len = 0;
+        wf_status st = blob_read_file(source_path, &data, &len);
+        if (st != WF_OK) return st;
+        if (len != expected_len) {
+            free(data);
+            return WF_ERR_INVALID_ARG;
+        }
+        st = metalbear_blob_store_put(store, cid, mime_type, data, len);
+        free(data);
+        return st;
+    }
+
+    char *cid_copy = strdup(cid);
+    char *mime_copy = strdup(mime_type);
+    if (!cid_copy || !mime_copy) {
+        free(cid_copy);
+        free(mime_copy);
+        return WF_ERR_ALLOC;
+    }
+
+    pthread_mutex_lock(&store->mutex);
+    char *datap = blob_path(store->dir, cid);
+    char *mimep = blob_sidecar_path(store->dir, cid, ".mime");
+    char *data_tmp = blob_sidecar_path(store->dir, cid, ".tmp");
+    char *mime_tmp = blob_sidecar_path(store->dir, cid, ".mime.tmp");
+    wf_status st = (!datap || !mimep || !data_tmp || !mime_tmp)
+                       ? WF_ERR_ALLOC
+                       : WF_OK;
+    if (st == WF_OK) {
+        (void)remove(data_tmp);
+        (void)remove(mime_tmp);
+        st = blob_copy_file(source_path, data_tmp, expected_len);
+    }
+    if (st == WF_OK)
+        st = blob_write_file(mime_tmp, mime_type, strlen(mime_type));
+    if (st == WF_OK && rename(data_tmp, datap) != 0) st = WF_ERR_INTERNAL;
+    if (st == WF_OK && rename(mime_tmp, mimep) != 0) st = WF_ERR_INTERNAL;
+    if (st != WF_OK) {
+        if (data_tmp) (void)remove(data_tmp);
+        if (mime_tmp) (void)remove(mime_tmp);
+        free(cid_copy);
+        free(mime_copy);
+    } else {
+        metalbear_blob_node *node = blob_node_find(store, cid);
+        if (node) {
+            free(node->mime);
+            node->mime = mime_copy;
+            node->len = expected_len;
+            free(cid_copy);
+            if (node->rev[0] == '\0') {
+                blob_tid_now(node->rev);
+                persist_rev(store, node);
+            }
+        } else {
+            char rev[15];
+            blob_tid_now(rev);
+            st = blob_node_push(store, cid_copy, mime_copy, NULL,
+                                expected_len, rev);
+            if (st == WF_OK) {
+                persist_rev(store, store->head);
+            } else {
+                if (datap) (void)remove(datap);
+                if (mimep) (void)remove(mimep);
+            }
+        }
+    }
+    free(datap);
+    free(mimep);
+    free(data_tmp);
+    free(mime_tmp);
+    pthread_mutex_unlock(&store->mutex);
+    return st;
 }
 
 wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
