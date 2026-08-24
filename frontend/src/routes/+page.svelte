@@ -46,7 +46,7 @@
 	<title>MetalBear{hostname ? ` — ${hostname}` : ''}</title>
 	<meta
 		name="description"
-		content="A Personal Data Server for the AT Protocol, written in pure C23."
+		content="A C23-first Personal Data Server for the AT Protocol with isolated C++ modules."
 	/>
 </svelte:head>
 
