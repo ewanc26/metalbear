@@ -458,11 +458,18 @@ static wf_status video_upload_part_begin(void *ctx,
                                          void **out_stream_ctx,
                                          wf_xrpc_response *response) {
     metalbear_server *server = ctx;
+#ifdef WF_XRPC_SERVER_HAS_STREAMING_PROCEDURES
     if (!request->has_content_length) {
         wf_xrpc_response_set_error(response, 411, "PartSizeMismatch",
                                    "Content-Length is required");
         return WF_OK;
     }
+    uint64_t content_length = request->content_length;
+#else
+    /* Older Wolfram releases buffer procedures before dispatch. Their exact
+     * buffered length is the best available Content-Length equivalent. */
+    uint64_t content_length = request->body_len;
+#endif
     if (!request->content_type ||
         strcmp(request->content_type, "application/octet-stream") != 0) {
         wf_xrpc_response_set_error(
@@ -487,14 +494,14 @@ static wf_status video_upload_part_begin(void *ctx,
     video_part_stream *stream = calloc(1, sizeof(*stream));
     if (!stream) return WF_ERR_ALLOC;
     metalbear_video_upload_result result = metalbear_video_upload_part_begin(
-        acct->video_uploads, job_id, (uint32_t)part_number,
-        request->content_length, &stream->writer);
+        acct->video_uploads, job_id, (uint32_t)part_number, content_length,
+        &stream->writer);
     if (result != METALBEAR_VIDEO_UPLOAD_OK) {
         free(stream);
         return upload_error(response, result, NULL);
     }
     stream->part_number = (uint32_t)part_number;
-    stream->size_bytes = request->content_length;
+    stream->size_bytes = content_length;
     *out_stream_ctx = stream;
     return WF_OK;
 }
@@ -537,9 +544,28 @@ static void video_upload_part_cleanup(void *ctx, void *stream_ctx,
     free(stream);
 }
 
+#ifdef WF_XRPC_SERVER_HAS_STREAMING_PROCEDURES
 const wf_xrpc_streaming_procedure_handler video_upload_part_handler = {
     video_upload_part_begin, video_upload_part_write, video_upload_part_finish,
     video_upload_part_cleanup};
+#else
+wf_status video_upload_part(void *ctx, const wf_xrpc_request *request,
+                            wf_xrpc_response *response) {
+    void *stream_ctx = NULL;
+    wf_status status =
+        video_upload_part_begin(ctx, request, &stream_ctx, response);
+    bool completed = false;
+    if (status == WF_OK && stream_ctx && request->body_len > 0)
+        status = video_upload_part_write(ctx, stream_ctx, request->body,
+                                         request->body_len, response);
+    if (status == WF_OK && stream_ctx && !response->body) {
+        status = video_upload_part_finish(ctx, stream_ctx, response);
+        completed = true;
+    }
+    video_upload_part_cleanup(ctx, stream_ctx, completed);
+    return status;
+}
+#endif
 
 wf_status video_finish_upload(void *ctx, const wf_xrpc_request *request,
                               wf_xrpc_response *response) {
