@@ -59,6 +59,11 @@ export interface OperatorInfo {
 		repository?: string;
 		license?: string;
 	};
+	capabilities?: {
+		multipartVideoUpload?: boolean;
+		maxVideoBytes?: number;
+		videoPartBytes?: number;
+	};
 	description?: string;
 	development?: boolean;
 }
