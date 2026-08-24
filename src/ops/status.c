@@ -152,24 +152,10 @@ static void render_route(void *ctx, const char *route, uint64_t requests,
 
 #ifdef WF_XRPC_HAS_REQUEST_OBSERVER
 /*
- * Every finished request, with the status it answered.
- *
- * Counted here rather than in the auth callback, which is where the totals
- * used to come from: that callback runs before the status is known, never
- * runs for the plain HTTP routes, and never runs for a request the rate
- * limiter refused — so the old totals were a subset that could not be named
- * and carried no outcome at all.
+ * Per-route request/error counters are recorded by the server's single
+ * request observer (account_cache_request_observer in server.c), which is the
+ * one wolfram observer slot this process gets; they are emitted here.
  */
-static void observe_request(void *ctx, const char *nsid, const char *path,
-                            const char *method, unsigned int status) {
-    (void)ctx;
-    (void)method;
-    metalbear_metrics_inc(METALBEAR_METRIC_REQUESTS);
-    if (status >= 400) metalbear_metrics_inc(METALBEAR_METRIC_REQUESTS_FAILED);
-    metalbear_metrics_record_request(nsid, path, status);
-}
-#endif
-
 static wf_status metrics_handler(void *ctx, const wf_xrpc_request *req,
                                  wf_xrpc_response *resp) {
     metalbear_server *server = ctx;
@@ -634,6 +620,7 @@ static wf_status debug_health_handler(void *ctx, const wf_xrpc_request *req,
 
     return set_json(resp, root);
 }
+#endif
 
 wf_status metalbear_status_register(metalbear_server *server) {
     wf_status status = wf_xrpc_server_register_http_route(
@@ -645,11 +632,5 @@ wf_status metalbear_status_register(metalbear_server *server) {
     status = wf_xrpc_server_register_http_route(server->xrpc, "GET", "/",
                                                 landing_handler, server);
     if (status != WF_OK) return status;
-#ifdef WF_XRPC_HAS_REQUEST_OBSERVER
-    /* Guarded so this still builds against a Wolfram without the observer;
-     * without it the per-route breakdown is simply absent rather than the
-     * build being broken. */
-    wf_xrpc_server_set_request_observer(server->xrpc, observe_request, server);
-#endif
     return WF_OK;
 }

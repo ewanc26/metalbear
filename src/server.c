@@ -438,18 +438,21 @@ metalbear_account_context *resolve_request_context(metalbear_server *server,
 }
 
 /* XRPC request observer: fires once per request after the handler returns, on
- * the worker thread that served it. Every account context resolved on the
- * request path was acquired (refcounted) by metalbear_account_cache_get; drop
- * them all here so the cache can evict idle accounts under its resident
- * budget. Called for every request, so handlers never release by hand. */
+ * the worker thread that served it. Wolfram exposes a single observer slot, so
+ * this one backs both responsibilities:
+ *  - drop every account context acquired on the request path (refcounted by
+ *    metalbear_account_cache_get) so the bounded cache can evict idle accounts;
+ *  - record per-route request/error counters.
+ * Called for every request, so handlers never release by hand. */
 static void account_cache_request_observer(void *ctx, const char *nsid,
                                            const char *path, const char *method,
                                            unsigned int status) {
-    (void)nsid;
-    (void)path;
+    (void)ctx;
     (void)method;
-    (void)status;
     metalbear_account_cache_release_thread_local();
+    metalbear_metrics_inc(METALBEAR_METRIC_REQUESTS);
+    if (status >= 400) metalbear_metrics_inc(METALBEAR_METRIC_REQUESTS_FAILED);
+    metalbear_metrics_record_request(nsid, path, status);
 }
 
 /* wolfram per-request resolver: map a request to the correct account's repo /
