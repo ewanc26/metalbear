@@ -60,6 +60,12 @@ did_cache_entries     = 64
 # com.atproto.server.createInviteCode, which is admin-authenticated.
 invite_required = true
 
+# Caps the number of open account contexts (repo + auth + blob stores) the
+# cache holds at once; idle ones are evicted past it so a small host does not
+# hold every account open forever. 0 keeps the conservative default.
+# METALBEAR_MAX_RESIDENT_ACCOUNTS overrides this at runtime, and wins.
+max_resident_accounts = 0
+
 [limits]
 # Per-client request budget: requests per window. The historical 100/60 is under
 # two requests a second, which one AppView or a relay backfilling with getRepo
