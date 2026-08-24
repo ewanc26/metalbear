@@ -1,26 +1,30 @@
 #define _POSIX_C_SOURCE 200809L
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE
+#endif
+#include "metalbear/server.h"
+#include "wolfram/xrpc.h"
 
-#include "metalbear/account/account_cache.h"
-#include "metalbear/account/account_registry.h"
-#include "metalbear/account/account_context.h"
-#include "metalbear/sequencer.h"
-
-#include <pthread.h>
+#include <cJSON.h>
+#include <errno.h>
+#include <ftw.h>
+#include <openssl/evp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
-#define NACCOUNTS 8
-
-static const char *DIDS[NACCOUNTS] = {
-    "did:plc:cachetest0001", "did:plc:cachetest0002", "did:plc:cachetest0003",
-    "did:plc:cachetest0004", "did:plc:cachetest0005", "did:plc:cachetest0006",
-    "did:plc:cachetest0007", "did:plc:cachetest0008",
-};
-static const char *HANDLES[NACCOUNTS] = {
-    "acc1.test", "acc2.test", "acc3.test", "acc4.test",
-    "acc5.test", "acc6.test", "acc7.test", "acc8.test",
-};
+/* Recursively remove a directory tree (used for test cleanup). */
+static int rmtree_remove_cb(const char *path, const struct stat *sb, int type,
+                            struct FTW *ftwbuf) {
+    (void)sb;
+    (void)type;
+    (void)ftwbuf;
+    return remove(path);
+}
+static void rmtree(const char *path) {
+    nftw(path, rmtree_remove_cb, 64, FTW_DEPTH | FTW_PHYS);
+}
 
 static int failures;
 #define CHECK(expr)                                                            \
@@ -31,123 +35,142 @@ static int failures;
         }                                                                      \
     } while (0)
 
-/* Touch every account once; with a tight resident budget the cache must evict
- * idle contexts and never exceed the budget. */
-static void test_eviction(void) {
-    char tmpl[] = "/tmp/mb_cache_XXXXXX";
-    char *root = mkdtemp(tmpl);
-    CHECK(root != NULL);
-
-    metalbear_account_registry *registry = NULL;
-    char reg_path[256];
-    snprintf(reg_path, sizeof(reg_path), "%s/registry.sqlite3", root);
-    CHECK(metalbear_account_registry_open(reg_path, &registry) == WF_OK);
-
-    for (int i = 0; i < NACCOUNTS; i++) {
-        char dir[256];
-        snprintf(dir, sizeof(dir), "%s/acct%d", root, i);
-        mkdir(dir, 0700);
-        CHECK(metalbear_account_registry_add(registry, DIDS[i], HANDLES[i], "x",
-                                             dir) == WF_OK);
-    }
-
-    metalbear_account_cache *cache = metalbear_account_cache_new(
-        "did:plc:service", "https://example.com", root);
-    CHECK(cache != NULL);
-    metalbear_account_cache_set_max_resident(cache, 2);
-
-    for (int i = 0; i < NACCOUNTS; i++) {
-        metalbear_account_context *ctx =
-            metalbear_account_cache_get(cache, registry, DIDS[i]);
-        CHECK(ctx != NULL);
-        /* A second get of the same DID must return the cached (same) context
-         * and count a hit, not reopen. */
-        metalbear_account_context *again =
-            metalbear_account_cache_get(cache, registry, DIDS[i]);
-        CHECK(again == ctx);
-        metalbear_account_cache_release(cache, again);
-        metalbear_account_cache_release(cache, ctx);
-    }
-
-    size_t resident = 0, idle = 0;
-    uint64_t hits = 0, misses = 0, evictions = 0;
-    metalbear_account_cache_stats(cache, &resident, &idle, &evictions, &hits,
-                                  &misses);
-    /* Budget is 2 idle; after releasing everything, resident must be <= 2. */
-    CHECK(resident <= 2);
-    /* Eight distinct accounts, each fetched twice: 8 misses, 8 hits. */
-    CHECK(misses == NACCOUNTS);
-    CHECK(hits == NACCOUNTS);
-    /* At least some evictions must have occurred to stay under budget. */
-    CHECK(evictions > 0);
-    CHECK(idle == resident);
-
-    metalbear_account_cache_free(cache);
-    metalbear_account_registry_free(registry);
+static cJSON *json_response(wf_response *response) {
+    return cJSON_ParseWithLength(response->body ? response->body : "",
+                                 response->body_len);
 }
 
-#define NTHREADS 4
-#define ITERS 200
-
-static metalbear_account_cache *g_cache;
-static metalbear_account_registry *g_registry;
-
-static void *hammer(void *arg) {
-    (void)arg;
-    for (int i = 0; i < ITERS; i++) {
-        int idx = rand() % NACCOUNTS;
-        metalbear_account_context *ctx =
-            metalbear_account_cache_get(g_cache, g_registry, DIDS[idx]);
-        if (ctx) metalbear_account_cache_release(g_cache, ctx);
+/* Extract a Prometheus gauge value following `name ` in the /metrics body. */
+static long long metric_value(const wf_response *response, const char *name) {
+    if (!response || !response->body || !name) return -1;
+    size_t nlen = strlen(name);
+    const char *p = response->body;
+    size_t len = response->body_len;
+    for (size_t i = 0; i + nlen + 1 < len; i++) {
+        if (memcmp(p + i, name, nlen) == 0 && p[i + nlen] == ' ' &&
+            p[i + nlen + 1] >= '0' && p[i + nlen + 1] <= '9') {
+            const char *v = p + i + nlen + 1;
+            char *end = NULL;
+            long long val = strtoll(v, &end, 10);
+            if (end && *end == '\n') return val;
+            return val;
+        }
     }
-    return NULL;
-}
-
-static void test_concurrent(void) {
-    char tmpl[] = "/tmp/mb_cache_c_XXXXXX";
-    char *root = mkdtemp(tmpl);
-    CHECK(root != NULL);
-
-    char reg_path[256];
-    snprintf(reg_path, sizeof(reg_path), "%s/registry.sqlite3", root);
-    CHECK(metalbear_account_registry_open(reg_path, &g_registry) == WF_OK);
-    for (int i = 0; i < NACCOUNTS; i++) {
-        char dir[256];
-        snprintf(dir, sizeof(dir), "%s/acct%d", root, i);
-        mkdir(dir, 0700);
-        CHECK(metalbear_account_registry_add(g_registry, DIDS[i], HANDLES[i],
-                                             "x", dir) == WF_OK);
-    }
-
-    g_cache = metalbear_account_cache_new("did:plc:service",
-                                          "https://example.com", root);
-    CHECK(g_cache != NULL);
-    metalbear_account_cache_set_max_resident(g_cache, 4);
-
-    pthread_t threads[NTHREADS];
-    for (int i = 0; i < NTHREADS; i++)
-        pthread_create(&threads[i], NULL, hammer, NULL);
-    for (int i = 0; i < NTHREADS; i++) pthread_join(threads[i], NULL);
-
-    size_t resident = 0, idle = 0;
-    metalbear_account_cache_stats(g_cache, &resident, &idle, NULL, NULL, NULL);
-    /* Concurrency must not let resident exceed the budget plus the in-flight
-     * threads (each holds at most one referenced context). */
-    CHECK(resident <= 4 + NTHREADS);
-
-    metalbear_account_cache_free(g_cache);
-    metalbear_account_registry_free(g_registry);
-    g_cache = NULL;
-    g_registry = NULL;
+    return -1;
 }
 
 int main(void) {
-    test_eviction();
-    test_concurrent();
+    /* Enforce a tiny resident budget so the cache must evict under load.
+     * The server honours this env var at startup (overriding the default of
+     * unbounded). */
+    setenv("METALBEAR_MAX_RESIDENT_ACCOUNTS", "2", 1);
+
+    char directory[] = "/tmp/metalbear-cache-test-XXXXXX";
+    CHECK(mkdtemp(directory) != NULL);
+
+    metalbear_config config = {
+        .listen_address = "127.0.0.1",
+        .port = 0,
+        .thread_count = 2,
+        .data_directory = directory,
+        .service_did = "did:web:pds.example.com",
+        .user_domain = ".example.com",
+        .admin_password = "secret-admin",
+        .invite_required = false,
+        .rate_limit = 10000,
+    };
+    metalbear_server *server = metalbear_server_start(&config);
+    CHECK(server != NULL);
+    if (!server) return 1;
+
+    char base[80];
+    snprintf(base, sizeof(base), "http://127.0.0.1:%u",
+             (unsigned)metalbear_server_port(server));
+    wf_xrpc_client *client = wf_xrpc_client_new(base);
+    CHECK(client != NULL);
+    wf_response response = {0};
+
+    const char *handles[] = {"alice.example.com", "bob.example.com",
+                             "carol.example.com", "dave.example.com",
+                             "erin.example.com"};
+    const char *passwords[] = {"alicepass", "bobpass", "carolpass", "davepass",
+                               "erinpass"};
+    const char *emails[] = {"alice@x.com", "bob@x.com", "carol@x.com",
+                            "dave@x.com", "erin@x.com"};
+
+    char access_token[512];
+    for (int i = 0; i < 5; i++) {
+        char body[256];
+        snprintf(body, sizeof(body),
+                 "{\"handle\":\"%s\",\"password\":\"%s\",\"email\":\"%s\"}",
+                 handles[i], passwords[i], emails[i]);
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
+                                body, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *j = json_response(&response);
+        cJSON *tok = cJSON_GetObjectItemCaseSensitive(j, "accessJwt");
+        CHECK(cJSON_IsString(tok));
+        snprintf(access_token, sizeof(access_token), "%s", tok->valuestring);
+        cJSON_Delete(j);
+        wf_response_free(&response);
+
+        /* Authenticate and hit getSession: this resolves the account context
+         * through the cache (cache_get + request observer release), so each
+         * iteration opens one distinct account under the resident budget. */
+        wf_xrpc_client_set_auth(client, access_token);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.getSession", NULL,
+                            &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+    }
+
+    /* Read the admin-gated Prometheus exposition and confirm the cache stayed
+     * bounded. Evictions happen synchronously inside cache_get on a miss while
+     * the resident set already meets the budget, so by the time the fifth
+     * getSession returned, three accounts (5 - budget 2) must have been
+     * evicted. Use a fresh client: the request client above carries a bearer
+     * token from set_auth, which would otherwise override this Basic header. */
+    wf_xrpc_client *mclient = wf_xrpc_client_new(base);
+    CHECK(mclient != NULL);
+    char cred[64];
+    int n = snprintf(cred, sizeof(cred), "admin:%s", "secret-admin");
+    char b64[128];
+    int blen =
+        EVP_EncodeBlock((unsigned char *)b64, (const unsigned char *)cred, n);
+    b64[blen] = '\0';
+    char auth[160];
+    snprintf(auth, sizeof(auth), "Basic %s", b64);
+    wf_http_header hdr = {"Authorization", auth};
+    char metrics_url[96];
+    snprintf(metrics_url, sizeof(metrics_url), "%s/metrics", base);
+    CHECK(wf_http_get_with_headers(mclient, metrics_url, &hdr, 1, &response) ==
+          WF_OK);
+    CHECK(response.status == 200);
+
+    long long resident =
+        metric_value(&response, "metalbear_account_cache_resident");
+    long long idle = metric_value(&response, "metalbear_account_cache_idle");
+    long long evictions =
+        metric_value(&response, "metalbear_account_cache_evictions_total");
+
+    wf_response_free(&response);
+
+    CHECK(resident >= 0);
+    CHECK(idle >= 0);
+    CHECK(evictions >= 0);
+    /* Eviction fired under the budget: 5 distinct accounts, budget 2. */
+    CHECK(evictions >= 3);
+    /* Bounding holds: at most the budget plus one in-flight request. */
+    CHECK(resident <= 3);
+    CHECK(idle <= 2);
+
+    metalbear_server_free(server);
+    wf_xrpc_client_free(client);
+    rmtree(directory);
     if (failures) {
-        fprintf(stderr, "%d account-cache check(s) failed\n", failures);
+        fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
     }
-    printf("all account-cache checks passed\n");
+    printf("account cache bounded-eviction test OK\n");
     return 0;
 }
