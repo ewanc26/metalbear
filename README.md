@@ -494,6 +494,14 @@ authority across rebuilds. A configured key that cannot be parsed is fatal
 rather than silently replaced, because every DID minted with a substitute key
 would be unrecoverable.
 
+`METALBEAR_MAX_RESIDENT_ACCOUNTS` bounds how many idle (fully released) account
+contexts the server keeps open at once; the least-recently-used idle accounts
+are closed past this limit and reopened on demand, so memory no longer grows
+with the total number of accounts ever touched. The default (256) is safe for a
+general host; on a 256 MB Raspberry Pi 1B, where each context carries a SQLite
+repo and blob store, lower it to something like 16–32 and watch the
+`metalbear_account_cache_resident` gauge on `GET /metrics`.
+
 `METALBEAR_INVITE_REQUIRED` defaults to true. Mint a code with admin HTTP Basic
 auth, then create the first account with it:
 

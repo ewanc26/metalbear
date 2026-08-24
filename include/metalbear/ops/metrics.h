@@ -51,6 +51,13 @@ typedef enum metalbear_metric {
     METALBEAR_METRIC_DNS_FAILURES,
     /* A relay that could not be told there was new data. */
     METALBEAR_METRIC_CRAWL_FAILURES,
+    /* Account cache: a context already open was reused, a context had to be
+     * opened (miss), and an idle context was closed to stay under the resident
+     * budget. Residency itself (resident/idle counts) is a gauge read from the
+     * cache at scrape time, not a counter. */
+    METALBEAR_METRIC_ACCOUNT_CACHE_HITS,
+    METALBEAR_METRIC_ACCOUNT_CACHE_MISSES,
+    METALBEAR_METRIC_ACCOUNT_CACHE_EVICTIONS,
     METALBEAR_METRIC_COUNT
 } metalbear_metric;
 
