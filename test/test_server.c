@@ -561,6 +561,15 @@ int main(void) {
             cJSON_GetObjectItemCaseSensitive(software, "releaseStage");
         CHECK(cJSON_IsString(stage) &&
               strcmp(stage->valuestring, METALBEAR_RELEASE_STAGE) == 0);
+        cJSON *capabilities =
+            cJSON_GetObjectItemCaseSensitive(op, "capabilities");
+        CHECK(cJSON_IsObject(capabilities));
+        CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(
+            capabilities, "multipartVideoUpload")));
+        cJSON *max_video =
+            cJSON_GetObjectItemCaseSensitive(capabilities, "maxVideoBytes");
+        CHECK(cJSON_IsNumber(max_video) &&
+              (uint64_t)max_video->valuedouble == METALBEAR_VIDEO_MAX_BYTES);
         cJSON_Delete(op);
         wf_response_free(&response);
     }

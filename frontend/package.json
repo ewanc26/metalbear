@@ -1,7 +1,9 @@
 {
-	"name": "frontend",
+	"name": "@metalbear/frontend",
 	"private": true,
-	"version": "0.1.0",
+	"version": "0.39.1",
+	"description": "SvelteKit account and operator frontend for the MetalBear AT Protocol PDS.",
+	"license": "AGPL-3.0-only",
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
