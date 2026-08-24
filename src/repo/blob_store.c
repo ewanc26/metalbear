@@ -549,8 +549,7 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
 }
 
 wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
-                                        const char *cid,
-                                        const char *mime_type,
+                                        const char *cid, const char *mime_type,
                                         const char *source_path,
                                         size_t expected_len) {
     if (!store || !blob_cid_is_valid(cid) || !mime_type || !source_path)
@@ -583,9 +582,8 @@ wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
     char *mimep = blob_sidecar_path(store->dir, cid, ".mime");
     char *data_tmp = blob_sidecar_path(store->dir, cid, ".tmp");
     char *mime_tmp = blob_sidecar_path(store->dir, cid, ".mime.tmp");
-    wf_status st = (!datap || !mimep || !data_tmp || !mime_tmp)
-                       ? WF_ERR_ALLOC
-                       : WF_OK;
+    wf_status st =
+        (!datap || !mimep || !data_tmp || !mime_tmp) ? WF_ERR_ALLOC : WF_OK;
     if (st == WF_OK) {
         (void)remove(data_tmp);
         (void)remove(mime_tmp);
@@ -614,8 +612,8 @@ wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
         } else {
             char rev[15];
             blob_tid_now(rev);
-            st = blob_node_push(store, cid_copy, mime_copy, NULL,
-                                expected_len, rev);
+            st = blob_node_push(store, cid_copy, mime_copy, NULL, expected_len,
+                                rev);
             if (st == WF_OK) {
                 persist_rev(store, store->head);
             } else {

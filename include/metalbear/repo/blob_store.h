@@ -73,8 +73,7 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
  * necessarily retain the payload. `expected_len` must match the source file.
  */
 wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
-                                        const char *cid,
-                                        const char *mime_type,
+                                        const char *cid, const char *mime_type,
                                         const char *source_path,
                                         size_t expected_len);
 
