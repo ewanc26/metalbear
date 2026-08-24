@@ -10,6 +10,7 @@
 
 #include "ops_routes.h"
 #include "../server_internal.h"
+#include "metalbear/video_upload.h"
 
 #include <cJSON.h>
 
@@ -111,6 +112,19 @@ wf_status operator_info(void *ctx, const wf_xrpc_request *request,
                                 "https://github.com/ewanc26/metalbear");
         cJSON_AddStringToObject(sw, "license", "AGPL-3.0-only");
         cJSON_AddItemToObject(root, "software", sw);
+    }
+
+    /* Implementation facts consumed by the bundled landing page. Keeping
+     * these beside the running build metadata prevents capability copy from
+     * drifting away from the server that is actually deployed. */
+    cJSON *capabilities = cJSON_CreateObject();
+    if (capabilities) {
+        cJSON_AddBoolToObject(capabilities, "multipartVideoUpload", true);
+        cJSON_AddNumberToObject(capabilities, "maxVideoBytes",
+                                (double)METALBEAR_VIDEO_MAX_BYTES);
+        cJSON_AddNumberToObject(capabilities, "videoPartBytes",
+                                (double)METALBEAR_VIDEO_PART_BYTES);
+        cJSON_AddItemToObject(root, "capabilities", capabilities);
     }
 
     if (server->instance_description)

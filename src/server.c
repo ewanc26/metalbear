@@ -2621,7 +2621,29 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                                       video_get_job_status, server) != WF_OK ||
         wf_xrpc_server_register_query(
             server->xrpc, "app.bsky.video.getUploadLimits",
-            video_get_upload_limits, server) != WF_OK) {
+            video_get_upload_limits, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(
+            server->xrpc, "app.bsky.video.startUpload", video_start_upload,
+            server) != WF_OK ||
+        wf_xrpc_server_register_procedure(
+            server->xrpc, "app.bsky.video.finishUpload", video_finish_upload,
+            server) != WF_OK ||
+        wf_xrpc_server_register_procedure(
+            server->xrpc, "app.bsky.video.abortUpload", video_abort_upload,
+            server) != WF_OK ||
+        wf_xrpc_server_register_query(
+            server->xrpc, "app.bsky.video.getUploadStatus",
+            video_get_upload_status, server) != WF_OK ||
+#ifdef WF_XRPC_SERVER_HAS_STREAMING_PROCEDURES
+        wf_xrpc_server_register_streaming_procedure(
+            server->xrpc, "app.bsky.video.uploadPart",
+            &video_upload_part_handler, server) != WF_OK)
+#else
+        wf_xrpc_server_register_procedure(server->xrpc,
+                                          "app.bsky.video.uploadPart",
+                                          video_upload_part, server) != WF_OK)
+#endif
+    {
         LOG_ERROR("cannot register email/invite/video routes");
         goto fail;
     }

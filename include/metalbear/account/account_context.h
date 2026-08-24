@@ -7,6 +7,7 @@
 #include "metalbear/sequencer.h"
 #include "metalbear/repo/blob_store.h"
 #include "metalbear/repo/repo_store.h"
+#include "metalbear/video_upload.h"
 #include "wolfram/xrpc.h"
 
 #ifdef __cplusplus
@@ -15,10 +16,11 @@ extern "C" {
 
 /*
  * account_context.h — a per-account bundle of the durable stores a PDS needs
- * for one user (repository, blobs, auth, account state, sequencer, OAuth, and
- * signing-key rotation). MetalBear is multi-account: each account lives in its
- * own subdirectory under the PDS data root, and a request resolves the account
- * it acts on (from auth, a did/repo param, or a handle) into one of these.
+ * for one user (repository, blobs, auth, account state, sequencer, signing-key
+ * rotation, and multipart video sessions). MetalBear is multi-account: each
+ * account lives in its own subdirectory under the PDS data root, and a request
+ * resolves the account it acts on (from auth, a did/repo param, or a handle)
+ * into one of these.
  *
  * Ownership: an opened context's stores are freed by
  * metalbear_account_context_close. The bootstrap/primary account's context is
@@ -39,6 +41,7 @@ typedef struct metalbear_account_context {
     metalbear_sequencer *sequencer;
     bool owns_sequencer;
     metalbear_key_rotation *key_rotation;
+    metalbear_video_upload_store *video_uploads;
     bool active;
 } metalbear_account_context;
 
