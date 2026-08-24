@@ -11,7 +11,8 @@
  *     live only for the lifetime of the handle.
  *   - File-backed: pass a directory path. Each blob is written as a file named
  *     by its CID (safe base32 charset), with the MIME type in a sidecar
- *     "<cid>.mime" file. Re-opening the same path reloads the blobs.
+ *     "<cid>.mime" file. Re-opening the same path indexes compact metadata;
+ *     payload bytes remain on disk and are read only when requested.
  *
  * The store also tracks which record URIs reference each blob
  * (metalbear_blob_store_associate / _dissociate / _is_referenced) — the repo
