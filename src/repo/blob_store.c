@@ -604,8 +604,7 @@ static wf_status blob_store_delete_locked(metalbear_blob_store *store,
         char *datap = blob_path(store->dir, cid);
         char *mimep = blob_sidecar_path(store->dir, cid, ".mime");
         char *data_trash = blob_sidecar_path(store->dir, cid, ".delete");
-        char *mime_trash =
-            blob_sidecar_path(store->dir, cid, ".mime.delete");
+        char *mime_trash = blob_sidecar_path(store->dir, cid, ".mime.delete");
         if (!datap || !mimep || !data_trash || !mime_trash) {
             free(datap);
             free(mimep);
