@@ -20,6 +20,22 @@ wf_status video_get_job_status(void *ctx, const wf_xrpc_request *request,
 wf_status video_get_upload_limits(void *ctx, const wf_xrpc_request *request,
                                   wf_xrpc_response *response);
 
+wf_status video_start_upload(void *ctx, const wf_xrpc_request *request,
+                             wf_xrpc_response *response);
+wf_status video_finish_upload(void *ctx, const wf_xrpc_request *request,
+                              wf_xrpc_response *response);
+wf_status video_abort_upload(void *ctx, const wf_xrpc_request *request,
+                             wf_xrpc_response *response);
+wf_status video_get_upload_status(void *ctx, const wf_xrpc_request *request,
+                                  wf_xrpc_response *response);
+
+#ifdef WF_XRPC_SERVER_HAS_STREAMING_PROCEDURES
+extern const wf_xrpc_streaming_procedure_handler video_upload_part_handler;
+#else
+wf_status video_upload_part(void *ctx, const wf_xrpc_request *request,
+                            wf_xrpc_response *response);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

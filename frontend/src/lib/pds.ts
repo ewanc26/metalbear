@@ -59,6 +59,11 @@ export interface OperatorInfo {
 		repository?: string;
 		license?: string;
 	};
+	capabilities?: {
+		multipartVideoUpload?: boolean;
+		maxVideoBytes?: number;
+		videoPartBytes?: number;
+	};
 	description?: string;
 	development?: boolean;
 }
@@ -453,7 +458,9 @@ export interface PasskeyAuthenticateOptions {
 	allowCredentials?: Array<{ type: 'public-key'; id: string }>;
 }
 
-export function passkeyAuthenticateOptions(identifier: string): Promise<PasskeyAuthenticateOptions> {
+export function passkeyAuthenticateOptions(
+	identifier: string
+): Promise<PasskeyAuthenticateOptions> {
 	return passkeyFetch('/oauth/passkey/authenticate/options', { identifier });
 }
 
