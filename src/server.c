@@ -2259,8 +2259,11 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     metalbear_account_cache_set_sequencer(server->account_cache,
                                           server->sequencer);
     /* Bound the resident account set for small hosts (e.g. a 256 MB Pi 1B).
-     * Defaults conservatively; override with METALBEAR_MAX_RESIDENT_ACCOUNTS.
-     */
+     * The config file sets the deployment default; METALBEAR_MAX_RESIDENT_
+     * ACCOUNTS overrides it at runtime. */
+    if (config->max_resident_accounts > 0)
+        metalbear_account_cache_set_max_resident(
+            server->account_cache, (size_t)config->max_resident_accounts);
     {
         const char *max_res = getenv("METALBEAR_MAX_RESIDENT_ACCOUNTS");
         if (max_res && max_res[0]) {

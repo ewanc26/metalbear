@@ -59,6 +59,12 @@ typedef struct metalbear_config {
     /* When true, createAccount requires a valid invite code (refpds
      * PDS_INVITE_REQUIRED). Honest minimum: reject when absent. */
     bool invite_required;
+    /* Resident account-context budget (MetalBear-specific; no refpds
+     * equivalent). Caps the number of open account contexts (repo + auth +
+     * blob stores) the cache holds at once; idle ones are evicted past it.
+     * 0 keeps the conservative default. Overridable at runtime by
+     * METALBEAR_MAX_RESIDENT_ACCOUNTS, which wins over this. */
+    int64_t max_resident_accounts;
     /* Maximum blob upload size in bytes (refpds PDS_BLOB_UPLOAD_LIMIT).
      * 0 => no limit. Enforced in the blob upload path. */
     int64_t blob_upload_limit;

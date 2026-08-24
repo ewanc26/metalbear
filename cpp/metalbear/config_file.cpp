@@ -96,6 +96,7 @@ static bool parse_bool(const char *v, bool *out) {
                                                                                \
     STR("accounts.admin_password", admin_password)                             \
     BOOL("accounts.invite_required", invite_required)                          \
+    INT("accounts.max_resident_accounts", max_resident_accounts)               \
                                                                                \
     INT("limits.rate_limit", rate_limit)                                       \
     INT("limits.rate_limit_window_seconds", rate_limit_window)                 \
