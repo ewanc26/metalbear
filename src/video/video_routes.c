@@ -15,6 +15,7 @@
 #include "../server_internal.h"
 
 #include "metalbear/log.h"
+#include "metalbear/video.h"
 #include "metalbear/account/account_context.h"
 #include "metalbear/ops/metrics.h"
 #include "metalbear/repo/blob_store.h"
@@ -25,9 +26,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-/* app.bsky.embed.video#main's video blob accepts up to 100mb. */
-#define METALBEAR_VIDEO_MAX_BYTES (100u * 1024u * 1024u)
 
 /* job ID layout: vid-<unix_ts>-<cid>-<size>; the CID alphabet (base32
  * lower) contains no '-', so a dash is an unambiguous field separator. */
@@ -86,7 +84,7 @@ wf_status video_upload(void *ctx, const wf_xrpc_request *request,
     }
     if (request->body_len > METALBEAR_VIDEO_MAX_BYTES) {
         wf_xrpc_response_set_error(response, 413, "InvalidRequest",
-                                   "video exceeds the 100MB upload limit");
+                                   "video exceeds the 300MB upload limit");
         return WF_OK;
     }
     const char *mime = request->content_type && request->content_type[0]
