@@ -11,7 +11,8 @@
  *     live only for the lifetime of the handle.
  *   - File-backed: pass a directory path. Each blob is written as a file named
  *     by its CID (safe base32 charset), with the MIME type in a sidecar
- *     "<cid>.mime" file. Re-opening the same path reloads the blobs.
+ *     "<cid>.mime" file. Re-opening the same path indexes compact metadata;
+ *     payload bytes remain on disk and are read only when requested.
  *
  * The store also tracks which record URIs reference each blob
  * (metalbear_blob_store_associate / _dissociate / _is_referenced) — the repo
@@ -23,8 +24,9 @@
  * Each blob also records the TID at which it was first seen — uploaded, or
  * first associated with a record when the store predates the tracking — so
  * com.atproto.sync.listBlobs' `since` filter can list only the blobs whose
- * first-seen rev sorts after a given repo revision (metalbear_blob_store_list_since).
- * A file-backed store persists the rev in a "<cid>.rev" sidecar.
+ * first-seen rev sorts after a given repo revision
+ * (metalbear_blob_store_list_since). A file-backed store persists the rev in a
+ * "<cid>.rev" sidecar.
  *
  * Ownership: outputs from metalbear_blob_store_get (out_data, out_mime) are
  * heap-allocated and freed with free() by the caller. The CID is the caller's
@@ -103,8 +105,8 @@ void metalbear_blob_store_list_free(char **cids, size_t count);
  * unspecified.
  */
 wf_status metalbear_blob_store_list_since(metalbear_blob_store *store,
-                                          const char *since,
-                                          char ***out_cids, size_t *out_count);
+                                          const char *since, char ***out_cids,
+                                          size_t *out_count);
 
 /*
  * Recursively find blob references within a record's JSON value and invoke
