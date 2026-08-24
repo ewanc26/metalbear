@@ -68,6 +68,16 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
                                    const unsigned char *data, size_t len);
 
 /**
+ * Store a blob by streaming `source_path` into the backing store. File-backed
+ * stores copy with bounded memory and publish atomically; in-memory stores
+ * necessarily retain the payload. `expected_len` must match the source file.
+ */
+wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
+                                        const char *cid, const char *mime_type,
+                                        const char *source_path,
+                                        size_t expected_len);
+
+/**
  * Retrieve a blob. On WF_OK, out_data/out_len/out_mime are set to owned
  * buffers (each freed with free()). Returns WF_ERR_NOT_FOUND if absent.
  */

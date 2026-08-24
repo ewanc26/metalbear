@@ -112,6 +112,16 @@
 					{#if server}{server.inviteCodeRequired ? 'invite required' : 'open'}{:else}—{/if}
 				</dd>
 			</div>
+			{#if info?.capabilities?.multipartVideoUpload}
+				<div>
+					<dt class="text-sm text-slate-500">Video uploads</dt>
+					<dd class="font-mono text-sm text-slate-200">
+						multipart · {info.capabilities.maxVideoBytes
+							? `${info.capabilities.maxVideoBytes / 1_000_000} MB max`
+							: 'enabled'}
+					</dd>
+				</div>
+			{/if}
 		</dl>
 	</section>
 

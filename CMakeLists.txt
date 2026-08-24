@@ -138,6 +138,7 @@ add_library(
   src/moderation/moderation_routes.c
   src/moderation/report.c
   src/video/video_routes.c
+  cpp/metalbear/video_upload.cpp
   src/repo/blob_store.c
   src/repo/blob_store_server.c
   src/ops/update_watcher.c
@@ -250,6 +251,13 @@ if(METALBEAR_BUILD_TESTS)
   add_executable(test_metalbear_registry test/test_registry.c)
   target_link_libraries(test_metalbear_registry PRIVATE metalbear_core)
   add_test(NAME metalbear_registry COMMAND test_metalbear_registry)
+
+  add_executable(test_metalbear_video_upload test/test_video_upload.cpp)
+  target_link_libraries(test_metalbear_video_upload PRIVATE metalbear_core
+                                                            SQLite3::SQLite3)
+  target_include_directories(test_metalbear_video_upload
+                             PRIVATE "${WOLFRAM_SOURCE_DIR}/test")
+  add_test(NAME metalbear_video_upload COMMAND test_metalbear_video_upload)
 
   add_executable(test_metalbear_config_file test/test_config_file.c)
   target_link_libraries(test_metalbear_config_file PRIVATE metalbear_core)
