@@ -61,9 +61,10 @@ posts are indexed by the Bluesky AppView.
 - session/account responses carrying the lexicon `emailAuthFactor` flag
 - durable SQLite-backed signed repositories and file-backed blob upload/serving
 - legacy and current `app.bsky.video` upload flows, including durable,
-  per-account multipart sessions with bounded-memory 5 MB parts, restart
-  recovery, quota reservations, idempotent finish/abort, and the lexicon's
-  300,000,000-byte file limit
+  per-account multipart sessions with bounded-memory 5 MB parts when Wolfram's
+  streaming-procedure API is available, restart recovery, quota reservations,
+  idempotent finish/abort, and the lexicon's 300,000,000-byte file limit. Older
+  Wolfram checkouts remain source-compatible through a buffered adapter.
 
 ## Admin Endpoints
 
