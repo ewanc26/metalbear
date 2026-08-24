@@ -437,6 +437,21 @@ metalbear_account_context *resolve_request_context(metalbear_server *server,
     return context_for_did(server, did);
 }
 
+/* XRPC request observer: fires once per request after the handler returns, on
+ * the worker thread that served it. Every account context resolved on the
+ * request path was acquired (refcounted) by metalbear_account_cache_get; drop
+ * them all here so the cache can evict idle accounts under its resident
+ * budget. Called for every request, so handlers never release by hand. */
+static void account_cache_request_observer(void *ctx, const char *nsid,
+                                           const char *path, const char *method,
+                                           unsigned int status) {
+    (void)nsid;
+    (void)path;
+    (void)method;
+    (void)status;
+    metalbear_account_cache_release_thread_local();
+}
+
 /* wolfram per-request resolver: map a request to the correct account's repo /
  * blob stores. Borrowed pointers remain valid for the request duration because
  * the cache outlives the request. */
@@ -2243,6 +2258,19 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
      * reads. */
     metalbear_account_cache_set_sequencer(server->account_cache,
                                           server->sequencer);
+    /* Bound the resident account set for small hosts (e.g. a 256 MB Pi 1B).
+     * Defaults conservatively; override with METALBEAR_MAX_RESIDENT_ACCOUNTS.
+     */
+    {
+        const char *max_res = getenv("METALBEAR_MAX_RESIDENT_ACCOUNTS");
+        if (max_res && max_res[0]) {
+            char *end = NULL;
+            long v = strtol(max_res, &end, 10);
+            if (end != max_res && v > 0)
+                metalbear_account_cache_set_max_resident(server->account_cache,
+                                                         (size_t)v);
+        }
+    }
     if (!server->account_cache) {
         LOG_ERROR("cannot create account cache");
         goto fail;
@@ -2267,6 +2295,12 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                 if (acct->repo)
                     metalbear_sequencer_reconcile_repo(server->sequencer,
                                                        acct->repo);
+                /* This context was opened solely for reconciliation during
+                 * startup; release it so it becomes evictable under the
+                 * resident budget rather than pinned for the process lifetime.
+                 * Request-path acquisitions are released by the request
+                 * observer instead. */
+                metalbear_account_cache_release(server->account_cache, acct);
             }
             metalbear_account_entries_free(entries, count);
         }
@@ -2407,6 +2441,12 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     }
 
     wf_xrpc_server_set_auth_callback(server->xrpc, authenticate, server);
+
+    /* Release every account context acquired on the request path once the
+     * handler has returned, so the bounded cache can evict idle accounts.
+     * See account_cache_request_observer. */
+    wf_xrpc_server_set_request_observer(server->xrpc,
+                                        account_cache_request_observer, server);
 
     /* Register OAuth HTTP routes (bypass XRPC auth) */
     /* One OAuth store for the host. The account a token speaks for comes from
