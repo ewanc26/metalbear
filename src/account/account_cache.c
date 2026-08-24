@@ -115,7 +115,7 @@ static void entry_close(struct cache_entry *victim) {
  * is over budget. Caller holds cache->lock.
  */
 static void evict_if_over_budget_locked(metalbear_account_cache *cache) {
-    while (cache->idle_count > cache->max_resident && cache->entries) {
+    while (cache->total_count > cache->max_resident && cache->entries) {
         struct cache_entry *oldest = NULL;
         struct cache_entry *oldest_prev = NULL;
         struct cache_entry *prev = NULL;
@@ -137,6 +137,7 @@ static void evict_if_over_budget_locked(metalbear_account_cache *cache) {
         cache->idle_count--;
         cache->total_count--;
         atomic_fetch_add_explicit(&cache->evictions, 1, memory_order_relaxed);
+        metalbear_metrics_inc(METALBEAR_METRIC_ACCOUNT_CACHE_EVICTIONS);
         entry_close(oldest);
     }
 }
@@ -278,20 +279,23 @@ void metalbear_account_cache_release_thread_local(void) {
         metalbear_account_cache_release(acq_buf[i].cache, acq_buf[i].ctx);
     acq_len = 0;
 }
-
 void metalbear_account_cache_stats(metalbear_account_cache *cache,
                                    size_t *resident, size_t *idle,
                                    uint64_t *evictions, uint64_t *hits,
                                    uint64_t *misses) {
     if (resident) *resident = 0;
     if (idle) *idle = 0;
+    if (evictions) *evictions = 0;
+    if (hits) *hits = 0;
+    if (misses) *misses = 0;
+    if (!cache) return;
     if (evictions)
         *evictions =
             atomic_load_explicit(&cache->evictions, memory_order_relaxed);
     if (hits) *hits = atomic_load_explicit(&cache->hits, memory_order_relaxed);
     if (misses)
         *misses = atomic_load_explicit(&cache->misses, memory_order_relaxed);
-    if (!cache || (!resident && !idle)) return;
+    if (!resident && !idle) return;
     pthread_mutex_lock(&cache->lock);
     if (resident) *resident = cache->total_count;
     if (idle) *idle = cache->idle_count;
