@@ -53,9 +53,9 @@ struct fixture {
     }
 };
 
-static metalbear_video_upload_result put_part(
-    metalbear_video_upload_store *store, const char *job_id,
-    uint32_t part_number, const unsigned char *data, size_t size) {
+static metalbear_video_upload_result
+put_part(metalbear_video_upload_store *store, const char *job_id,
+         uint32_t part_number, const unsigned char *data, size_t size) {
     metalbear_video_part_writer *writer = nullptr;
     metalbear_video_upload_result result = metalbear_video_upload_part_begin(
         store, job_id, part_number, size, &writer);
@@ -64,7 +64,7 @@ static metalbear_video_upload_result put_part(
         result = metalbear_video_upload_part_write(writer, data, split);
         if (result == METALBEAR_VIDEO_UPLOAD_OK)
             result = metalbear_video_upload_part_write(writer, data + split,
-                                                        size - split);
+                                                       size - split);
         if (result == METALBEAR_VIDEO_UPLOAD_OK)
             result = metalbear_video_upload_part_finish(writer);
     }
@@ -83,22 +83,22 @@ static void test_happy_path_and_idempotence() {
     WF_CHECK(status.part_size_bytes == METALBEAR_VIDEO_PART_BYTES);
 
     metalbear_video_part_writer *wrong = nullptr;
-    WF_CHECK(metalbear_video_upload_part_begin(
-                 f.uploads, status.job_id, 1, kTinyMp4.size() - 1, &wrong) ==
+    WF_CHECK(metalbear_video_upload_part_begin(f.uploads, status.job_id, 1,
+                                               kTinyMp4.size() - 1, &wrong) ==
              METALBEAR_VIDEO_UPLOAD_PART_SIZE_MISMATCH);
     WF_CHECK(wrong == nullptr);
 
     /* A disconnected part is never recorded and can be retried safely. */
     metalbear_video_part_writer *interrupted = nullptr;
-    WF_CHECK(metalbear_video_upload_part_begin(
-                 f.uploads, status.job_id, 1, kTinyMp4.size(), &interrupted) ==
+    WF_CHECK(metalbear_video_upload_part_begin(f.uploads, status.job_id, 1,
+                                               kTinyMp4.size(), &interrupted) ==
              METALBEAR_VIDEO_UPLOAD_OK);
-    WF_CHECK(metalbear_video_upload_part_write(interrupted, kTinyMp4.data(), 4) ==
-             METALBEAR_VIDEO_UPLOAD_OK);
+    WF_CHECK(metalbear_video_upload_part_write(interrupted, kTinyMp4.data(),
+                                               4) == METALBEAR_VIDEO_UPLOAD_OK);
     metalbear_video_upload_part_free(interrupted);
-    WF_CHECK(metalbear_video_upload_get_status(f.uploads, status.job_id,
-                                               &status) ==
-             METALBEAR_VIDEO_UPLOAD_OK);
+    WF_CHECK(
+        metalbear_video_upload_get_status(f.uploads, status.job_id, &status) ==
+        METALBEAR_VIDEO_UPLOAD_OK);
     WF_CHECK(status.received_part_count == 0);
 
     WF_CHECK(put_part(f.uploads, status.job_id, 1, kTinyMp4.data(),
@@ -106,9 +106,9 @@ static void test_happy_path_and_idempotence() {
     /* Re-sending a complete part replaces it and retains one receipt. */
     WF_CHECK(put_part(f.uploads, status.job_id, 1, kTinyMp4.data(),
                       kTinyMp4.size()) == METALBEAR_VIDEO_UPLOAD_OK);
-    WF_CHECK(metalbear_video_upload_get_status(f.uploads, status.job_id,
-                                               &status) ==
-             METALBEAR_VIDEO_UPLOAD_OK);
+    WF_CHECK(
+        metalbear_video_upload_get_status(f.uploads, status.job_id, &status) ==
+        METALBEAR_VIDEO_UPLOAD_OK);
     WF_CHECK(status.received_part_count == 1 && status.received_parts[0] == 1);
     char detail[256]{};
     WF_CHECK(metalbear_video_upload_finish(f.uploads, status.job_id, &status,
@@ -146,8 +146,9 @@ static void test_ownership_abort_and_recovery() {
              METALBEAR_VIDEO_UPLOAD_OK);
     char job_id[257]{};
     std::snprintf(job_id, sizeof(job_id), "%s", status.job_id);
-    WF_CHECK(metalbear_video_upload_get_status(second.uploads, job_id, &status) ==
-             METALBEAR_VIDEO_UPLOAD_NOT_FOUND);
+    WF_CHECK(
+        metalbear_video_upload_get_status(second.uploads, job_id, &status) ==
+        METALBEAR_VIDEO_UPLOAD_NOT_FOUND);
     WF_CHECK(metalbear_video_upload_abort(first.uploads, job_id, &status) ==
              METALBEAR_VIDEO_UPLOAD_OK);
     WF_CHECK(status.state == METALBEAR_VIDEO_UPLOAD_ABORTED);
@@ -173,8 +174,8 @@ static void test_ownership_abort_and_recovery() {
                  (fs::path(first.root) / "uploads.sqlite3").c_str(),
                  (fs::path(first.root) / "parts").c_str(), first.blobs,
                  &first.uploads) == WF_OK);
-    WF_CHECK(metalbear_video_upload_get_status(first.uploads, job_id, &status) ==
-             METALBEAR_VIDEO_UPLOAD_OK);
+    WF_CHECK(metalbear_video_upload_get_status(
+                 first.uploads, job_id, &status) == METALBEAR_VIDEO_UPLOAD_OK);
     WF_CHECK(status.state == METALBEAR_VIDEO_UPLOAD_CREATED);
 }
 
@@ -183,8 +184,7 @@ static void test_missing_and_invalid_content() {
     metalbear_video_upload_status status{};
     WF_CHECK(metalbear_video_upload_start(
                  f.uploads, METALBEAR_VIDEO_PART_BYTES + kTinyMp4.size(),
-                 "video/mp4", nullptr, &status) ==
-             METALBEAR_VIDEO_UPLOAD_OK);
+                 "video/mp4", nullptr, &status) == METALBEAR_VIDEO_UPLOAD_OK);
     char detail[256]{};
     WF_CHECK(metalbear_video_upload_finish(f.uploads, status.job_id, &status,
                                            detail, sizeof(detail)) ==
@@ -207,23 +207,22 @@ static void test_missing_and_invalid_content() {
 
 static void test_quota_reservations() {
     fixture open_cap("-open-cap");
-    std::array<metalbear_video_upload_status,
-               METALBEAR_VIDEO_MAX_OPEN_UPLOADS>
+    std::array<metalbear_video_upload_status, METALBEAR_VIDEO_MAX_OPEN_UPLOADS>
         sessions{};
     for (auto &status : sessions)
-        WF_CHECK(metalbear_video_upload_start(
-                     open_cap.uploads, kTinyMp4.size(), "video/mp4", nullptr,
-                     &status) == METALBEAR_VIDEO_UPLOAD_OK);
+        WF_CHECK(metalbear_video_upload_start(open_cap.uploads, kTinyMp4.size(),
+                                              "video/mp4", nullptr, &status) ==
+                 METALBEAR_VIDEO_UPLOAD_OK);
     metalbear_video_upload_status rejected{};
-    WF_CHECK(metalbear_video_upload_start(
-                 open_cap.uploads, kTinyMp4.size(), "video/mp4", nullptr,
-                 &rejected) == METALBEAR_VIDEO_UPLOAD_TOO_MANY_OPEN);
+    WF_CHECK(metalbear_video_upload_start(open_cap.uploads, kTinyMp4.size(),
+                                          "video/mp4", nullptr, &rejected) ==
+             METALBEAR_VIDEO_UPLOAD_TOO_MANY_OPEN);
     WF_CHECK(metalbear_video_upload_abort(open_cap.uploads, sessions[0].job_id,
                                           &sessions[0]) ==
              METALBEAR_VIDEO_UPLOAD_OK);
-    WF_CHECK(metalbear_video_upload_start(
-                 open_cap.uploads, kTinyMp4.size(), "video/mp4", nullptr,
-                 &rejected) == METALBEAR_VIDEO_UPLOAD_OK);
+    WF_CHECK(metalbear_video_upload_start(open_cap.uploads, kTinyMp4.size(),
+                                          "video/mp4", nullptr, &rejected) ==
+             METALBEAR_VIDEO_UPLOAD_OK);
 
     fixture daily("-daily-cap");
     for (int i = 0; i < 3; ++i)
@@ -236,8 +235,8 @@ static void test_quota_reservations() {
     uint64_t bytes = 0;
     uint32_t videos = 0, open = 0;
     metalbear_video_upload_get_limits(daily.uploads, &bytes, &videos, &open);
-    WF_CHECK(bytes == METALBEAR_VIDEO_DAILY_BYTES -
-                          3 * METALBEAR_VIDEO_MAX_BYTES);
+    WF_CHECK(bytes ==
+             METALBEAR_VIDEO_DAILY_BYTES - 3 * METALBEAR_VIDEO_MAX_BYTES);
     WF_CHECK(videos == METALBEAR_VIDEO_DAILY_COUNT - 3);
     WF_CHECK(open == 3);
 }
@@ -254,13 +253,13 @@ static void optional_large_rss_fixture() {
     for (uint32_t part = 1; part <= status.part_count; ++part) {
         metalbear_video_part_writer *writer = nullptr;
         WF_CHECK(metalbear_video_upload_part_begin(
-                     f.uploads, status.job_id, part,
-                     METALBEAR_VIDEO_PART_BYTES, &writer) ==
-                 METALBEAR_VIDEO_UPLOAD_OK);
+                     f.uploads, status.job_id, part, METALBEAR_VIDEO_PART_BYTES,
+                     &writer) == METALBEAR_VIDEO_UPLOAD_OK);
         uint64_t left = METALBEAR_VIDEO_PART_BYTES;
         while (left > 0) {
-            const size_t chunk =
-                left < buffer.size() ? static_cast<size_t>(left) : buffer.size();
+            const size_t chunk = left < buffer.size()
+                                     ? static_cast<size_t>(left)
+                                     : buffer.size();
             WF_CHECK(metalbear_video_upload_part_write(writer, buffer.data(),
                                                        chunk) ==
                      METALBEAR_VIDEO_UPLOAD_OK);

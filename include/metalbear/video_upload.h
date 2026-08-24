@@ -66,36 +66,41 @@ typedef struct metalbear_video_upload_status {
     char failure_reason[1025];
 } metalbear_video_upload_status;
 
-wf_status metalbear_video_upload_store_open(
-    const char *database_path, const char *parts_directory,
-    metalbear_blob_store *blobs, metalbear_video_upload_store **out);
+wf_status metalbear_video_upload_store_open(const char *database_path,
+                                            const char *parts_directory,
+                                            metalbear_blob_store *blobs,
+                                            metalbear_video_upload_store **out);
 void metalbear_video_upload_store_free(metalbear_video_upload_store *store);
 
-metalbear_video_upload_result metalbear_video_upload_start(
-    metalbear_video_upload_store *store, uint64_t size_bytes,
-    const char *mime_type, const char *name,
-    metalbear_video_upload_status *out);
+metalbear_video_upload_result
+metalbear_video_upload_start(metalbear_video_upload_store *store,
+                             uint64_t size_bytes, const char *mime_type,
+                             const char *name,
+                             metalbear_video_upload_status *out);
 
-metalbear_video_upload_result metalbear_video_upload_part_begin(
-    metalbear_video_upload_store *store, const char *job_id,
-    uint32_t part_number, uint64_t content_length,
-    metalbear_video_part_writer **out);
-metalbear_video_upload_result metalbear_video_upload_part_write(
-    metalbear_video_part_writer *writer, const unsigned char *data,
-    size_t data_len);
-metalbear_video_upload_result metalbear_video_upload_part_finish(
-    metalbear_video_part_writer *writer);
+metalbear_video_upload_result
+metalbear_video_upload_part_begin(metalbear_video_upload_store *store,
+                                  const char *job_id, uint32_t part_number,
+                                  uint64_t content_length,
+                                  metalbear_video_part_writer **out);
+metalbear_video_upload_result
+metalbear_video_upload_part_write(metalbear_video_part_writer *writer,
+                                  const unsigned char *data, size_t data_len);
+metalbear_video_upload_result
+metalbear_video_upload_part_finish(metalbear_video_part_writer *writer);
 void metalbear_video_upload_part_free(metalbear_video_part_writer *writer);
 
 metalbear_video_upload_result metalbear_video_upload_finish(
     metalbear_video_upload_store *store, const char *job_id,
     metalbear_video_upload_status *out, char *detail, size_t detail_size);
-metalbear_video_upload_result metalbear_video_upload_abort(
-    metalbear_video_upload_store *store, const char *job_id,
-    metalbear_video_upload_status *out);
-metalbear_video_upload_result metalbear_video_upload_get_status(
-    metalbear_video_upload_store *store, const char *job_id,
-    metalbear_video_upload_status *out);
+metalbear_video_upload_result
+metalbear_video_upload_abort(metalbear_video_upload_store *store,
+                             const char *job_id,
+                             metalbear_video_upload_status *out);
+metalbear_video_upload_result
+metalbear_video_upload_get_status(metalbear_video_upload_store *store,
+                                  const char *job_id,
+                                  metalbear_video_upload_status *out);
 
 void metalbear_video_upload_get_limits(metalbear_video_upload_store *store,
                                        uint64_t *remaining_bytes,

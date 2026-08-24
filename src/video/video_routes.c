@@ -247,18 +247,18 @@ typedef struct video_part_stream {
 
 static const char *upload_state_name(metalbear_video_upload_state state) {
     switch (state) {
-    case METALBEAR_VIDEO_UPLOAD_CREATED:
-        return "created";
-    case METALBEAR_VIDEO_UPLOAD_FINISHING:
-        return "finishing";
-    case METALBEAR_VIDEO_UPLOAD_COMPLETED:
-        return "completed";
-    case METALBEAR_VIDEO_UPLOAD_FAILED:
-        return "failed";
-    case METALBEAR_VIDEO_UPLOAD_ABORTED:
-        return "aborted";
-    case METALBEAR_VIDEO_UPLOAD_EXPIRED:
-        return "expired";
+        case METALBEAR_VIDEO_UPLOAD_CREATED:
+            return "created";
+        case METALBEAR_VIDEO_UPLOAD_FINISHING:
+            return "finishing";
+        case METALBEAR_VIDEO_UPLOAD_COMPLETED:
+            return "completed";
+        case METALBEAR_VIDEO_UPLOAD_FAILED:
+            return "failed";
+        case METALBEAR_VIDEO_UPLOAD_ABORTED:
+            return "aborted";
+        case METALBEAR_VIDEO_UPLOAD_EXPIRED:
+            return "expired";
     }
     return "failed";
 }
@@ -270,91 +270,92 @@ static wf_status upload_error(wf_xrpc_response *response,
     const char *error = "InvalidRequest";
     const char *message = detail && detail[0] ? detail : "invalid upload";
     switch (result) {
-    case METALBEAR_VIDEO_UPLOAD_NOT_FOUND:
-        status = 404;
-        error = "UploadNotFound";
-        message = "upload was not found";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_EXPIRED_RESULT:
-        error = "UploadExpired";
-        message = "upload has expired";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_INVALID_PART:
-        error = "InvalidPartNumber";
-        message = "part number is outside the upload range";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_PART_SIZE_MISMATCH:
-        error = "PartSizeMismatch";
-        message = "Content-Length does not match the expected part size";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_NOT_READY:
-        status = 409;
-        error = "UploadNotReady";
-        message = "upload finalisation or another part write is in progress";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_FAILED_RESULT:
-        error = "UploadFailed";
-        message = detail && detail[0] ? detail : "upload has failed";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_ABORTED_RESULT:
-        error = "UploadAborted";
-        message = "upload has been aborted";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_ALREADY_COMPLETED:
-        error = "UploadAlreadyCompleted";
-        message = "upload has already completed";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_MISSING_PARTS:
-        error = "MissingParts";
-        message = detail && detail[0] ? detail : "upload has missing parts";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_UNSUPPORTED_CONTENT_TYPE:
-        error = "UnsupportedContentType";
-        message = "only video/mp4 is supported";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_TOO_LARGE:
-        error = "VideoTooLarge";
-        message = "video exceeds the 300MB upload limit";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_DAILY_LIMIT:
-        status = 429;
-        error = "DailyLimitExceeded";
-        message = "daily video allowance is exhausted";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_TOO_MANY_OPEN:
-        status = 429;
-        error = "TooManyOpenUploads";
-        message = "too many multipart uploads are open";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_SERVICE_OVERLOADED:
-        status = 503;
-        error = "ServiceOverloaded";
-        message = "video upload storage is temporarily unavailable";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_INVALID_REQUEST:
-        error = "InvalidRequest";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_INTERNAL:
-        status = 500;
-        error = "InternalError";
-        message = "video upload failed internally";
-        break;
-    case METALBEAR_VIDEO_UPLOAD_OK:
-        return WF_OK;
+        case METALBEAR_VIDEO_UPLOAD_NOT_FOUND:
+            status = 404;
+            error = "UploadNotFound";
+            message = "upload was not found";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_EXPIRED_RESULT:
+            error = "UploadExpired";
+            message = "upload has expired";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_INVALID_PART:
+            error = "InvalidPartNumber";
+            message = "part number is outside the upload range";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_PART_SIZE_MISMATCH:
+            error = "PartSizeMismatch";
+            message = "Content-Length does not match the expected part size";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_NOT_READY:
+            status = 409;
+            error = "UploadNotReady";
+            message =
+                "upload finalisation or another part write is in progress";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_FAILED_RESULT:
+            error = "UploadFailed";
+            message = detail && detail[0] ? detail : "upload has failed";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_ABORTED_RESULT:
+            error = "UploadAborted";
+            message = "upload has been aborted";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_ALREADY_COMPLETED:
+            error = "UploadAlreadyCompleted";
+            message = "upload has already completed";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_MISSING_PARTS:
+            error = "MissingParts";
+            message = detail && detail[0] ? detail : "upload has missing parts";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_UNSUPPORTED_CONTENT_TYPE:
+            error = "UnsupportedContentType";
+            message = "only video/mp4 is supported";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_TOO_LARGE:
+            error = "VideoTooLarge";
+            message = "video exceeds the 300MB upload limit";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_DAILY_LIMIT:
+            status = 429;
+            error = "DailyLimitExceeded";
+            message = "daily video allowance is exhausted";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_TOO_MANY_OPEN:
+            status = 429;
+            error = "TooManyOpenUploads";
+            message = "too many multipart uploads are open";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_SERVICE_OVERLOADED:
+            status = 503;
+            error = "ServiceOverloaded";
+            message = "video upload storage is temporarily unavailable";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_INVALID_REQUEST:
+            error = "InvalidRequest";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_INTERNAL:
+            status = 500;
+            error = "InternalError";
+            message = "video upload failed internally";
+            break;
+        case METALBEAR_VIDEO_UPLOAD_OK:
+            return WF_OK;
     }
     wf_xrpc_response_set_error(response, status, error, message);
     return WF_OK;
 }
 
 static const char *json_job_id(const wf_xrpc_request *request) {
-    cJSON *job = request->params
-                     ? cJSON_GetObjectItem(request->params, "jobId")
-                     : NULL;
+    cJSON *job =
+        request->params ? cJSON_GetObjectItem(request->params, "jobId") : NULL;
     return cJSON_IsString(job) ? job->valuestring : NULL;
 }
 
-static cJSON *completed_job_status(const metalbear_account_context *acct,
-                                   const metalbear_video_upload_status *status) {
+static cJSON *
+completed_job_status(const metalbear_account_context *acct,
+                     const metalbear_video_upload_status *status) {
     cJSON *job = cJSON_CreateObject();
     cJSON *blob = cJSON_CreateObject();
     cJSON *ref = cJSON_CreateObject();
@@ -426,9 +427,8 @@ wf_status video_start_upload(void *ctx, const wf_xrpc_request *request,
     cJSON *mime = request->params
                       ? cJSON_GetObjectItem(request->params, "mimeType")
                       : NULL;
-    cJSON *name = request->params
-                      ? cJSON_GetObjectItem(request->params, "name")
-                      : NULL;
+    cJSON *name =
+        request->params ? cJSON_GetObjectItem(request->params, "name") : NULL;
     if (!cJSON_IsNumber(size) || size->valuedouble < 1 ||
         size->valuedouble > (double)UINT64_MAX ||
         (double)(uint64_t)size->valuedouble != size->valuedouble ||
@@ -465,8 +465,9 @@ static wf_status video_upload_part_begin(void *ctx,
     }
     if (!request->content_type ||
         strcmp(request->content_type, "application/octet-stream") != 0) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "part body must be application/octet-stream");
+        wf_xrpc_response_set_error(
+            response, 400, "InvalidRequest",
+            "part body must be application/octet-stream");
         return WF_OK;
     }
     metalbear_account_context *acct = resolve_request_context(server, request);
@@ -504,8 +505,8 @@ static wf_status video_upload_part_write(void *ctx, void *stream_ctx,
                                          wf_xrpc_response *response) {
     (void)ctx;
     video_part_stream *stream = stream_ctx;
-    metalbear_video_upload_result result = metalbear_video_upload_part_write(
-        stream->writer, data, data_len);
+    metalbear_video_upload_result result =
+        metalbear_video_upload_part_write(stream->writer, data, data_len);
     return result == METALBEAR_VIDEO_UPLOAD_OK
                ? WF_OK
                : upload_error(response, result, NULL);
@@ -537,8 +538,8 @@ static void video_upload_part_cleanup(void *ctx, void *stream_ctx,
 }
 
 const wf_xrpc_streaming_procedure_handler video_upload_part_handler = {
-    video_upload_part_begin, video_upload_part_write,
-    video_upload_part_finish, video_upload_part_cleanup};
+    video_upload_part_begin, video_upload_part_write, video_upload_part_finish,
+    video_upload_part_cleanup};
 
 wf_status video_finish_upload(void *ctx, const wf_xrpc_request *request,
                               wf_xrpc_response *response) {
@@ -582,8 +583,8 @@ wf_status video_abort_upload(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     metalbear_video_upload_status status = {0};
-    metalbear_video_upload_result result = metalbear_video_upload_abort(
-        acct->video_uploads, job_id, &status);
+    metalbear_video_upload_result result =
+        metalbear_video_upload_abort(acct->video_uploads, job_id, &status);
     if (result != METALBEAR_VIDEO_UPLOAD_OK)
         return upload_error(response, result, status.failure_reason);
     cJSON *root = cJSON_CreateObject();
@@ -608,8 +609,8 @@ wf_status video_get_upload_status(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     metalbear_video_upload_status status = {0};
-    metalbear_video_upload_result result = metalbear_video_upload_get_status(
-        acct->video_uploads, job_id, &status);
+    metalbear_video_upload_result result =
+        metalbear_video_upload_get_status(acct->video_uploads, job_id, &status);
     if (result != METALBEAR_VIDEO_UPLOAD_OK)
         return upload_error(response, result, NULL);
     cJSON *root = upload_status_json(acct, &status);
