@@ -4,6 +4,7 @@
 #endif
 #include "metalbear/server.h"
 #include "metalbear/account/account_registry.h"
+#include "metalbear/video.h"
 #include "wolfram/repo/car.h"
 #include "wolfram/sync_subscribe.h"
 #include "wolfram/xrpc.h"
@@ -1609,6 +1610,7 @@ int main(void) {
 
     /* app.bsky.video.uploadVideo: store the video as a blob and return an
      * immediately-completed jobStatus carrying the blob ref. */
+    CHECK(METALBEAR_VIDEO_MAX_BYTES == UINT64_C(300000000));
     const unsigned char video_data[] = {
         0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm',
     };
