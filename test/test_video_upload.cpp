@@ -103,6 +103,13 @@ static void test_happy_path_and_idempotence() {
 
     WF_CHECK(put_part(f.uploads, status.job_id, 1, kTinyMp4.data(),
                       kTinyMp4.size()) == METALBEAR_VIDEO_UPLOAD_OK);
+    /* Re-sending a complete part replaces it and retains one receipt. */
+    WF_CHECK(put_part(f.uploads, status.job_id, 1, kTinyMp4.data(),
+                      kTinyMp4.size()) == METALBEAR_VIDEO_UPLOAD_OK);
+    WF_CHECK(metalbear_video_upload_get_status(f.uploads, status.job_id,
+                                               &status) ==
+             METALBEAR_VIDEO_UPLOAD_OK);
+    WF_CHECK(status.received_part_count == 1 && status.received_parts[0] == 1);
     char detail[256]{};
     WF_CHECK(metalbear_video_upload_finish(f.uploads, status.job_id, &status,
                                            detail, sizeof(detail)) ==
@@ -198,6 +205,43 @@ static void test_missing_and_invalid_content() {
     WF_CHECK(status.state == METALBEAR_VIDEO_UPLOAD_FAILED);
 }
 
+static void test_quota_reservations() {
+    fixture open_cap("-open-cap");
+    std::array<metalbear_video_upload_status,
+               METALBEAR_VIDEO_MAX_OPEN_UPLOADS>
+        sessions{};
+    for (auto &status : sessions)
+        WF_CHECK(metalbear_video_upload_start(
+                     open_cap.uploads, kTinyMp4.size(), "video/mp4", nullptr,
+                     &status) == METALBEAR_VIDEO_UPLOAD_OK);
+    metalbear_video_upload_status rejected{};
+    WF_CHECK(metalbear_video_upload_start(
+                 open_cap.uploads, kTinyMp4.size(), "video/mp4", nullptr,
+                 &rejected) == METALBEAR_VIDEO_UPLOAD_TOO_MANY_OPEN);
+    WF_CHECK(metalbear_video_upload_abort(open_cap.uploads, sessions[0].job_id,
+                                          &sessions[0]) ==
+             METALBEAR_VIDEO_UPLOAD_OK);
+    WF_CHECK(metalbear_video_upload_start(
+                 open_cap.uploads, kTinyMp4.size(), "video/mp4", nullptr,
+                 &rejected) == METALBEAR_VIDEO_UPLOAD_OK);
+
+    fixture daily("-daily-cap");
+    for (int i = 0; i < 3; ++i)
+        WF_CHECK(metalbear_video_upload_start(
+                     daily.uploads, METALBEAR_VIDEO_MAX_BYTES, "video/mp4",
+                     nullptr, &rejected) == METALBEAR_VIDEO_UPLOAD_OK);
+    WF_CHECK(metalbear_video_upload_start(
+                 daily.uploads, METALBEAR_VIDEO_MAX_BYTES, "video/mp4", nullptr,
+                 &rejected) == METALBEAR_VIDEO_UPLOAD_DAILY_LIMIT);
+    uint64_t bytes = 0;
+    uint32_t videos = 0, open = 0;
+    metalbear_video_upload_get_limits(daily.uploads, &bytes, &videos, &open);
+    WF_CHECK(bytes == METALBEAR_VIDEO_DAILY_BYTES -
+                          3 * METALBEAR_VIDEO_MAX_BYTES);
+    WF_CHECK(videos == METALBEAR_VIDEO_DAILY_COUNT - 3);
+    WF_CHECK(open == 3);
+}
+
 static void optional_large_rss_fixture() {
     if (!std::getenv("METALBEAR_RUN_LARGE_VIDEO_TEST")) return;
     fixture f("-large");
@@ -247,6 +291,7 @@ int main() {
     test_happy_path_and_idempotence();
     test_ownership_abort_and_recovery();
     test_missing_and_invalid_content();
+    test_quota_reservations();
     optional_large_rss_fixture();
     WF_TEST_SUMMARY();
 }
