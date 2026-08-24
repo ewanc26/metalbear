@@ -47,6 +47,7 @@ static void test_reads_every_type(void) {
         "\n"
         "[accounts]\n"
         "invite_required = false\n"
+        "max_resident_accounts = 7\n"
         "\n"
         "[limits]\n"
         "rate_limit = 2500\n"
@@ -65,6 +66,7 @@ static void test_reads_every_type(void) {
     CHECK(cfg.service_did &&
           strcmp(cfg.service_did, "did:web:example.com") == 0);
     CHECK(cfg.invite_required == false);
+    CHECK(cfg.max_resident_accounts == 7);
     CHECK(cfg.rate_limit == 2500);
     /* An array becomes the comma-separated form used everywhere else, rather
      * than a second representation of one setting. */
