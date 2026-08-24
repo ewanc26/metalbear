@@ -190,6 +190,145 @@ static wf_status admin_post(wf_xrpc_client *client, const char *base,
     return wf_http_post(client, url, "application/json", body, &hdr, 1, out);
 }
 
+/* Read a Prometheus counter value of `name` from a length-delimited
+ * /metrics body, or -1 when the series is absent. */
+static long metric_value(const wf_response *response, const char *name) {
+    if (!response || !response->body) return -1;
+    char needle[160];
+    snprintf(needle, sizeof(needle), "%s ", name);
+    size_t nlen = strlen(needle);
+    size_t len = response->body_len;
+    const char *base = response->body;
+    for (size_t i = 0; i + nlen <= len; i++) {
+        if (memcmp(base + i, needle, nlen) != 0) continue;
+        /* The # HELP / # TYPE lines also contain "name "; only the bare
+         * sample line (preceded by a newline, followed by a digit) counts. */
+        if (i != 0 && base[i - 1] != '\n') continue;
+        const char *num = base + i + nlen;
+        size_t rem = len - (i + nlen);
+        if (rem == 0 || num[0] < '0' || num[0] > '9') continue;
+        char buf[32];
+        size_t j = 0;
+        while (j < rem && j + 1 < sizeof(buf) && num[j] >= '0' && num[j] <= '9')
+            buf[j++] = num[j];
+        buf[j] = '\0';
+        if (j == 0) return -1;
+        long v = 0;
+        if (sscanf(buf, "%ld", &v) != 1) return -1;
+        return v;
+    }
+    return -1;
+}
+
+/*
+ * The resident-account budget is config-driven: a deployment sets
+ * accounts.max_resident_accounts (or METALBEAR_MAX_RESIDENT_ACCOUNTS) instead
+ * of accepting the conservative default. Pin it to 1 and confirm the cache
+ * actually evicts past it. With the default budget of 256 no eviction ever
+ * fires in this test, so any positive count proves the configured value
+ * reached the cache.
+ */
+static void test_config_resident_budget(void) {
+    char directory[] = "/tmp/metalbear-budget-XXXXXX";
+    CHECK(mkdtemp(directory) != NULL);
+    metalbear_config config = {
+        .listen_address = "127.0.0.1",
+        .port = 0,
+        .thread_count = 2,
+        .data_directory = directory,
+        .service_did = "did:web:pds.example.com",
+        .user_domain = ".example.com",
+        .admin_password = "secret-admin",
+        .invite_required = false,
+        .rate_limit = 10000,
+        .max_resident_accounts = 1,
+    };
+    metalbear_server *server = metalbear_server_start(&config);
+    CHECK(server != NULL);
+    if (!server) {
+        rmtree(directory);
+        return;
+    }
+
+    char base[80];
+    snprintf(base, sizeof(base), "http://127.0.0.1:%u",
+             (unsigned)metalbear_server_port(server));
+    wf_xrpc_client *client = wf_xrpc_client_new(base);
+    CHECK(client != NULL);
+
+    wf_response response = {0};
+    const char *handles[] = {"bob", "carol", "dave"};
+    for (size_t i = 0; i < 3; i++) {
+        char body[256];
+        snprintf(body, sizeof(body),
+                 "{\"handle\":\"%s.example.com\","
+                 "\"password\":\"correct horse battery staple\","
+                 "\"email\":\"%s@example.com\"}",
+                 handles[i], handles[i]);
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAccount",
+                                body, &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+    }
+    /* Each authenticated request resolves its account context through the
+     * cache; with the budget pinned to 1, opening three forces evictions.
+     * createSession issues a token; getSession (bearer-authed) is what
+     * actually resolves the context through the cache. */
+    char *tokens[3] = {NULL, NULL, NULL};
+    for (size_t i = 0; i < 3; i++) {
+        char body[256];
+        snprintf(body, sizeof(body),
+                 "{\"identifier\":\"%s.example.com\","
+                 "\"password\":\"correct horse battery staple\"}",
+                 handles[i]);
+        CHECK(wf_xrpc_procedure(client, "com.atproto.server.createSession",
+                                body, &response) == WF_OK);
+        CHECK(response.status == 200);
+        cJSON *j = json_response(&response);
+        cJSON *tok = cJSON_GetObjectItemCaseSensitive(j, "accessJwt");
+        tokens[i] = cJSON_IsString(tok) ? strdup(tok->valuestring) : NULL;
+        cJSON_Delete(j);
+        wf_response_free(&response);
+    }
+    for (size_t i = 0; i < 3; i++) {
+        if (!tokens[i]) continue;
+        wf_xrpc_client_set_auth(client, tokens[i]);
+        CHECK(wf_xrpc_query(client, "com.atproto.server.getSession", NULL,
+                            &response) == WF_OK);
+        CHECK(response.status == 200);
+        wf_response_free(&response);
+    }
+
+    /* /metrics is admin-gated HTTP Basic; clear the bearer auth the client
+     * still carries from the getSession loop so it does not override this. */
+    wf_xrpc_client_set_auth(client, NULL);
+    char cred[64];
+    int n = snprintf(cred, sizeof(cred), "admin:%s", "secret-admin");
+    char b64[128];
+    int len =
+        EVP_EncodeBlock((unsigned char *)b64, (const unsigned char *)cred, n);
+    b64[len] = '\0';
+    char auth[160];
+    snprintf(auth, sizeof(auth), "Basic %s", b64);
+    wf_http_header hdr = {"Authorization", auth};
+    char metrics_url[160];
+    snprintf(metrics_url, sizeof(metrics_url), "%s/metrics", base);
+    CHECK(wf_http_get_with_headers(client, metrics_url, &hdr, 1, &response) ==
+          WF_OK);
+    CHECK(response.status == 200);
+    long ev =
+        metric_value(&response, "metalbear_account_cache_evictions_total");
+    CHECK(ev >= 1);
+    if (ev < 1)
+        fprintf(stderr, "FAIL: account_cache_evictions_total=%ld\n", ev);
+    wf_response_free(&response);
+
+    for (size_t i = 0; i < 3; i++) free(tokens[i]);
+    wf_xrpc_client_free(client);
+    metalbear_server_free(server);
+    rmtree(directory);
+}
+
 int main(void) {
     char directory[] = "/tmp/metalbear-test-XXXXXX";
     CHECK(mkdtemp(directory) != NULL);
@@ -2920,6 +3059,8 @@ int main(void) {
         wf_xrpc_client_free(client);
         metalbear_server_free(server);
     }
+
+    test_config_resident_budget();
 
     char path[512];
     if (blob_cid) {
