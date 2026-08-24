@@ -56,6 +56,15 @@ static const struct {
         {"dns_failures_total", "Handle DNS records that could not be written."},
     [METALBEAR_METRIC_CRAWL_FAILURES] =
         {"crawl_failures_total", "requestCrawl announcements that failed."},
+    [METALBEAR_METRIC_ACCOUNT_CACHE_HITS] =
+        {"account_cache_hits_total",
+         "Account contexts reused from the resident cache."},
+    [METALBEAR_METRIC_ACCOUNT_CACHE_MISSES] =
+        {"account_cache_misses_total",
+         "Account contexts opened because they were not resident."},
+    [METALBEAR_METRIC_ACCOUNT_CACHE_EVICTIONS] =
+        {"account_cache_evictions_total",
+         "Idle account contexts closed to stay under the resident budget."},
 };
 
 void metalbear_metrics_inc(metalbear_metric metric) {

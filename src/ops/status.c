@@ -199,6 +199,27 @@ static wf_status metrics_handler(void *ctx, const wf_xrpc_request *req,
                        (unsigned long long)metalbear_metrics_get(i));
     }
 
+    /* Account cache residency, read from the cache at scrape time (a gauge, not
+     * a counter — the metrics model keeps current state out of the counter
+     * table). resident counts every open context; idle ones are evictable
+     * under the resident budget. */
+    {
+        size_t resident = 0, idle = 0;
+        metalbear_account_cache_stats(server->account_cache, &resident, &idle,
+                                      NULL, NULL, NULL);
+        ok = sb_append(
+            &sb,
+            "# HELP metalbear_account_cache_resident Open account contexts "
+            "(referenced or idle).\n"
+            "# TYPE metalbear_account_cache_resident gauge\n"
+            "metalbear_account_cache_resident %llu\n"
+            "# HELP metalbear_account_cache_idle Idle (fully released, "
+            "evictable) account contexts.\n"
+            "# TYPE metalbear_account_cache_idle gauge\n"
+            "metalbear_account_cache_idle %llu\n",
+            (unsigned long long)resident, (unsigned long long)idle);
+    }
+
     /*
      * Per-route series. The label is escaped because a route name reaches
      * here from the network — the AppView proxy forwards NSIDs this server

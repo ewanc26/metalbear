@@ -259,6 +259,10 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${WOLFRAM_SOURCE_DIR}/test")
   add_test(NAME metalbear_video_upload COMMAND test_metalbear_video_upload)
 
+  add_executable(test_metalbear_account_cache test/test_account_cache.c)
+  target_link_libraries(test_metalbear_account_cache PRIVATE metalbear_core)
+  add_test(NAME metalbear_account_cache COMMAND test_metalbear_account_cache)
+
   add_executable(test_metalbear_config_file test/test_config_file.c)
   target_link_libraries(test_metalbear_config_file PRIVATE metalbear_core)
   target_include_directories(test_metalbear_config_file
