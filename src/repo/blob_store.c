@@ -15,11 +15,13 @@
 #include <dirent.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <sys/stat.h>
 
 typedef struct metalbear_blob_node {
     char *cid;           /* owned CID string (key) */
     char *mime;          /* owned MIME type */
-    unsigned char *data; /* owned blob bytes */
+    unsigned char *data; /* owned bytes in memory mode; NULL when file-backed */
     size_t len;
     char **refs; /* owned array of owned record URI strings */
     size_t ref_count;
@@ -50,6 +52,22 @@ static char *blob_path(const char *dir, const char *name) {
     memcpy(out + dlen + sep, name, nlen);
     out[dlen + sep + nlen] = '\0';
     return out;
+}
+
+/* Join dir + cid + suffix into a heap buffer (caller frees). */
+static char *blob_sidecar_path(const char *dir, const char *cid,
+                               const char *suffix) {
+    char *path = blob_path(dir, cid);
+    if (!path) return NULL;
+    size_t plen = strlen(path);
+    size_t slen = strlen(suffix);
+    char *grown = (char *)realloc(path, plen + slen + 1);
+    if (!grown) {
+        free(path);
+        return NULL;
+    }
+    memcpy(grown + plen, suffix, slen + 1);
+    return grown;
 }
 
 /* Mint the next process TID into `rev`, or clear it on failure. */
@@ -128,16 +146,7 @@ static void refs_remove_at(metalbear_blob_node *n, size_t idx) {
 /* Path to a blob's association sidecar (file-backed stores only). Caller
  * frees. Returns NULL on allocation failure. */
 static char *blob_refs_path(const char *dir, const char *cid) {
-    char *p = blob_path(dir, cid);
-    if (!p) return NULL;
-    size_t plen = strlen(p);
-    char *grown = (char *)realloc(p, plen + 6); /* ".refs\0" */
-    if (!grown) {
-        free(p);
-        return NULL;
-    }
-    memcpy(grown + plen, ".refs", 6);
-    return grown;
+    return blob_sidecar_path(dir, cid, ".refs");
 }
 
 /* Rewrite (or remove, if empty) a node's association sidecar to match its
@@ -184,16 +193,7 @@ static void load_refs(metalbear_blob_store *store, metalbear_blob_node *n) {
 /* Path to a blob's first-seen rev sidecar (file-backed stores only). Caller
  * frees. Returns NULL on allocation failure. */
 static char *blob_rev_path(const char *dir, const char *cid) {
-    char *p = blob_path(dir, cid);
-    if (!p) return NULL;
-    size_t plen = strlen(p);
-    char *grown = (char *)realloc(p, plen + 6); /* ".rev\0" */
-    if (!grown) {
-        free(p);
-        return NULL;
-    }
-    memcpy(grown + plen, ".rev", 5);
-    return grown;
+    return blob_sidecar_path(dir, cid, ".rev");
 }
 
 /* Rewrite a node's first-seen rev sidecar to match its in-memory state, or
@@ -266,6 +266,54 @@ static wf_status blob_read_file(const char *path, unsigned char **out,
     return WF_OK;
 }
 
+static wf_status blob_write_file(const char *path, const void *data,
+                                 size_t len) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return WF_ERR_INTERNAL;
+    bool ok = fwrite(data, 1, len, f) == len;
+    if (fclose(f) != 0) ok = false;
+    return ok ? WF_OK : WF_ERR_INTERNAL;
+}
+
+/* Persist payload and MIME bytes before publishing their metadata in the
+ * in-memory index. Temporary files keep readers from observing partial
+ * writes; callers hold store->mutex while this runs. */
+static wf_status blob_write_backing_files(metalbear_blob_store *store,
+                                          const char *cid,
+                                          const char *mime_type,
+                                          const unsigned char *data,
+                                          size_t len) {
+    char *datap = blob_path(store->dir, cid);
+    char *mimep = blob_sidecar_path(store->dir, cid, ".mime");
+    char *data_tmp = blob_sidecar_path(store->dir, cid, ".tmp");
+    char *mime_tmp = blob_sidecar_path(store->dir, cid, ".mime.tmp");
+    if (!datap || !mimep || !data_tmp || !mime_tmp) {
+        free(datap);
+        free(mimep);
+        free(data_tmp);
+        free(mime_tmp);
+        return WF_ERR_ALLOC;
+    }
+
+    (void)remove(data_tmp);
+    (void)remove(mime_tmp);
+    wf_status st = blob_write_file(data_tmp, data, len);
+    if (st == WF_OK)
+        st = blob_write_file(mime_tmp, mime_type, strlen(mime_type));
+    if (st == WF_OK && rename(data_tmp, datap) != 0) st = WF_ERR_INTERNAL;
+    if (st == WF_OK && rename(mime_tmp, mimep) != 0) st = WF_ERR_INTERNAL;
+    if (st != WF_OK) {
+        (void)remove(data_tmp);
+        (void)remove(mime_tmp);
+    }
+
+    free(datap);
+    free(mimep);
+    free(data_tmp);
+    free(mime_tmp);
+    return st;
+}
+
 static bool blob_ends_with(const char *s, const char *suffix) {
     size_t ls = strlen(s), lx = strlen(suffix);
     return ls >= lx && strcmp(s + ls - lx, suffix) == 0;
@@ -313,65 +361,51 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path) {
                 if (!blob_cid_is_valid(name)) continue;
 
                 char *datap = blob_path(store->dir, name);
-                char *mimep = blob_path(store->dir, name);
+                char *mimep = blob_sidecar_path(store->dir, name, ".mime");
                 if (!datap || !mimep) {
                     free(datap);
                     free(mimep);
                     continue;
                 }
-                /* Append ".mime" to the mime sidecar path. */
-                size_t plen = strlen(mimep);
-                char *mp = (char *)realloc(mimep, plen + 6);
-                if (!mp) {
-                    free(datap);
-                    free(mimep);
-                    continue;
-                }
-                mimep = mp;
-                memcpy(mimep + plen, ".mime", 6);
-
-                unsigned char *data = NULL;
                 size_t dlen = 0;
                 char *mime = NULL;
-                size_t mlen = 0;
                 unsigned char *mraw = NULL;
                 size_t mraw_len = 0;
+                struct stat data_stat;
 
-                if (blob_read_file(datap, &data, &dlen) != WF_OK) {
+                if (stat(datap, &data_stat) != 0 ||
+                    !S_ISREG(data_stat.st_mode) || data_stat.st_size < 0 ||
+                    (uintmax_t)data_stat.st_size > SIZE_MAX) {
                     free(datap);
                     free(mimep);
                     continue;
                 }
+                dlen = (size_t)data_stat.st_size;
                 if (blob_read_file(mimep, &mraw, &mraw_len) != WF_OK) {
                     free(datap);
                     free(mimep);
-                    free(data);
                     continue;
                 }
                 mime = (char *)malloc(mraw_len + 1);
                 if (!mime) {
                     free(datap);
                     free(mimep);
-                    free(data);
                     free(mraw);
                     continue;
                 }
                 memcpy(mime, mraw, mraw_len);
                 mime[mraw_len] = '\0';
-                mlen = mraw_len;
-                (void)mlen;
 
                 char *cid = strdup(name);
                 if (!cid) {
                     free(datap);
                     free(mimep);
-                    free(data);
                     free(mraw);
                     free(mime);
                     continue;
                 }
                 /* Best-effort index load; ignore failures. */
-                if (blob_node_push(store, cid, mime, data, dlen, NULL) ==
+                if (blob_node_push(store, cid, mime, NULL, dlen, NULL) ==
                     WF_OK) {
                     load_refs(store, store->head); /* push inserts at head */
                     load_rev(store, store->head);
@@ -410,22 +444,32 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
         return WF_ERR_INVALID_ARG;
     }
 
-    pthread_mutex_lock(&store->mutex);
-
-    unsigned char *data_copy = (unsigned char *)malloc(len ? len : 1);
-    if (!data_copy) {
-        pthread_mutex_unlock(&store->mutex);
-        return WF_ERR_ALLOC;
+    unsigned char *data_copy = NULL;
+    if (!store->file_backed) {
+        data_copy = (unsigned char *)malloc(len ? len : 1);
+        if (!data_copy) return WF_ERR_ALLOC;
+        memcpy(data_copy, data, len);
     }
-    memcpy(data_copy, data, len);
     char *cid_copy = strdup(cid);
     char *mime_copy = strdup(mime_type);
     if (!cid_copy || !mime_copy) {
         free(data_copy);
         free(cid_copy);
         free(mime_copy);
-        pthread_mutex_unlock(&store->mutex);
         return WF_ERR_ALLOC;
+    }
+
+    pthread_mutex_lock(&store->mutex);
+    if (store->file_backed) {
+        wf_status st =
+            blob_write_backing_files(store, cid, mime_type, data, len);
+        if (st != WF_OK) {
+            free(data_copy);
+            free(cid_copy);
+            free(mime_copy);
+            pthread_mutex_unlock(&store->mutex);
+            return st;
+        }
     }
 
     /* Replace an existing entry with the same CID. */
@@ -445,7 +489,7 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
                 persist_rev(store, n);
             }
             pthread_mutex_unlock(&store->mutex);
-            goto persist;
+            return WF_OK;
         }
     }
 
@@ -453,55 +497,19 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
     blob_tid_now(rev);
     if (blob_node_push(store, cid_copy, mime_copy, data_copy, len, rev) !=
         WF_OK) {
+        if (store->file_backed) {
+            char *datap = blob_path(store->dir, cid);
+            char *mimep = blob_sidecar_path(store->dir, cid, ".mime");
+            if (datap) (void)remove(datap);
+            if (mimep) (void)remove(mimep);
+            free(datap);
+            free(mimep);
+        }
         pthread_mutex_unlock(&store->mutex);
         return WF_ERR_ALLOC;
     }
-    pthread_mutex_unlock(&store->mutex);
     persist_rev(store, store->head); /* push inserts at head */
-
-persist:
-    if (store->file_backed) {
-        char *datap = blob_path(store->dir, cid);
-        char *mimep = blob_path(store->dir, cid);
-        wf_status st = WF_OK;
-        if (!datap || !mimep) {
-            free(datap);
-            free(mimep);
-            return WF_ERR_INTERNAL;
-        }
-        size_t plen = strlen(mimep);
-        char *mp = (char *)realloc(mimep, plen + 6);
-        if (!mp) {
-            free(datap);
-            free(mimep);
-            return WF_ERR_INTERNAL;
-        }
-        mimep = mp;
-        memcpy(mimep + plen, ".mime", 6);
-
-        FILE *f = fopen(datap, "wb");
-        if (!f) {
-            st = WF_ERR_INTERNAL;
-        } else {
-            if (fwrite(data, 1, len, f) != len) st = WF_ERR_INTERNAL;
-            fclose(f);
-        }
-        if (st == WF_OK) {
-            FILE *mf = fopen(mimep, "wb");
-            if (!mf) {
-                st = WF_ERR_INTERNAL;
-            } else {
-                if (fwrite(mime_type, 1, strlen(mime_type), mf) !=
-                    strlen(mime_type))
-                    st = WF_ERR_INTERNAL;
-                fclose(mf);
-            }
-        }
-        free(datap);
-        free(mimep);
-        if (st != WF_OK) return st;
-    }
-
+    pthread_mutex_unlock(&store->mutex);
     return WF_OK;
 }
 
@@ -519,17 +527,39 @@ wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
     pthread_mutex_lock(&store->mutex);
     for (metalbear_blob_node *n = store->head; n; n = n->next) {
         if (strcmp(n->cid, cid) == 0) {
-            unsigned char *data = (unsigned char *)malloc(n->len ? n->len : 1);
             char *mime = strdup(n->mime);
-            if (!data || !mime) {
-                free(data);
-                free(mime);
+            if (!mime) {
                 pthread_mutex_unlock(&store->mutex);
                 return WF_ERR_ALLOC;
             }
-            memcpy(data, n->data, n->len);
+
+            unsigned char *data = NULL;
+            size_t len = 0;
+            wf_status st = WF_OK;
+            if (store->file_backed) {
+                char *datap = blob_path(store->dir, cid);
+                if (!datap)
+                    st = WF_ERR_ALLOC;
+                else
+                    st = blob_read_file(datap, &data, &len);
+                free(datap);
+            } else {
+                data = (unsigned char *)malloc(n->len ? n->len : 1);
+                if (!data)
+                    st = WF_ERR_ALLOC;
+                else {
+                    memcpy(data, n->data, n->len);
+                    len = n->len;
+                }
+            }
+            if (st != WF_OK) {
+                free(mime);
+                pthread_mutex_unlock(&store->mutex);
+                return st;
+            }
+            n->len = len;
             *out_data = data;
-            *out_len = n->len;
+            *out_len = len;
             *out_mime = mime;
             pthread_mutex_unlock(&store->mutex);
             return WF_OK;
@@ -570,91 +600,62 @@ static wf_status blob_store_delete_locked(metalbear_blob_store *store,
     }
 
     metalbear_blob_node *node = *link;
-    *link = node->next;
-
-    char *saved_dir = store->file_backed ? strdup(store->dir) : NULL;
-    char *saved_cid = strdup(cid);
-    unsigned char *saved_data =
-        (unsigned char *)malloc(node->len ? node->len : 1);
-    size_t saved_len = node->len;
-    char *saved_mime = strdup(node->mime);
-    char rev_copy[15];
-    memcpy(rev_copy, node->rev, 15);
-
-    blob_node_free(node);
-
-    if (!saved_cid || !saved_data || !saved_mime) {
-        free(saved_dir);
-        free(saved_cid);
-        free(saved_data);
-        free(saved_mime);
-        return WF_ERR_ALLOC;
-    }
-
     if (store->file_backed) {
-        char *datap = blob_path(saved_dir, saved_cid);
-        char *mimep = blob_path(saved_dir, saved_cid);
-        wf_status st = WF_OK;
-        if (!datap || !mimep) {
+        char *datap = blob_path(store->dir, cid);
+        char *mimep = blob_sidecar_path(store->dir, cid, ".mime");
+        char *data_trash = blob_sidecar_path(store->dir, cid, ".delete");
+        char *mime_trash =
+            blob_sidecar_path(store->dir, cid, ".mime.delete");
+        if (!datap || !mimep || !data_trash || !mime_trash) {
             free(datap);
             free(mimep);
-            st = WF_ERR_ALLOC;
-        } else {
-            size_t plen = strlen(mimep);
-            char *mp = (char *)realloc(mimep, plen + 6);
-            if (!mp) {
-                free(datap);
-                free(mimep);
-                st = WF_ERR_ALLOC;
-            } else {
-                mimep = mp;
-                memcpy(mimep + plen, ".mime", 6);
-
-                if (remove(datap) != 0) {
-                    FILE *f = fopen(datap, "wb");
-                    if (f) {
-                        if (fwrite(saved_data, 1, saved_len, f) != saved_len) {
-                            (void)remove(datap);
-                        }
-                        fclose(f);
-                    }
-                    st = WF_ERR_INTERNAL;
-                }
-                if (st == WF_OK && remove(mimep) != 0) {
-                    FILE *mf = fopen(mimep, "wb");
-                    if (mf) {
-                        if (fwrite(saved_mime, 1, strlen(saved_mime), mf) !=
-                            strlen(saved_mime)) {
-                            (void)remove(mimep);
-                        }
-                        fclose(mf);
-                    }
-                    st = WF_ERR_INTERNAL;
-                }
-                free(datap);
-                free(mimep);
-                if (st == WF_OK) {
-                    char *refsp = blob_refs_path(saved_dir, saved_cid);
-                    if (refsp) {
-                        remove(refsp);
-                        free(refsp);
-                    }
-                    char *revp = blob_rev_path(saved_dir, saved_cid);
-                    if (revp) {
-                        remove(revp);
-                        free(revp);
-                    }
-                }
-            }
+            free(data_trash);
+            free(mime_trash);
+            return WF_ERR_ALLOC;
         }
-        free(saved_dir);
-        free(saved_cid);
-        free(saved_data);
-        free(saved_mime);
-        return st;
+
+        (void)remove(data_trash);
+        (void)remove(mime_trash);
+        if (rename(datap, data_trash) != 0) {
+            free(datap);
+            free(mimep);
+            free(data_trash);
+            free(mime_trash);
+            return WF_ERR_INTERNAL;
+        }
+        if (rename(mimep, mime_trash) != 0) {
+            (void)rename(data_trash, datap);
+            free(datap);
+            free(mimep);
+            free(data_trash);
+            free(mime_trash);
+            return WF_ERR_INTERNAL;
+        }
+
+        *link = node->next;
+        blob_node_free(node);
+        (void)remove(data_trash);
+        (void)remove(mime_trash);
+        free(datap);
+        free(mimep);
+        free(data_trash);
+        free(mime_trash);
+
+        char *refsp = blob_refs_path(store->dir, cid);
+        if (refsp) {
+            (void)remove(refsp);
+            free(refsp);
+        }
+        char *revp = blob_rev_path(store->dir, cid);
+        if (revp) {
+            (void)remove(revp);
+            free(revp);
+        }
+        return WF_OK;
     }
 
-    (void)rev_copy;
+    *link = node->next;
+    blob_node_free(node);
     return WF_OK;
 }
 

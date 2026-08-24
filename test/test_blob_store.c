@@ -342,7 +342,10 @@ static int test_file_backed(void) {
 
     const unsigned char payload[] = {'h', 'e', 'l', 'l', 'o',
                                      ' ', 'b', 'l', 'o', 'b'};
+    const unsigned char replacement[] = {'d', 'i', 's', 'k', ' ',
+                                         'b', 'y', 't', 'e', 's'};
     const char *cid = "bafytestcidfilebacked";
+    char path[1024];
 
     metalbear_blob_store *s1 = metalbear_blob_store_new(dir);
     if (!s1) {
@@ -374,6 +377,33 @@ static int test_file_backed(void) {
         if (len != sizeof(payload) || memcmp(data, payload, len) != 0 ||
             strcmp(mime, "text/plain") != 0) {
             fprintf(stderr, "FAIL: persisted content mismatch\n");
+            fail = 1;
+        }
+        free(data);
+        free(mime);
+    }
+
+    /* File-backed stores retain only metadata: a read must come from disk,
+     * not from a payload copy held since the store was opened. */
+    snprintf(path, sizeof(path), "%s/%s", dir, cid);
+    FILE *backing = fopen(path, "wb");
+    int backing_ok = 0;
+    if (backing) {
+        backing_ok = fwrite(replacement, 1, sizeof(replacement), backing) ==
+                     sizeof(replacement);
+        if (fclose(backing) != 0) backing_ok = 0;
+    }
+    if (!backing_ok) {
+        fprintf(stderr, "FAIL: replace backing blob\n");
+        fail = 1;
+    } else {
+        data = NULL;
+        len = 0;
+        mime = NULL;
+        if (metalbear_blob_store_get(s2, cid, &data, &len, &mime) != WF_OK ||
+            len != sizeof(replacement) ||
+            memcmp(data, replacement, sizeof(replacement)) != 0) {
+            fprintf(stderr, "FAIL: file-backed payload was retained in RAM\n");
             fail = 1;
         }
         free(data);
@@ -412,7 +442,6 @@ static int test_file_backed(void) {
         metalbear_blob_store_free(s3);
     }
 
-    char path[1024];
     snprintf(path, sizeof(path), "%s/%s", dir, cid);
     if (access(path, F_OK) == 0) {
         fprintf(stderr, "FAIL: deleted data file remains\n");
