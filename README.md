@@ -20,8 +20,8 @@ and third-party library integrations. The public boundary remains a C ABI via
 `extern "C"`; building MetalBear requires both C and C++ compilers, while the
 shipped Linux binary statically carries its C++ runtime support.
 It hosts multiple accounts, mints `did:plc` identities, serves the firehose,
-and federates: as of 0.4.1 a MetalBear instance is consumed by Bluesky's
-relays and its posts are indexed by the Bluesky AppView.
+and federates: MetalBear instances are consumed by Bluesky's relays and their
+posts are indexed by the Bluesky AppView.
 
 ![version](https://img.shields.io/github/v/release/ewanc26/metalbear?label=version)
 
@@ -60,6 +60,10 @@ relays and its posts are indexed by the Bluesky AppView.
   single-account invite codes
 - session/account responses carrying the lexicon `emailAuthFactor` flag
 - durable SQLite-backed signed repositories and file-backed blob upload/serving
+- legacy and current `app.bsky.video` upload flows, including durable,
+  per-account multipart sessions with bounded-memory 5 MB parts, restart
+  recovery, quota reservations, idempotent finish/abort, and the lexicon's
+  300,000,000-byte file limit
 
 ## Admin Endpoints
 
@@ -523,6 +527,9 @@ MetalBear generates its session-signing secret on first start and stores it in
 restarts and are returned only by the session endpoints. Firehose frames and
 their monotonic sequence numbers are stored separately in `sequencer.sqlite3`.
 Account availability is persisted in `account.sqlite3`.
+Open and terminal multipart video sessions are persisted in
+`video_uploads.sqlite3`; raw parts remain private to the account under
+`video_uploads/` until completion or cleanup.
 Account passwords are stored only as random-salted scrypt verifiers, as are app
 passwords.
 
@@ -594,11 +601,16 @@ METALBEAR_RELEASE_STAGE=<stage>` / docker-compose's `build.args` for a
 Docker build — useful for a self-hosted deployment that wants to declare a
 different stage than the upstream project's own.
 
+The same `/operator.json` document advertises the running binary's multipart
+video capability and exact file/part limits. The landing page reads those
+values rather than carrying a second, potentially stale copy.
+
 ## Frontend
 
-`frontend/` holds the landing page: SvelteKit, prerendered to static files, and
-the only non-C part of this repository. It reads the server's own XRPC endpoints
-in the browser, so it reports live state rather than build-time state.
+`frontend/` holds the browser-facing landing and account UI: SvelteKit,
+prerendered to static files alongside the C23 server and its isolated C++
+modules. It reads the server's own XRPC and operator endpoints in the browser,
+so it reports live state rather than build-time state.
 
 ## Contributing
 

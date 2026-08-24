@@ -1,14 +1,13 @@
 /*
  * video_routes.c — app.bsky.video.* handlers.
  *
- * Minimal, self-contained video support: a video upload is stored as an
- * ordinary blob in the account's blob store and the job is reported completed
- * immediately, because MetalBear performs no transcoding. The job is
- * stateless: everything getJobStatus needs to reconstruct a finished job is
- * encoded in the job ID (vid-<unix_ts>-<cid>-<size>). A production
- * deployment that wants HLS playlists / thumbnails would hand the blob off to
- * an external video processor instead; the wire contract here matches the
- * app.bsky.video lexicons regardless.
+ * The legacy single-request route stores an ordinary account blob and reports
+ * it completed immediately; its stateless vid- job ID carries everything
+ * getJobStatus needs. The current multipart routes use the account's durable
+ * SQLite upload store and bounded streamed part files, then publish the
+ * assembled object through that same blob store. MetalBear performs no
+ * transcoding; a deployment that wants HLS or thumbnails can hand the finished
+ * blob to an external processor without changing the upload-phase contract.
  */
 
 #include "video_routes.h"
