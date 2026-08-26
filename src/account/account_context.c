@@ -70,13 +70,22 @@ wf_status metalbear_account_context_open_shared(
     char *seq_path = join_path(data_directory, "sequencer.sqlite3");
     char *oauth_path = join_path(data_directory, "oauth.sqlite3");
     char *key_path = join_path(data_directory, "keys.sqlite3");
+#ifdef METALBEAR_MODULE_VIDEO
     char *video_upload_path =
         join_path(data_directory, "video_uploads.sqlite3");
     char *video_parts_path = join_path(data_directory, "video_uploads");
+#endif
     wf_status status = WF_ERR_ALLOC;
     if (!repo_path || !blob_path || !auth_path || !account_path || !seq_path ||
-        !oauth_path || !key_path || !video_upload_path || !video_parts_path ||
-        !make_directory(blob_path) || !make_directory(video_parts_path))
+        !oauth_path || !key_path ||
+#ifdef METALBEAR_MODULE_VIDEO
+        !video_upload_path || !video_parts_path ||
+#endif
+        !make_directory(blob_path)
+#ifdef METALBEAR_MODULE_VIDEO
+        || !make_directory(video_parts_path)
+#endif
+    )
         goto cleanup;
 
     if (metalbear_repo_store_open_with_key(repo_path, did, handle, signing_key,
@@ -118,10 +127,12 @@ wf_status metalbear_account_context_open_shared(
      * tokens belong to. The host's store lives on the server. */
     if (metalbear_key_rotation_open(key_path, &ctx->key_rotation) != WF_OK)
         goto cleanup;
+#ifdef METALBEAR_MODULE_VIDEO
     if (metalbear_video_upload_store_open(video_upload_path, video_parts_path,
                                           ctx->blobs,
                                           &ctx->video_uploads) != WF_OK)
         goto cleanup;
+#endif
 
     ctx->active = metalbear_account_is_active(ctx->account);
     status = WF_OK;
@@ -135,8 +146,10 @@ cleanup:
     free(seq_path);
     free(oauth_path);
     free(key_path);
+#ifdef METALBEAR_MODULE_VIDEO
     free(video_upload_path);
     free(video_parts_path);
+#endif
     if (status != WF_OK) metalbear_account_context_close(ctx);
     return status;
 }
@@ -144,8 +157,10 @@ cleanup:
 void metalbear_account_context_close(metalbear_account_context *ctx) {
     if (!ctx) return;
     if (ctx->repo) metalbear_repo_store_free(ctx->repo);
+#ifdef METALBEAR_MODULE_VIDEO
     if (ctx->video_uploads)
         metalbear_video_upload_store_free(ctx->video_uploads);
+#endif
     if (ctx->blobs) metalbear_blob_store_free(ctx->blobs);
     if (ctx->auth) metalbear_auth_store_free(ctx->auth);
     if (ctx->account) metalbear_account_store_free(ctx->account);

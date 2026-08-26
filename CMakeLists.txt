@@ -89,6 +89,36 @@ find_package(OpenSSL REQUIRED)
 # for already provides.
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PCRE2 REQUIRED IMPORTED_TARGET libpcre2-8)
+
+# ---------------------------------------------------------------------------
+# Modular build profile (issue #32)
+#
+# MetalBear compiles the full server surface by default. An opt-in "minimal"
+# profile targets constrained hosts (Raspberry Pi 1B/Zero): it turns every
+# optional feature module OFF so each is omitted from compilation AND route
+# registration, and its dependencies become unnecessary. Modules can also be
+# toggled independently; the minimal profile is just a preset that disables
+# them all. The normal (full) build is unchanged when no option is set.
+# ---------------------------------------------------------------------------
+set(METALBEAR_PROFILE
+    "full"
+    CACHE STRING "Build profile: 'full' (default) or 'minimal' (Pi 1B/Zero).")
+set_property(CACHE METALBEAR_PROFILE PROPERTY STRINGS full minimal)
+
+option(METALBEAR_MODULE_APPVIEW "Build AppView proxy routes" ON)
+option(METALBEAR_MODULE_VIDEO "Build video upload routes" ON)
+option(METALBEAR_MODULE_EMAIL "Build outbound email (SMTP) client and routes" ON)
+option(METALBEAR_MODULE_DNS "Build dynamic DNS handle-publishing providers" ON)
+option(METALBEAR_MODULE_WEBAUTHN "Build WebAuthn/passkey administration" ON)
+option(METALBEAR_MODULE_UPDATE_WATCHER
+       "Build the self-update watcher and non-essential ops endpoints" ON)
+
+if(METALBEAR_PROFILE STREQUAL "minimal")
+  foreach(_mb_mod APPVIEW VIDEO EMAIL DNS WEBAUTHN UPDATE_WATCHER)
+    set(METALBEAR_MODULE_${_mb_mod} OFF CACHE BOOL "" FORCE)
+  endforeach()
+endif()
+
 set(WOLFRAM_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../wolfram"
     CACHE PATH "Path to the Wolfram source tree")
 
@@ -104,11 +134,9 @@ add_subdirectory("${WOLFRAM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/wolfram")
 get_target_property(METALBEAR_CJSON_SOURCE_DIR cjson SOURCE_DIR)
 target_compile_options(cjson PRIVATE -Wno-keyword-macro)
 
-add_library(
-  metalbear_core
+# Core sources always compiled regardless of module selection.
+set(METALBEAR_CORE_SOURCES
   src/ops/metrics.c
-  src/dns/handle_dns.c
-  src/dns/handle_dns_rfc2136.c
   cpp/metalbear/account_registry.cpp
   src/account/account_context.c
   src/account/account_cache.c
@@ -116,13 +144,11 @@ add_library(
   src/repo/backup.c
   src/repo/explicit_slurs.c
   src/repo/explicit_slurs_patterns.c
-  src/email.cpp
   src/oauth/oauth.c
   src/oauth/oauth_routes.c
   src/oauth/oauth_account_routes.c
   src/oauth/oauth_scope.c
   src/oauth/oauth_credentials.c
-  src/oauth/webauthn.c
   cpp/metalbear/key_rotation.cpp
   src/repo/repo_store.c
   src/repo/repo_routes.c
@@ -134,19 +160,40 @@ add_library(
   src/session/session_routes.c
   src/account/account_routes.c
   src/sync/sync_routes.c
-  src/appview/appview_routes.c
   src/moderation/moderation_routes.c
   src/moderation/report.c
-  src/video/video_routes.c
-  cpp/metalbear/video_upload.cpp
   src/repo/blob_store.c
   src/repo/blob_store_server.c
-  src/ops/update_watcher.c
   src/ops/status.c
   src/ops/ops_routes.c
   cpp/metalbear/config_file.cpp
   cpp/metalbear/log.cpp
   cpp/metalbear/account.cpp)
+
+# Module-specific sources, appended only when the corresponding
+# METALBEAR_MODULE_* option is ON.
+if(METALBEAR_MODULE_DNS)
+  list(APPEND METALBEAR_CORE_SOURCES
+    src/dns/handle_dns.c src/dns/handle_dns_rfc2136.c)
+endif()
+if(METALBEAR_MODULE_UPDATE_WATCHER)
+  list(APPEND METALBEAR_CORE_SOURCES src/ops/update_watcher.c)
+endif()
+if(METALBEAR_MODULE_VIDEO)
+  list(APPEND METALBEAR_CORE_SOURCES
+    src/video/video_routes.c cpp/metalbear/video_upload.cpp)
+endif()
+if(METALBEAR_MODULE_APPVIEW)
+  list(APPEND METALBEAR_CORE_SOURCES src/appview/appview_routes.c)
+endif()
+if(METALBEAR_MODULE_WEBAUTHN)
+  list(APPEND METALBEAR_CORE_SOURCES src/oauth/webauthn.c)
+endif()
+if(METALBEAR_MODULE_EMAIL)
+  list(APPEND METALBEAR_CORE_SOURCES src/email.cpp)
+endif()
+
+add_library(metalbear_core ${METALBEAR_CORE_SOURCES})
 target_include_directories(metalbear_core PUBLIC include
                            PUBLIC "${METALBEAR_CJSON_SOURCE_DIR}")
 target_link_libraries(metalbear_core PUBLIC wolfram cjson
@@ -159,6 +206,15 @@ target_compile_definitions(
   PUBLIC METALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}"
   PUBLIC METALBEAR_BUILD_TIME="${METALBEAR_BUILD_TIME}"
   PUBLIC METALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}")
+
+# Propagate module enable/disable to the preprocessor so source files can
+# #ifdef-guard module-specific includes, route registrations, and struct
+# fields. PUBLIC so test targets inherit the same defines.
+foreach(_mb_mod APPVIEW VIDEO EMAIL DNS WEBAUTHN UPDATE_WATCHER)
+  if(METALBEAR_MODULE_${_mb_mod})
+    target_compile_definitions(metalbear_core PUBLIC METALBEAR_MODULE_${_mb_mod})
+  endif()
+endforeach()
 
 # nftw() and its FTW_* flags are XSI extensions. Wolfram exports
 # _POSIX_C_SOURCE/_DEFAULT_SOURCE, which is enough for strdup and friends but

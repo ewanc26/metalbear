@@ -14,7 +14,9 @@
 
 #include "metalbear/account/account.h"
 #include "metalbear/account/account_registry.h"
+#ifdef METALBEAR_MODULE_EMAIL
 #include "metalbear/email.h"
+#endif
 #include "metalbear/log.h"
 #include "metalbear/oauth/auth.h"
 #include "metalbear/ops/metrics.h"
@@ -530,10 +532,12 @@ wf_status admin_send_email(void *ctx, const wf_xrpc_request *request,
                            ? subject_item->valuestring
                            : "Message from PDS administrator";
     bool sent = false;
+#ifdef METALBEAR_MODULE_EMAIL
     if (server->email) {
         sent = metalbear_email_send(server->email, email, subj,
                                     content->valuestring) == WF_OK;
     }
+#endif
     free(email);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
