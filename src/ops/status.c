@@ -538,15 +538,27 @@ static wf_status debug_health_handler(void *ctx, const wf_xrpc_request *req,
         cJSON_AddBoolToObject(capabilities, "lexiconValidation",
                               server->lexicons != NULL);
         cJSON_AddBoolToObject(capabilities, "handleDnsConfigured",
+#ifdef METALBEAR_MODULE_DNS
                               server->handle_dns != NULL);
+#else
+                              false);
+#endif
         cJSON_AddBoolToObject(capabilities, "oauthStoreConfigured",
                               server->oauth != NULL);
         cJSON_AddBoolToObject(capabilities, "plcRotationKeyConfigured",
                               server->plc_rotation != NULL);
         cJSON_AddBoolToObject(capabilities, "emailConfigured",
+#ifdef METALBEAR_MODULE_EMAIL
                               server->email != NULL);
+#else
+                              false);
+#endif
         cJSON_AddBoolToObject(capabilities, "updateWatcherConfigured",
+#ifdef METALBEAR_MODULE_UPDATE_WATCHER
                               server->update_watcher != NULL);
+#else
+                              false);
+#endif
         cJSON_AddItemToObject(root, "capabilities", capabilities);
     }
 
