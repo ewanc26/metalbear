@@ -2,7 +2,9 @@
 #include "../server_internal.h"
 
 #include "metalbear/account/account_registry.h"
+#ifdef METALBEAR_MODULE_EMAIL
 #include "metalbear/email.h"
+#endif
 #include "metalbear/log.h"
 #include "metalbear/oauth/auth.h"
 #include "metalbear/ops/metrics.h"
@@ -580,6 +582,7 @@ wf_status request_email_confirmation(void *ctx, const wf_xrpc_request *request,
                                    "Could not create confirmation token");
         return WF_OK;
     }
+#ifdef METALBEAR_MODULE_EMAIL
     if (server->email && metalbear_email_send_verification(server->email, email,
                                                            token) != WF_OK) {
         free(email);
@@ -587,6 +590,7 @@ wf_status request_email_confirmation(void *ctx, const wf_xrpc_request *request,
                                    "Could not send confirmation email");
         return WF_OK;
     }
+#endif
     free(email);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
@@ -666,6 +670,7 @@ wf_status request_email_update(void *ctx, const wf_xrpc_request *request,
                                    "Could not create update token");
         return WF_OK;
     }
+#ifdef METALBEAR_MODULE_EMAIL
     if (server->email && metalbear_email_send_verification(server->email, email,
                                                            token) != WF_OK) {
         free(email);
@@ -673,6 +678,7 @@ wf_status request_email_update(void *ctx, const wf_xrpc_request *request,
                                    "Could not send update email");
         return WF_OK;
     }
+#endif
     free(email);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
@@ -845,12 +851,14 @@ wf_status request_password_reset(void *ctx, const wf_xrpc_request *request,
      * broken mail pipe from logs/metrics without the response leaking
      * anything to the caller.
      */
+#ifdef METALBEAR_MODULE_EMAIL
     if (server->email && metalbear_email_send_password_reset(
                              server->email, email, token) != WF_OK) {
         LOG_ERROR("request_password_reset: failed to send reset email to "
                   "did=%s",
                   acct->did);
     }
+#endif
     free(email);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
@@ -1288,8 +1296,10 @@ wf_status request_account_delete(void *ctx, const wf_xrpc_request *request,
     metalbear_account_get_email(acct->account, &acct_email, NULL);
     const char *to =
         (acct_email && acct_email[0]) ? acct_email : server->account_email;
+#ifdef METALBEAR_MODULE_EMAIL
     if (server->email && to && to[0])
         metalbear_email_send_account_deletion(server->email, to, token);
+#endif
     free(acct_email);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;

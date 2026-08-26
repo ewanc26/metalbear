@@ -788,6 +788,7 @@ wf_status request_plc_operation_signature(void *ctx,
         return WF_OK;
     }
     /* Send the email if configured. */
+#ifdef METALBEAR_MODULE_EMAIL
     if (server->email) {
         char subject[256];
         char body[1024];
@@ -800,6 +801,7 @@ wf_status request_plc_operation_signature(void *ctx,
                  token);
         metalbear_email_send(server->email, email, subject, body);
     }
+#endif
     free(email);
     /* Return empty object (per lexicon: no output schema). */
     cJSON *root = cJSON_CreateObject();
