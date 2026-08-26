@@ -153,6 +153,18 @@ Modular structure is mandatory, not a style preference:
 Matches the sibling Wolfram repository's convention, so the two histories read
 the same way.
 
+## Roadmap
+
+Public kanban board: https://github.com/users/ewanc26/projects/1
+
+Use the kanban board to track work across columns: **Backlog** → **Todo** →
+**In Progress** → **Done**. When picking up a task, move it to **In
+Progress**; when finished and released, move it to **Done**. Add new items
+for upcoming work with `gh project item-create 1 --owner ewanc26 --title
+"..." --body "..."`. Link related PRs or issues with `gh project item-add 1
+--owner ewanc26 --url <url>`. View in browser with `gh project view 1
+--owner ewanc26 --web`.
+
 ## Versioning
 
 - **Tag every version bump**: a commit that changes `VERSION` in
