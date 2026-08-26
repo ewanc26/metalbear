@@ -14,10 +14,16 @@
 #include "metalbear/account/account_cache.h"
 #include "metalbear/account/account_context.h"
 #include "metalbear/account/account_registry.h"
+#ifdef METALBEAR_MODULE_DNS
 #include "metalbear/dns/handle_dns.h"
+#endif
+#ifdef METALBEAR_MODULE_EMAIL
 #include "metalbear/email.h"
+#endif
 #include "metalbear/moderation/report.h"
+#ifdef METALBEAR_MODULE_UPDATE_WATCHER
 #include "metalbear/ops/update_watcher.h"
+#endif
 #include "metalbear/oauth/oauth.h"
 #include "metalbear/repo/key_rotation.h"
 #include "metalbear/repo/repo_store.h"
@@ -95,7 +101,9 @@ struct metalbear_server {
      * a route-specific limiter always takes precedence (see
      * wf_server_find_route_rate_limiter in xrpc_server.c). */
     wf_rate_limiter *rl_get_repo_5min;
+#ifdef METALBEAR_MODULE_EMAIL
     metalbear_email *email;
+#endif
     char *service_did;
     char *public_url;
     char *user_domain;
@@ -138,8 +146,12 @@ struct metalbear_server {
     /* Publishes the `_atproto` TXT records that make minted handles resolve.
      * NULL when no DNS provider is configured, which leaves those records to
      * the operator. */
+#ifdef METALBEAR_MODULE_DNS
     metalbear_handle_dns *handle_dns;
+#endif
+#ifdef METALBEAR_MODULE_UPDATE_WATCHER
     metalbear_update_watcher *update_watcher;
+#endif
 };
 
 /* Point/retract `_atproto.<handle>` at `did`, if a DNS provider is

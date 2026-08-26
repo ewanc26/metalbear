@@ -7,7 +7,9 @@
 #include "metalbear/sequencer.h"
 #include "metalbear/repo/blob_store.h"
 #include "metalbear/repo/repo_store.h"
+#ifdef METALBEAR_MODULE_VIDEO
 #include "metalbear/video_upload.h"
+#endif
 #include "wolfram/xrpc.h"
 
 #ifdef __cplusplus
@@ -41,7 +43,9 @@ typedef struct metalbear_account_context {
     metalbear_sequencer *sequencer;
     bool owns_sequencer;
     metalbear_key_rotation *key_rotation;
+#ifdef METALBEAR_MODULE_VIDEO
     metalbear_video_upload_store *video_uploads;
+#endif
     bool active;
 } metalbear_account_context;
 
