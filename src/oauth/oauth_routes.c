@@ -2,7 +2,9 @@
 
 #include "metalbear/oauth/oauth_routes.h"
 
+#ifdef METALBEAR_MODULE_WEBAUTHN
 #include "metalbear/oauth/webauthn.h"
+#endif
 #include "wolfram/crypto.h"
 
 #include <cJSON.h>
@@ -1531,6 +1533,7 @@ static bool device_session_authorizes(oauth_route_ctx *rctx,
     return authorized;
 }
 
+#ifdef METALBEAR_MODULE_WEBAUTHN
 /*
  * POST /oauth/passkey/register/options (not part of the OAuth spec).
  * Requires an existing device session for the account named by `did` in
@@ -2168,6 +2171,7 @@ static wf_status passkey_remove(void *ctx, const wf_xrpc_request *req,
     if (!root) return WF_ERR_ALLOC;
     return json_response(resp, root, "no-store");
 }
+#endif /* METALBEAR_MODULE_WEBAUTHN */
 
 /*
  * GET /oauth/session (not part of the OAuth spec). Read-only check of every
@@ -2344,8 +2348,14 @@ wf_status metalbear_oauth_routes_register(
         wf_xrpc_server_register_http_route(server, "GET", "/oauth/session",
                                            oauth_session, ctx) != WF_OK ||
         wf_xrpc_server_register_http_route(server, "POST", "/oauth/signout",
-                                           oauth_signout, ctx) != WF_OK ||
-        wf_xrpc_server_register_http_route(
+                                           oauth_signout, ctx) != WF_OK) {
+        free(ctx->public_url);
+        free(ctx);
+        return WF_ERR_INTERNAL;
+    }
+
+#ifdef METALBEAR_MODULE_WEBAUTHN
+    if (wf_xrpc_server_register_http_route(
             server, "POST", "/oauth/passkey/register/options",
             passkey_register_options, ctx) != WF_OK ||
         wf_xrpc_server_register_http_route(
@@ -2366,6 +2376,7 @@ wf_status metalbear_oauth_routes_register(
         free(ctx);
         return WF_ERR_INTERNAL;
     }
+#endif
 
     return WF_OK;
 }

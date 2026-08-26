@@ -16,9 +16,13 @@
 #include "session/session_routes.h"
 #include "account/account_routes.h"
 #include "sync/sync_routes.h"
+#ifdef METALBEAR_MODULE_APPVIEW
 #include "appview/appview_routes.h"
+#endif
 #include "moderation/moderation_routes.h"
+#ifdef METALBEAR_MODULE_VIDEO
 #include "video/video_routes.h"
+#endif
 #include "ops/status.h"
 #include "ops/ops_routes.h"
 #include "repo/blob_store_server.h"
@@ -32,8 +36,12 @@
 #include "metalbear/account/account_cache.h"
 #include "metalbear/oauth/auth.h"
 #include "metalbear/repo/backup.h"
+#ifdef METALBEAR_MODULE_EMAIL
 #include "metalbear/email.h"
+#endif
+#ifdef METALBEAR_MODULE_DNS
 #include "metalbear/dns/handle_dns.h"
+#endif
 #include "metalbear/repo/key_rotation.h"
 #include "metalbear/oauth/oauth.h"
 #include "metalbear/oauth/oauth_account_routes.h"
@@ -43,7 +51,9 @@
 #include "metalbear/sequencer.h"
 
 #include "metalbear/repo/blob_store.h"
+#ifdef METALBEAR_MODULE_UPDATE_WATCHER
 #include "metalbear/ops/update_watcher.h"
+#endif
 #include "wolfram/crypto.h"
 #include "wolfram/plc.h"
 #include "metalbear/repo/repo_store.h"
@@ -92,6 +102,7 @@ bool admin_authenticated(metalbear_server *server, const wf_xrpc_request *req);
  */
 void publish_handle_dns(metalbear_server *server, const char *handle,
                         const char *did) {
+#ifdef METALBEAR_MODULE_DNS
     if (!server->handle_dns || !handle || !did) return;
     if (metalbear_handle_dns_publish(server->handle_dns, handle, did) !=
         WF_OK) {
@@ -103,11 +114,17 @@ void publish_handle_dns(metalbear_server *server, const char *handle,
         return;
     }
     LOG_INFO("dns: published _atproto.%s -> %s", handle, did);
+#else
+    (void)server;
+    (void)handle;
+    (void)did;
+#endif
 }
 
 /* Drop `_atproto.<handle>`, if a provider is configured. Same rule: a stale
  * record is a smaller problem than a failed deletion, so this only logs. */
 void retract_handle_dns(metalbear_server *server, const char *handle) {
+#ifdef METALBEAR_MODULE_DNS
     if (!server->handle_dns || !handle) return;
     if (metalbear_handle_dns_retract(server->handle_dns, handle) != WF_OK) {
         metalbear_metrics_inc(METALBEAR_METRIC_DNS_FAILURES);
@@ -117,6 +134,10 @@ void retract_handle_dns(metalbear_server *server, const char *handle) {
         return;
     }
     LOG_INFO("dns: removed _atproto.%s", handle);
+#else
+    (void)server;
+    (void)handle;
+#endif
 }
 
 static bool is_public_route(const char *nsid) {
@@ -2442,9 +2463,11 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
 
+#ifdef METALBEAR_MODULE_APPVIEW
     if (server->appview_url && server->appview_url[0]) {
         wf_xrpc_server_set_fallback(server->xrpc, proxy_fallback, server);
     }
+#endif
 
     wf_xrpc_server_set_auth_callback(server->xrpc, authenticate, server);
 
@@ -2516,6 +2539,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_procedure(
             server->xrpc, "app.bsky.actor.putPreferences",
             put_actor_preferences, server) != WF_OK ||
+#ifdef METALBEAR_MODULE_APPVIEW
         /* AppView-proxied app.bsky.* endpoints (rsky-pds/ref-pds pattern).
          * Auth runs first, so handlers see req->authed_subject and can mint
          * requester-scoped service-auth JWTs for the upstream AppView. */
@@ -2608,6 +2632,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_query(
             server->xrpc, "app.bsky.unspecced.getAgeAssurance",
             appview_unspecced_get_age_assurance, server) != WF_OK ||
+#endif /* METALBEAR_MODULE_APPVIEW */
         /* Admin endpoints (refpds PDS_ADMIN_PASSWORD, Basic auth) */
         wf_xrpc_server_register_query(
             server->xrpc, "com.atproto.admin.getAccountInfo",
@@ -2659,6 +2684,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_query(server->xrpc,
                                       "com.atproto.temp.checkSignupQueue",
                                       check_signup_queue, server) != WF_OK ||
+#ifdef METALBEAR_MODULE_VIDEO
         wf_xrpc_server_register_procedure(server->xrpc,
                                           "app.bsky.video.uploadVideo",
                                           video_upload, server) != WF_OK ||
@@ -2689,6 +2715,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                                           "app.bsky.video.uploadPart",
                                           video_upload_part, server) != WF_OK)
 #endif
+#endif /* METALBEAR_MODULE_VIDEO */
     {
         LOG_ERROR("cannot register email/invite/video routes");
         goto fail;
@@ -2733,6 +2760,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                                           "/oauth/passkey/authenticate/verify",
                                           wf_rate_limiter_new(30, 300, 0));
 
+#ifdef METALBEAR_MODULE_EMAIL
     /* Initialize email module if configured */
     if (config->smtp_host && config->smtp_host[0] && config->from_address &&
         config->from_address[0]) {
@@ -2747,7 +2775,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         };
         metalbear_email_open(&email_cfg, &server->email);
     }
+#endif
 
+#ifdef METALBEAR_MODULE_DNS
     /*
      * Open the handle DNS publisher, if one is configured.
      *
@@ -2773,7 +2803,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         LOG_INFO("dns: publishing _atproto records via %s",
                  config->dns_provider);
     }
+#endif
 
+#ifdef METALBEAR_MODULE_UPDATE_WATCHER
     /* Start the update watcher if enabled */
     if (config->update_check_enabled) {
         metalbear_update_watcher_config uc = {
@@ -2798,6 +2830,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                      (long)uc.interval_seconds);
         }
     }
+#endif
 
     if (config->account_email && config->account_email[0])
         server->account_email = strdup(config->account_email);
@@ -2844,9 +2877,15 @@ void metalbear_server_free(metalbear_server *server) {
     /* Freed after the account contexts, which borrow it. */
     metalbear_sequencer_free(server->sequencer);
     metalbear_account_registry_free(server->registry);
+#ifdef METALBEAR_MODULE_EMAIL
     metalbear_email_free(server->email);
+#endif
+#ifdef METALBEAR_MODULE_DNS
     metalbear_handle_dns_free(server->handle_dns);
+#endif
+#ifdef METALBEAR_MODULE_UPDATE_WATCHER
     metalbear_update_watcher_free(server->update_watcher);
+#endif
     metalbear_report_store_free(server->reports);
     wf_rate_limiter_free(server->rate_limiter);
     wf_rate_limiter_free(server->rl_create_session_day);

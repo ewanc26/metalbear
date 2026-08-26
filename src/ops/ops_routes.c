@@ -119,11 +119,13 @@ wf_status operator_info(void *ctx, const wf_xrpc_request *request,
      * drifting away from the server that is actually deployed. */
     cJSON *capabilities = cJSON_CreateObject();
     if (capabilities) {
+#ifdef METALBEAR_MODULE_VIDEO
         cJSON_AddBoolToObject(capabilities, "multipartVideoUpload", true);
         cJSON_AddNumberToObject(capabilities, "maxVideoBytes",
                                 (double)METALBEAR_VIDEO_MAX_BYTES);
         cJSON_AddNumberToObject(capabilities, "videoPartBytes",
                                 (double)METALBEAR_VIDEO_PART_BYTES);
+#endif
         cJSON_AddItemToObject(root, "capabilities", capabilities);
     }
 
