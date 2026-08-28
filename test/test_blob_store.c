@@ -1002,6 +1002,165 @@ static int test_concurrent_dissociate_associate_race(void) {
     return fail;
 }
 
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+
+/* At-rest encryption of file-backed blob payloads. Verifies that payload files
+ * on disk are not the plaintext bytes, that a reopen with the same passphrase
+ * recovers them, and that a reopen with no or the wrong passphrase fails
+ * closed (rather than returning corrupt bytes). Guarded by the same define
+ * that enables the crypto in the store, so this only runs in a
+ * METALBEAR_BUILD_BLOB_CRYPTO build. */
+static int test_blob_crypto(void) {
+    int fail = 0;
+    char tmpl[] = "/tmp/mb_blob_crypto_XXXXXX";
+    char *dir = mkdtemp(tmpl);
+    if (!dir) {
+        fprintf(stderr, "FAIL: mkdtemp (crypto)\n");
+        return 1;
+    }
+
+    const unsigned char payload[] = "secret payload at rest";
+    const char *cid = "bafycryptocidfilebacked";
+    char path[1024];
+
+    /* Re-setting a passphrase must be refused. */
+    metalbear_blob_store *s0 = metalbear_blob_store_new(dir);
+    if (!s0) {
+        fprintf(stderr, "FAIL: crypto new\n");
+        return 1;
+    }
+    if (metalbear_blob_store_set_crypto_passphrase(s0, "correct password") !=
+        WF_OK) {
+        fprintf(stderr, "FAIL: crypto set passphrase (first)\n");
+        fail = 1;
+    }
+    if (metalbear_blob_store_set_crypto_passphrase(s0, "another password") ==
+        WF_OK) {
+        fprintf(stderr, "FAIL: crypto re-set passphrase allowed\n");
+        fail = 1;
+    }
+    if (metalbear_blob_store_put(s0, cid, "text/plain", payload,
+                                 sizeof(payload)) != WF_OK) {
+        fprintf(stderr, "FAIL: crypto put\n");
+        fail = 1;
+    }
+    metalbear_blob_store_free(s0);
+
+    /* The on-disk payload must not be the raw bytes. */
+    snprintf(path, sizeof(path), "%s/%s", dir, cid);
+    FILE *f = fopen(path, "rb");
+    int nonce_ok = 0;
+    if (f) {
+        unsigned char on_disk[64];
+        size_t got = fread(on_disk, 1, sizeof(on_disk), f);
+        fclose(f);
+        /* The file is <nonce(24)><ciphertext(payload+16)>, so it must be
+         * longer than the plaintext and must not equal the plaintext. */
+        if (got > sizeof(payload) &&
+            memcmp(on_disk, payload, sizeof(payload)) != 0)
+            nonce_ok = 1;
+    }
+    if (!nonce_ok) {
+        fprintf(stderr, "FAIL: payload not encrypted at rest\n");
+        fail = 1;
+    }
+
+    /* Reopen with the same passphrase recovers the blob. */
+    metalbear_blob_store *s1 = metalbear_blob_store_new(dir);
+    if (!s1) {
+        fprintf(stderr, "FAIL: crypto reopen new\n");
+        return 1;
+    }
+    if (metalbear_blob_store_set_crypto_passphrase(s1, "correct password") !=
+        WF_OK) {
+        fprintf(stderr, "FAIL: crypto reopen passphrase\n");
+        fail = 1;
+    }
+    unsigned char *data = NULL;
+    size_t len = 0;
+    char *mime = NULL;
+    if (metalbear_blob_store_get(s1, cid, &data, &len, &mime) != WF_OK ||
+        len != sizeof(payload) || memcmp(data, payload, len) != 0 ||
+        strcmp(mime, "text/plain") != 0) {
+        fprintf(stderr, "FAIL: crypto get after reopen\n");
+        free(data);
+        free(mime);
+        fail = 1;
+    } else {
+        free(data);
+        free(mime);
+    }
+    metalbear_blob_store_free(s1);
+
+    /* Reopen without a passphrase must fail closed (no key). */
+    metalbear_blob_store *s2 = metalbear_blob_store_new(dir);
+    if (!s2) {
+        fprintf(stderr, "FAIL: crypto no-key new\n");
+        return 1;
+    }
+    data = NULL;
+    len = 0;
+    mime = NULL;
+    if (metalbear_blob_store_get(s2, cid, &data, &len, &mime) == WF_OK) {
+        fprintf(stderr, "FAIL: crypto get without key succeeded\n");
+        free(data);
+        free(mime);
+        fail = 1;
+    }
+    metalbear_blob_store_free(s2);
+
+    /* Reopen with the wrong passphrase must fail closed (MAC check). */
+    metalbear_blob_store *s3 = metalbear_blob_store_new(dir);
+    if (!s3) {
+        fprintf(stderr, "FAIL: crypto wrong-key new\n");
+        return 1;
+    }
+    if (metalbear_blob_store_set_crypto_passphrase(s3, "wrong password") !=
+        WF_OK) {
+        fprintf(stderr, "FAIL: crypto wrong-key passphrase set\n");
+        fail = 1;
+    }
+    data = NULL;
+    len = 0;
+    mime = NULL;
+    if (metalbear_blob_store_get(s3, cid, &data, &len, &mime) == WF_OK) {
+        fprintf(stderr, "FAIL: crypto get with wrong key succeeded\n");
+        free(data);
+        free(mime);
+        fail = 1;
+    }
+    metalbear_blob_store_free(s3);
+
+    /* In-memory stores must reject a passphrase. */
+    metalbear_blob_store *s4 = metalbear_blob_store_new(NULL);
+    if (!s4) {
+        fprintf(stderr, "FAIL: crypto in-memory new\n");
+        return 1;
+    }
+    if (metalbear_blob_store_set_crypto_passphrase(s4, "irrelevant") == WF_OK) {
+        fprintf(stderr, "FAIL: crypto passphrase allowed on in-memory store\n");
+        fail = 1;
+    }
+    metalbear_blob_store_free(s4);
+
+    snprintf(path, sizeof(path), "%s/%s", dir, cid);
+    remove(path);
+    snprintf(path, sizeof(path), "%s/%s.mime", dir, cid);
+    remove(path);
+    snprintf(path, sizeof(path), "%s/%s.refs", dir, cid);
+    remove(path);
+    snprintf(path, sizeof(path), "%s/%s.rev", dir, cid);
+    remove(path);
+    snprintf(path, sizeof(path), "%s/.blobstore.salt", dir);
+    remove(path);
+    rmdir(dir);
+
+    if (!fail) printf("PASS: blob-store at-rest encryption\n");
+    return fail;
+}
+
+#endif /* METALBEAR_BUILD_BLOB_CRYPTO */
+
 int main(void) {
     int failures = 0;
     failures += test_unit_memory();
@@ -1012,6 +1171,9 @@ int main(void) {
     failures += test_reference_tracking();
     failures += test_reference_tracking_file_backed();
     failures += test_concurrent_dissociate_associate_race();
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+    failures += test_blob_crypto();
+#endif
     if (failures == 0) printf("ALL PASS: blob_store\n");
     return failures;
 }

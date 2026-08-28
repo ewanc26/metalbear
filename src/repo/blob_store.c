@@ -18,6 +18,10 @@
 #include <stdint.h>
 #include <sys/stat.h>
 
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+#include <sodium.h>
+#endif
+
 typedef struct metalbear_blob_node {
     char *cid;           /* owned CID string (key) */
     char *mime;          /* owned MIME type */
@@ -37,6 +41,12 @@ struct metalbear_blob_store {
     char *dir;                 /* owned base directory (file-backed only) */
     metalbear_blob_node *head; /* in-memory index; source of truth */
     pthread_mutex_t mutex;     /* guards head and all node mutations */
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+    unsigned char key[crypto_secretbox_KEYBYTES]; /* derived secret-box key */
+    int has_key;   /* non-zero once a passphrase has been set this open */
+    int encrypted; /* non-zero when the on-disk store is encrypted (salt exists)
+                    */
+#endif
 };
 
 /* Join dir + name into a heap buffer (caller frees). Tolerates a trailing
@@ -275,6 +285,121 @@ static wf_status blob_write_file(const char *path, const void *data,
     return ok ? WF_OK : WF_ERR_INTERNAL;
 }
 
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+
+/* Path to the Argon2id salt meta file (<dir>/.blobstore.salt). Caller frees. */
+static char *blob_salt_path(const char *dir) {
+    return blob_path(dir, ".blobstore.salt");
+}
+
+/* Read the persisted KDF salt, generating and storing one on first use.
+ * Caller holds store->mutex. Returns WF_OK and fills `salt`. */
+static wf_status
+store_read_or_create_salt(metalbear_blob_store *store,
+                          unsigned char salt[static crypto_pwhash_SALTBYTES]) {
+    char *path = blob_salt_path(store->dir);
+    if (!path) return WF_ERR_ALLOC;
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        size_t got = fread(salt, 1, crypto_pwhash_SALTBYTES, f);
+        fclose(f);
+        free(path);
+        if (got == crypto_pwhash_SALTBYTES) return WF_OK;
+        return WF_ERR_INVALID_ARG;
+    }
+    free(path);
+
+    randombytes_buf(salt, crypto_pwhash_SALTBYTES);
+    path = blob_salt_path(store->dir);
+    if (!path) return WF_ERR_ALLOC;
+    wf_status st = blob_write_file(path, salt, crypto_pwhash_SALTBYTES) == WF_OK
+                       ? WF_OK
+                       : WF_ERR_INTERNAL;
+    free(path);
+    return st;
+}
+
+/* Encrypt `plain`/`plain_len` into a fresh `*out`/`*out_len` buffer of the
+ * form <nonce><ciphertext>. Returns WF_ERR_ALLOC on OOM. Requires has_key. */
+static wf_status blob_encrypt_payload(metalbear_blob_store *store,
+                                      const unsigned char *plain,
+                                      size_t plain_len, unsigned char **out,
+                                      size_t *out_len) {
+    if (!store->has_key) return WF_ERR_INVALID_ARG;
+    size_t ct_len = plain_len + crypto_secretbox_MACBYTES;
+    unsigned char *ct =
+        (unsigned char *)malloc(ct_len + crypto_secretbox_NONCEBYTES);
+    if (!ct) return WF_ERR_ALLOC;
+    randombytes_buf(ct, crypto_secretbox_NONCEBYTES);
+    if (crypto_secretbox_easy(ct + crypto_secretbox_NONCEBYTES, plain,
+                              plain_len, ct, store->key) != 0) {
+        free(ct);
+        return WF_ERR_INVALID_ARG;
+    }
+    *out = ct;
+    *out_len = ct_len + crypto_secretbox_NONCEBYTES;
+    return WF_OK;
+}
+
+/* Decrypt an on-disk <nonce><ciphertext> blob (read by blob_read_file already)
+ * into a fresh `*out`/`*out_len` plaintext buffer. Returns WF_ERR_INVALID_ARG
+ * when the store has no key, the file is too short for a nonce, or the MAC
+ * fails (the true signature of a wrong passphrase). */
+static wf_status blob_decrypt_payload(metalbear_blob_store *store,
+                                      const unsigned char *ct, size_t ct_len,
+                                      unsigned char **out, size_t *out_len) {
+    if (!store->has_key) return WF_ERR_INVALID_ARG;
+    if (ct_len < crypto_secretbox_NONCEBYTES + crypto_secretbox_MACBYTES)
+        return WF_ERR_INVALID_ARG;
+    size_t plain_len =
+        ct_len - crypto_secretbox_NONCEBYTES - crypto_secretbox_MACBYTES;
+    unsigned char *plain = (unsigned char *)malloc(plain_len ? plain_len : 1);
+    if (!plain) return WF_ERR_ALLOC;
+    if (crypto_secretbox_open_easy(plain, ct + crypto_secretbox_NONCEBYTES,
+                                   ct_len - crypto_secretbox_NONCEBYTES, ct,
+                                   store->key) != 0) {
+        sodium_memzero(plain, plain_len ? plain_len : 1);
+        free(plain);
+        *out = NULL;
+        *out_len = 0;
+        return WF_ERR_INVALID_ARG;
+    }
+    *out = plain;
+    *out_len = plain_len;
+    return WF_OK;
+}
+
+/* Encrypt-and-write a payload file (file-backed, crypto enabled). Returns
+ * WF_OK on success; leaves nothing behind on failure. */
+static wf_status blob_write_payload_encrypted(metalbear_blob_store *store,
+                                              const unsigned char *data,
+                                              size_t len, const char *datap) {
+    unsigned char *ct = NULL;
+    size_t ct_len = 0;
+    wf_status st = blob_encrypt_payload(store, data, len, &ct, &ct_len);
+    if (st != WF_OK) return st;
+    st = blob_write_file(datap, ct, ct_len);
+    sodium_memzero(ct, ct_len);
+    free(ct);
+    return st;
+}
+
+/* Read-and-decrypt a payload file into a fresh buffer (caller frees). */
+static wf_status blob_read_payload_encrypted(metalbear_blob_store *store,
+                                             const char *datap,
+                                             unsigned char **out,
+                                             size_t *out_len) {
+    unsigned char *ct = NULL;
+    size_t ct_len = 0;
+    wf_status st = blob_read_file(datap, &ct, &ct_len);
+    if (st != WF_OK) return st;
+    st = blob_decrypt_payload(store, ct, ct_len, out, out_len);
+    free(ct);
+    return st;
+}
+
+#endif /* METALBEAR_BUILD_BLOB_CRYPTO */
+
 static wf_status blob_copy_file(const char *source_path, const char *dest_path,
                                 size_t expected_len) {
     FILE *source = fopen(source_path, "rb");
@@ -332,7 +457,13 @@ static wf_status blob_write_backing_files(metalbear_blob_store *store,
 
     (void)remove(data_tmp);
     (void)remove(mime_tmp);
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+    wf_status st = store->has_key ? blob_write_payload_encrypted(store, data,
+                                                                 len, data_tmp)
+                                  : blob_write_file(data_tmp, data, len);
+#else
     wf_status st = blob_write_file(data_tmp, data, len);
+#endif
     if (st == WF_OK)
         st = blob_write_file(mime_tmp, mime_type, strlen(mime_type));
     if (st == WF_OK && rename(data_tmp, datap) != 0) st = WF_ERR_INTERNAL;
@@ -370,6 +501,14 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path) {
         (metalbear_blob_store *)calloc(1, sizeof(*store));
     if (!store) return NULL;
 
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+    /* Initialize libsodium (idempotent; safe to call repeatedly). */
+    if (sodium_init() < 0) {
+        free(store);
+        return NULL;
+    }
+#endif
+
     if (pthread_mutex_init(&store->mutex, NULL) != 0) {
         free(store);
         return NULL;
@@ -382,6 +521,21 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path) {
             free(store);
             return NULL;
         }
+
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+        /* An existing salt means the payloads on disk are encrypted; any gets
+         * must go through decryption and fail closed until a passphrase is set.
+         */
+        {
+            char *saltp = blob_salt_path(store->dir);
+            if (saltp) {
+                struct stat st;
+                if (stat(saltp, &st) == 0 && S_ISREG(st.st_mode))
+                    store->encrypted = 1;
+                free(saltp);
+            }
+        }
+#endif
 
         /* Load any pre-existing blobs from disk into the in-memory index. */
         DIR *d = opendir(store->dir);
@@ -460,6 +614,12 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path) {
 void metalbear_blob_store_free(metalbear_blob_store *store) {
     if (!store) return;
     pthread_mutex_lock(&store->mutex);
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+    if (store->has_key) {
+        sodium_memzero(store->key, sizeof(store->key));
+        store->has_key = 0;
+    }
+#endif
     metalbear_blob_node *n = store->head;
     while (n) {
         metalbear_blob_node *next = n->next;
@@ -587,7 +747,29 @@ wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
     if (st == WF_OK) {
         (void)remove(data_tmp);
         (void)remove(mime_tmp);
-        st = blob_copy_file(source_path, data_tmp, expected_len);
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+        if (store->has_key) {
+            /* Encrypted payloads must be sealed as one unit, so the otherwise
+             * bounded-memory streaming copy cannot be used here; read the
+             * source fully to encrypt it. The plaintext path below keeps its
+             * bounded-memory property. */
+            unsigned char *plain = NULL;
+            size_t plain_len = 0;
+            st = blob_read_file(source_path, &plain, &plain_len);
+            if (st == WF_OK) {
+                if (plain_len != expected_len) {
+                    free(plain);
+                    st = WF_ERR_INVALID_ARG;
+                } else {
+                    st = blob_write_payload_encrypted(store, plain, plain_len,
+                                                      data_tmp);
+                    sodium_memzero(plain, plain_len ? plain_len : 1);
+                    free(plain);
+                }
+            }
+        } else
+#endif
+            st = blob_copy_file(source_path, data_tmp, expected_len);
     }
     if (st == WF_OK)
         st = blob_write_file(mime_tmp, mime_type, strlen(mime_type));
@@ -657,8 +839,20 @@ wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
                 char *datap = blob_path(store->dir, cid);
                 if (!datap)
                     st = WF_ERR_ALLOC;
-                else
-                    st = blob_read_file(datap, &data, &len);
+                else {
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+                    if (store->encrypted && !store->has_key)
+                        /* Store is encrypted on disk but no passphrase has
+                         * been set this open; fail closed rather than leak
+                         * ciphertext as if it were plaintext. */
+                        st = WF_ERR_INVALID_ARG;
+                    else if (store->has_key)
+                        st = blob_read_payload_encrypted(store, datap, &data,
+                                                         &len);
+                    else
+#endif
+                        st = blob_read_file(datap, &data, &len);
+                }
                 free(datap);
             } else {
                 data = (unsigned char *)malloc(n->len ? n->len : 1);
@@ -783,6 +977,60 @@ wf_status metalbear_blob_store_delete(metalbear_blob_store *store,
     pthread_mutex_unlock(&store->mutex);
     return st;
 }
+
+#ifdef METALBEAR_BUILD_BLOB_CRYPTO
+
+wf_status
+metalbear_blob_store_set_crypto_passphrase(metalbear_blob_store *store,
+                                           const char *passphrase) {
+    unsigned char salt[crypto_pwhash_SALTBYTES];
+    wf_status st;
+
+    if (!store || !passphrase || passphrase[0] == '\0')
+        return WF_ERR_INVALID_ARG;
+    if (!store->file_backed) return WF_ERR_INVALID_ARG;
+
+    pthread_mutex_lock(&store->mutex);
+    if (store->has_key) {
+        /* Re-deriving with a different passphrase would make every stored
+         * blob unreadable; refuse rather than silently corrupting the store.
+         */
+        st = WF_ERR_INVALID_ARG;
+        goto done;
+    }
+    st = store_read_or_create_salt(store, salt);
+    if (st != WF_OK) goto done;
+    if (crypto_pwhash(store->key, sizeof(store->key), passphrase,
+                      strlen(passphrase), salt,
+                      crypto_pwhash_OPSLIMIT_INTERACTIVE,
+                      crypto_pwhash_MEMLIMIT_INTERACTIVE,
+                      crypto_pwhash_ALG_ARGON2ID13) != 0) {
+        /* Out of memory inside the KDF; leave the store keyless. */
+        sodium_memzero(store->key, sizeof(store->key));
+        st = WF_ERR_ALLOC;
+        goto done;
+    }
+    store->has_key = 1;
+    store->encrypted = 1;
+    st = WF_OK;
+
+done:
+    sodium_memzero(salt, sizeof(salt));
+    pthread_mutex_unlock(&store->mutex);
+    return st;
+}
+
+#else /* !METALBEAR_BUILD_BLOB_CRYPTO */
+
+wf_status
+metalbear_blob_store_set_crypto_passphrase(metalbear_blob_store *store,
+                                           const char *passphrase) {
+    (void)store;
+    (void)passphrase;
+    return WF_ERR_NOT_IMPLEMENTED;
+}
+
+#endif /* METALBEAR_BUILD_BLOB_CRYPTO */
 
 wf_status metalbear_blob_store_list(metalbear_blob_store *store,
                                     char ***out_cids, size_t *out_count) {

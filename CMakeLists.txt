@@ -113,6 +113,16 @@ option(METALBEAR_MODULE_WEBAUTHN "Build WebAuthn/passkey administration" ON)
 option(METALBEAR_MODULE_UPDATE_WATCHER
        "Build the self-update watcher and non-essential ops endpoints" ON)
 
+# Optional at-rest encryption of the file-backed blob store payloads. When ON,
+# the system libsodium library is required (no network FetchContent) and the
+# blob store gains metalbear_blob_store_set_crypto_passphrase, which seals each
+# stored blob's bytes with crypto_secretbox_easy (XSalsa20-Poly1305) using a
+# key derived from the operator passphrase via crypto_pwhash (Argon2id). OFF by
+# default so the default build stays dependency-free.
+option(
+  METALBEAR_BUILD_BLOB_CRYPTO
+  "Encrypt file-backed blob store payloads at rest with libsodium" OFF)
+
 if(METALBEAR_PROFILE STREQUAL "minimal")
   foreach(_mb_mod APPVIEW VIDEO EMAIL DNS WEBAUTHN UPDATE_WATCHER)
     set(METALBEAR_MODULE_${_mb_mod} OFF CACHE BOOL "" FORCE)
@@ -215,6 +225,37 @@ foreach(_mb_mod APPVIEW VIDEO EMAIL DNS WEBAUTHN UPDATE_WATCHER)
     target_compile_definitions(metalbear_core PUBLIC METALBEAR_MODULE_${_mb_mod})
   endif()
 endforeach()
+
+# At-rest blob-store encryption (METALBEAR_BUILD_BLOB_CRYPTO). libsodium must be
+# installed on the system; there is no network FetchContent. The compile
+# definition is PUBLIC so consumers and test targets that call
+# metalbear_blob_store_set_crypto_passphrase also see METALBEAR_BUILD_BLOB_CRYPTO.
+if(METALBEAR_BUILD_BLOB_CRYPTO)
+  find_package(sodium QUIET)
+  if(NOT sodium_FOUND)
+    find_path(SODIUM_INCLUDE_DIR NAMES sodium.h)
+    find_library(SODIUM_LIBRARY NAMES sodium)
+    if(SODIUM_INCLUDE_DIR AND SODIUM_LIBRARY)
+      set(sodium_FOUND TRUE)
+      set(sodium_INCLUDE_DIRS ${SODIUM_INCLUDE_DIR})
+      set(sodium_LIBRARIES ${SODIUM_LIBRARY})
+    endif()
+  endif()
+  if(NOT sodium_FOUND)
+    message(
+      FATAL_ERROR
+        "METALBEAR_BUILD_BLOB_CRYPTO=ON but libsodium was not found on this "
+        "system. Install it (e.g. `brew install libsodium` / `apt install "
+        "libsodium-dev`) or build with METALBEAR_BUILD_BLOB_CRYPTO=OFF.")
+  endif()
+  target_include_directories(metalbear_core PRIVATE ${sodium_INCLUDE_DIRS})
+  target_link_libraries(metalbear_core PRIVATE ${sodium_LIBRARIES})
+  target_compile_definitions(metalbear_core PUBLIC METALBEAR_BUILD_BLOB_CRYPTO)
+  message(
+    STATUS
+      "libsodium found (${sodium_LIBRARIES}) — encrypting file-backed blob store payloads at rest"
+  )
+endif()
 
 # nftw() and its FTW_* flags are XSI extensions. Wolfram exports
 # _POSIX_C_SOURCE/_DEFAULT_SOURCE, which is enough for strdup and friends but
