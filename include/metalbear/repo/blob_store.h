@@ -14,6 +14,17 @@
  *     "<cid>.mime" file. Re-opening the same path indexes compact metadata;
  *     payload bytes remain on disk and are read only when requested.
  *
+ * Optional at-rest encryption of the stored blob payloads: when the store is
+ * built with METALBEAR_BUILD_BLOB_CRYPTO and set up with
+ * metalbear_blob_store_set_crypto_passphrase, each file-backed blob's payload
+ * bytes are encrypted with libsodium crypto_secretbox_easy (XSalsa20-Poly1305)
+ * before they hit disk and decrypted on read. A per-store Argon2id salt lives
+ * in a "<dir>/.blobstore.salt" meta file (created on first use) and the key is
+ * derived from the caller-supplied passphrase. The metadata sidecars
+ * ("<cid>.mime", "<cid>.refs", "<cid>.rev") remain plaintext; only the blob
+ * payload bytes are encrypted. All cryptography is delegated to libsodium; no
+ * hand-rolled crypto is present.
+ *
  * The store also tracks which record URIs reference each blob
  * (metalbear_blob_store_associate / _dissociate / _is_referenced) — the repo
  * write path (repo_store.c) uses this to keep a blob alive only as long as
@@ -57,6 +68,33 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path);
 /** Free the store. File-backed blobs are left on disk (caller removes `path`).
  */
 void metalbear_blob_store_free(metalbear_blob_store *store);
+
+/**
+ * Enable at-rest encryption of the file-backed blob payloads.
+ *
+ * Derives a libsodium secret-box key from `passphrase` via Argon2id
+ * (crypto_pwhash) and, from then on, encrypts every blob payload written to
+ * disk and decrypts every one read back (crypto_secretbox_easy /
+ * crypto_secretbox_open_easy, XSalsa20-Poly1305). A per-store salt is
+ * persisted in "<dir>/.blobstore.salt" on first use so the same passphrase
+ * derives the same key across restarts.
+ *
+ * Must be called after metalbear_blob_store_new and before any reads of a
+ * store that was written encrypted; a store written with encryption must be
+ * re-opened with the same passphrase to recover its blobs. Passing a null or
+ * empty store path (in-memory mode) is an error — encryption only applies to
+ * the file-backed store.
+ *
+ * Returns WF_ERR_NOT_IMPLEMENTED when this build was not configured with
+ * METALBEAR_BUILD_BLOB_CRYPTO (the store stays plaintext). WF_ERR_INVALID_ARG
+ * on in-memory stores or a null/empty passphrase.
+ *
+ * The passphrase itself is never persisted; only the salt is. The key is
+ * zeroed on metalbear_blob_store_free.
+ */
+wf_status
+metalbear_blob_store_set_crypto_passphrase(metalbear_blob_store *store,
+                                           const char *passphrase);
 
 /**
  * Store a blob under `cid`. `mime_type` is copied. `data`/`len` hold the raw
