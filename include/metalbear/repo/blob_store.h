@@ -157,6 +157,32 @@ wf_status metalbear_blob_store_list_since(metalbear_blob_store *store,
                                           size_t *out_count);
 
 /*
+ * Paginated blob listing matching the reference PDS's
+ * com.atproto.sync.listBlobs semantics so relays and SDK clients paginate
+ * against this store identically to a reference PDS.
+ *
+ * Returns at most `limit` blob CIDs sorted in ascending CID order (string
+ * comparison), each also satisfying:
+ *   - filter `since`: a repo revision TID; only blobs whose first-seen rev
+ *     sorts strictly after it are returned (as
+ * metalbear_blob_store_list_since).
+ *   - filter `cursor`: the CID-string cursor returned by a previous page; only
+ *     blobs whose CID sorts strictly after it are returned (the reference
+ *     issues `where blobCid > cursor`, and the NEXT page's cursor is the last
+ *     CID of the previous page).
+ *
+ * *out_more is set to 1 when the full result set (after both filters) has
+ * more than `limit` members, so the caller knows to emit a cursor. Same
+ * ownership and allocation contract as metalbear_blob_store_list: on WF_OK the
+ * caller frees the returned array with metalbear_blob_store_list_free. Pass a
+ * NULL `since` and/or `cursor` to skip that filter.
+ */
+wf_status metalbear_blob_store_list_page(metalbear_blob_store *store,
+                                         const char *since, const char *cursor,
+                                         size_t limit, char ***out_cids,
+                                         size_t *out_count, int *out_more);
+
+/*
  * Recursively find blob references within a record's JSON value and invoke
  * `cb(cid, ctx)` once per occurrence (callers dedupe as needed). A modern
  * blob ref is {"$type":"blob","ref":{"$link":"<cid>"},...}; a legacy blob is
