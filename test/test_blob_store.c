@@ -1161,11 +1161,194 @@ static int test_blob_crypto(void) {
 
 #endif /* METALBEAR_BUILD_BLOB_CRYPTO */
 
+static int test_list_page(void) {
+    int fail = 0;
+    char tmpl[] = "/tmp/mb_blob_listpage_XXXXXX";
+    char *dir = mkdtemp(tmpl);
+    if (!dir) {
+        fprintf(stderr, "FAIL: mkdtemp (list_page)\n");
+        return 1;
+    }
+
+    /* CIDs are alphanumeric and sort lexicographically in the order we choose,
+     * so the page ordering and cursor semantics are controllable. */
+    static const char *cids[] = {"cidAAA", "cidBBB", "cidCCC", "cidDDD",
+                                 "cidEEE"};
+    const size_t n = sizeof(cids) / sizeof(cids[0]);
+    const unsigned char payload[] = {'x'};
+
+    metalbear_blob_store *store = metalbear_blob_store_new(dir);
+    if (!store) {
+        fprintf(stderr, "FAIL: new (list_page)\n");
+        return 1;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (metalbear_blob_store_put(store, cids[i], "text/plain", payload,
+                                     sizeof(payload)) != WF_OK) {
+            fprintf(stderr, "FAIL: put (list_page)\n");
+            fail = 1;
+            break;
+        }
+    }
+    metalbear_blob_store_free(store);
+
+    /* A single unbounded-style page (limit >= count) returns everything in
+     * ascending CID order with no cursor. */
+    metalbear_blob_store *s2 = metalbear_blob_store_new(dir);
+    if (!s2) {
+        fprintf(stderr, "FAIL: reopen (list_page)\n");
+        return 1;
+    }
+    char **page = NULL;
+    size_t count = 0;
+    int more = -1;
+    if (metalbear_blob_store_list_page(s2, NULL, NULL, 100, &page, &count,
+                                       &more) != WF_OK ||
+        count != n || more != 0) {
+        fprintf(stderr, "FAIL: full page (list_page)\n");
+        fail = 1;
+    } else {
+        for (size_t i = 0; i < n; i++)
+            if (strcmp(page[i], cids[i]) != 0) {
+                fprintf(stderr, "FAIL: page not in ascending CID order\n");
+                fail = 1;
+                break;
+            }
+    }
+    metalbear_blob_store_list_free(page, count);
+
+    /* Paginate with limit=2. Each page must be sorted ascending; the cursor
+     * returned is the last CID of the page, and feeding it back must yield
+     * exactly the blobs that sort after it (no overlap, full coverage). */
+    char **acc = NULL;
+    size_t acc_count = 0, acc_cap = 0;
+    char cursor[16] = "";
+    size_t pages = 0;
+    char **p = NULL;
+    size_t pc = 0;
+    int pm = 0;
+    while (1) {
+        p = NULL;
+        pc = 0;
+        pm = -1;
+        wf_status st = metalbear_blob_store_list_page(
+            s2, NULL, cursor[0] ? cursor : NULL, 2, &p, &pc, &pm);
+        if (st != WF_OK || pc > 2) {
+            fprintf(stderr, "FAIL: page err (list_page)\n");
+            fail = 1;
+            break;
+        }
+        for (size_t j = 0; j < pc; j++) {
+            /* grow acc */
+            char **g = (char **)realloc(acc, (acc_count + 1) * sizeof(*g));
+            if (!g) {
+                fail = 1;
+                break;
+            }
+            acc = g;
+            acc[acc_count] = strdup(p[j]);
+            if (!acc[acc_count]) {
+                fail = 1;
+                break;
+            }
+            acc_count++;
+        }
+        pages++;
+        if (pm) {
+            if (pc == 0) {
+                fprintf(stderr, "FAIL: more set on empty page\n");
+                fail = 1;
+                break;
+            }
+            snprintf(cursor, sizeof(cursor), "%s", p[pc - 1]);
+        } else {
+            break;
+        }
+        metalbear_blob_store_list_free(p, pc);
+    }
+    metalbear_blob_store_list_free(p, pc);
+    if (!fail) {
+        if (acc_count != n || pages != 3) {
+            fprintf(stderr,
+                    "FAIL: pagination coverage (%zu/%zu blobs, %zu pages)\n",
+                    acc_count, n, pages);
+            fail = 1;
+        } else {
+            for (size_t i = 0; i < n; i++) {
+                if (strcmp(acc[i], cids[i]) != 0) {
+                    fprintf(stderr, "FAIL: pagination order mismatch\n");
+                    fail = 1;
+                    break;
+                }
+            }
+            if (pm != 0) {
+                fprintf(stderr, "FAIL: final page should not set more\n");
+                fail = 1;
+            }
+        }
+    }
+    for (size_t i = 0; i < acc_count; i++) free(acc[i]);
+    free(acc);
+
+    /* `since` filter: read the persisted rev of the middle blob from disk and
+     * require only the later blobs are returned. */
+    char revp[1024];
+    snprintf(revp, sizeof(revp), "%s/cidCCC.rev", dir);
+    FILE *rf = fopen(revp, "rb");
+    char middle_rev[32] = "";
+    int rev_ok = 0;
+    if (rf) {
+        if (fgets(middle_rev, sizeof(middle_rev), rf)) {
+            size_t l = strlen(middle_rev);
+            while (l > 0 &&
+                   (middle_rev[l - 1] == '\n' || middle_rev[l - 1] == '\r'))
+                middle_rev[--l] = '\0';
+            if (l > 0) rev_ok = 1;
+        }
+        fclose(rf);
+    }
+    if (!rev_ok) {
+        fprintf(stderr, "FAIL: cannot read middle rev sidecar\n");
+        fail = 1;
+    } else {
+        p = NULL;
+        pc = 0;
+        pm = -1;
+        if (metalbear_blob_store_list_page(s2, middle_rev, NULL, 100, &p, &pc,
+                                           &pm) != WF_OK ||
+            pc != 2 || pm != 0 || strcmp(p[0], "cidDDD") != 0 ||
+            strcmp(p[1], "cidEEE") != 0) {
+            fprintf(stderr, "FAIL: since filter (list_page)\n");
+            fail = 1;
+        }
+        metalbear_blob_store_list_free(p, pc);
+    }
+
+    metalbear_blob_store_free(s2);
+
+    for (size_t i = 0; i < n; i++) {
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", dir, cids[i]);
+        remove(path);
+        snprintf(path, sizeof(path), "%s/%s.mime", dir, cids[i]);
+        remove(path);
+        snprintf(path, sizeof(path), "%s/%s.refs", dir, cids[i]);
+        remove(path);
+        snprintf(path, sizeof(path), "%s/%s.rev", dir, cids[i]);
+        remove(path);
+    }
+    rmdir(dir);
+
+    if (!fail) printf("PASS: blob list pagination (CID cursor + order)\n");
+    return fail;
+}
+
 int main(void) {
     int failures = 0;
     failures += test_unit_memory();
     failures += test_delete_invalid_args();
     failures += test_file_backed();
+    failures += test_list_page();
     failures += test_server_roundtrip();
     failures += test_walk_refs();
     failures += test_reference_tracking();
