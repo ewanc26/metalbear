@@ -158,51 +158,46 @@ wf_status list_blobs(void *ctx, const wf_xrpc_request *request,
             ? since_param->valuestring
             : NULL;
     int limit = query_param_int(request->params, "limit", 500, 1, 1000);
+    /* Upstream paginates with a CID-string cursor (`where blobCid > cursor`)
+     * and the next page's cursor is the last CID of the previous page. Any
+     * non-empty string is passed straight through; an empty one is ignored. */
     cJSON *cursor_param =
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor")
             : NULL;
-    size_t offset = 0;
-    if (cJSON_IsString(cursor_param) && cursor_param->valuestring[0]) {
-        char *end = NULL;
-        long parsed = strtol(cursor_param->valuestring, &end, 10);
-        if (*cursor_param->valuestring && *end == '\0' && parsed >= 0)
-            offset = (size_t)parsed;
-    }
+    const char *cursor =
+        (cJSON_IsString(cursor_param) && cursor_param->valuestring[0])
+            ? cursor_param->valuestring
+            : NULL;
 
-    char **all = NULL;
+    char **page = NULL;
     size_t count = 0;
-    wf_status list_status =
-        since
-            ? metalbear_blob_store_list_since(acct->blobs, since, &all, &count)
-            : metalbear_blob_store_list(acct->blobs, &all, &count);
+    int more = 0;
+    wf_status list_status = metalbear_blob_store_list_page(
+        acct->blobs, since, cursor, (size_t)limit, &page, &count, &more);
     if (list_status != WF_OK) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "Could not enumerate blobs");
         return WF_OK;
     }
-    if (offset > count) offset = count;
 
     cJSON *root = cJSON_CreateObject();
     cJSON *cids = cJSON_CreateArray();
     if (!root || !cids) {
         cJSON_Delete(root);
         cJSON_Delete(cids);
-        metalbear_blob_store_list_free(all, count);
+        metalbear_blob_store_list_free(page, count);
         return WF_ERR_ALLOC;
     }
-    size_t taken = 0;
-    for (size_t i = offset; i < count && taken < (size_t)limit; i++, taken++)
-        cJSON_AddItemToArray(cids, cJSON_CreateString(all[i]));
-    metalbear_blob_store_list_free(all, count);
+    for (size_t i = 0; i < count; i++)
+        cJSON_AddItemToArray(cids, cJSON_CreateString(page[i]));
 
     cJSON_AddItemToObject(root, "cids", cids);
-    size_t next = offset + taken;
-    if (next < count) {
-        char cursor_buf[32];
-        snprintf(cursor_buf, sizeof(cursor_buf), "%zu", next);
-        cJSON_AddStringToObject(root, "cursor", cursor_buf);
-    }
+    if (more && count > 0)
+        /* The next page resumes from the last CID returned, exactly as the
+         * reference PDS does (`blobCids.at(-1)`). */
+        cJSON_AddStringToObject(root, "cursor", page[count - 1]);
+    metalbear_blob_store_list_free(page, count);
     return set_json(response, root);
 }
 

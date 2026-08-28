@@ -1073,6 +1073,84 @@ wf_status metalbear_blob_store_list(metalbear_blob_store *store,
     return WF_OK;
 }
 
+/* qsort comparator for the paginated listing: ascending CID string order,
+ * mirroring the reference PDS's `orderBy('blobCid', 'asc')`. */
+static int blob_cid_cmp(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+wf_status metalbear_blob_store_list_page(metalbear_blob_store *store,
+                                         const char *since, const char *cursor,
+                                         size_t limit, char ***out_cids,
+                                         size_t *out_count, int *out_more) {
+    if (!store || !out_cids || !out_count || !out_more || limit == 0)
+        return WF_ERR_INVALID_ARG;
+    *out_cids = NULL;
+    *out_count = 0;
+    *out_more = 0;
+
+    pthread_mutex_lock(&store->mutex);
+
+    char **matched = NULL;
+    size_t matched_count = 0, matched_cap = 0;
+    wf_status status = WF_OK;
+
+    for (metalbear_blob_node *n = store->head; n && status == WF_OK;
+         n = n->next) {
+        /* since filter: only blobs first seen strictly after the rev. */
+        if (since) {
+            if (n->rev[0] == '\0' || strcmp(n->rev, since) <= 0) continue;
+        }
+        /* cursor filter: only blobs whose CID sorts strictly after it. */
+        if (cursor && cursor[0] != '\0' && strcmp(n->cid, cursor) <= 0)
+            continue;
+
+        if (matched_count == matched_cap) {
+            size_t new_cap = matched_cap ? matched_cap * 2 : 16;
+            char **grown = (char **)realloc(matched, new_cap * sizeof(*grown));
+            if (!grown) {
+                status = WF_ERR_ALLOC;
+                break;
+            }
+            matched = grown;
+            matched_cap = new_cap;
+        }
+        matched[matched_count] = strdup(n->cid);
+        if (!matched[matched_count]) {
+            status = WF_ERR_ALLOC;
+            break;
+        }
+        matched_count++;
+    }
+    pthread_mutex_unlock(&store->mutex);
+    if (status != WF_OK) {
+        for (size_t j = 0; j < matched_count; j++) free(matched[j]);
+        free(matched);
+        return status;
+    }
+
+    qsort(matched, matched_count, sizeof(*matched), blob_cid_cmp);
+
+    *out_more = matched_count > limit ? 1 : 0;
+    size_t take = matched_count < limit ? matched_count : limit;
+
+    char **page = (char **)malloc(take ? take * sizeof(*page) : sizeof(*page));
+    if (!page && take) {
+        for (size_t j = 0; j < matched_count; j++) free(matched[j]);
+        free(matched);
+        return WF_ERR_ALLOC;
+    }
+    /* Transfer ownership of the first `take` strings to the caller and free
+     * any surplus beyond the page. */
+    for (size_t j = 0; j < take; j++) page[j] = matched[j];
+    for (size_t j = take; j < matched_count; j++) free(matched[j]);
+    free(matched);
+
+    *out_cids = page;
+    *out_count = take;
+    return WF_OK;
+}
+
 void metalbear_blob_store_list_free(char **cids, size_t count) {
     if (!cids) return;
     for (size_t i = 0; i < count; i++) free(cids[i]);
