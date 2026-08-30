@@ -10,7 +10,7 @@ It provides a runnable PDS foundation, supporting multi-account hosting.
 
 ## Read first and architecture
 
-- `/Volumes/Storage/Developer/Local/atproto` is the protocol and PDS behavior authority. Inspect its lexicons and PDS implementation before changing endpoint semantics.
+- `/Volumes/Storage/Developer/Git/atproto` is the protocol and PDS behavior authority. Inspect its lexicons and PDS implementation before changing endpoint semantics.
 - <https://atproto.com> is the normative specification, and says things the
   reference source does not spell out — the sync spec's requirements on `rev`
   ordering, clock-drift rejection, `prevData` chain verification and what a
@@ -299,7 +299,7 @@ the matching `location =` block in the same change, not a followup.
 ## Endpoint correctness
 
 - Every endpoint's input/output schema must match its lexicon definition from
-  `/Volumes/Storage/Developer/Local/atproto`. Use the exact field names, required
+  `/Volumes/Storage/Developer/Git/atproto`. Use the exact field names, required
   fields, and error codes specified in the lexicon, not ad-hoc alternatives.
 - Session responses (`createSession`, `refreshSession`, `createAccount`) must
   include `email` and `emailConfirmed` fields when email is configured.
