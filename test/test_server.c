@@ -209,8 +209,11 @@ static long metric_value(const wf_response *response, const char *name) {
         if (rem == 0 || num[0] < '0' || num[0] > '9') continue;
         char buf[32];
         size_t j = 0;
-        while (j < rem && j + 1 < sizeof(buf) && num[j] >= '0' && num[j] <= '9')
-            buf[j++] = num[j];
+        while (j < rem && j + 1 < sizeof(buf) && num[j] >= '0' &&
+               num[j] <= '9') {
+            buf[j] = num[j];
+            j++;
+        }
         buf[j] = '\0';
         if (j == 0) return -1;
         long v = 0;
