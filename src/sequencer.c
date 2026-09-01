@@ -19,6 +19,9 @@ struct metalbear_sequencer {
     pthread_mutex_t mutex;
     pthread_cond_t changed;
     int closing;
+    /* Protected by mutex. free() latches closing and waits for this count
+     * before destroying the SQLite handle and synchronization primitives. */
+    size_t active_subscribers;
     metalbear_sequencer_notify_cb notify;
     void *notify_ctx;
 };
@@ -775,6 +778,10 @@ static void *subscriber_main(void *raw) {
     wf_xrpc_server_ws_release(worker->stream);
     free(worker);
     metalbear_metrics_inc(METALBEAR_METRIC_FIREHOSE_DISCONNECTS);
+    pthread_mutex_lock(&s->mutex);
+    if (s->active_subscribers > 0) s->active_subscribers--;
+    pthread_cond_broadcast(&s->changed);
+    pthread_mutex_unlock(&s->mutex);
     return NULL;
 }
 
@@ -825,8 +832,21 @@ static wf_status subscribe_repos(void *context, const wf_xrpc_request *request,
         free(worker);
         return WF_ERR_INVALID_ARG;
     }
+    pthread_mutex_lock(&s->mutex);
+    if (s->closing) {
+        pthread_mutex_unlock(&s->mutex);
+        wf_xrpc_server_ws_release(stream);
+        free(worker);
+        return WF_ERR_INVALID_ARG;
+    }
+    s->active_subscribers++;
+    pthread_mutex_unlock(&s->mutex);
     pthread_t thread;
     if (pthread_create(&thread, NULL, subscriber_main, worker) != 0) {
+        pthread_mutex_lock(&s->mutex);
+        s->active_subscribers--;
+        pthread_cond_broadcast(&s->changed);
+        pthread_mutex_unlock(&s->mutex);
         wf_xrpc_server_ws_release(stream);
         free(worker);
         return WF_ERR_INTERNAL;
@@ -955,6 +975,7 @@ void metalbear_sequencer_free(metalbear_sequencer *s) {
     pthread_mutex_lock(&s->mutex);
     s->closing = 1;
     pthread_cond_broadcast(&s->changed);
+    while (s->active_subscribers > 0) pthread_cond_wait(&s->changed, &s->mutex);
     pthread_mutex_unlock(&s->mutex);
     sqlite3_close(s->db);
     pthread_cond_destroy(&s->changed);
