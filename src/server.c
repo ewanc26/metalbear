@@ -1628,6 +1628,9 @@ char *join_path(const char *directory, const char *name) {
 static void load_lexicons(metalbear_server *server, const char *configured) {
     static const char *const fallbacks[] = {
         "/usr/local/share/metalbear/lexicons",
+#ifdef METALBEAR_SOURCE_WOLFRAM_LEXICON_DIR
+        METALBEAR_SOURCE_WOLFRAM_LEXICON_DIR,
+#endif
         "../wolfram/lexicons",
         "lexicons",
     };
