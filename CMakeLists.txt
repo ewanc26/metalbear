@@ -215,7 +215,8 @@ target_compile_definitions(
   PUBLIC METALBEAR_VERSION="${PROJECT_VERSION}"
   PUBLIC METALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}"
   PUBLIC METALBEAR_BUILD_TIME="${METALBEAR_BUILD_TIME}"
-  PUBLIC METALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}")
+  PUBLIC METALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}"
+  PUBLIC METALBEAR_SOURCE_WOLFRAM_LEXICON_DIR="${WOLFRAM_SOURCE_DIR}/lexicons")
 
 # Propagate module enable/disable to the preprocessor so source files can
 # #ifdef-guard module-specific includes, route registrations, and struct
