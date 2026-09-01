@@ -2417,8 +2417,15 @@ int main(void) {
     CHECK(response.status == 400);
     wf_response_free(&response);
 
+    /* Keep an idle firehose attached across shutdown. The subscriber worker
+     * is detached from the HTTP server, so metalbear_server_free() must wait
+     * for it after closing the XRPC server instead of destroying the
+     * sequencer while the worker still owns its mutex/SQLite handle. */
+    firehose = firehose_connect(metalbear_server_port(server), commit_seq);
+    CHECK(firehose >= 0);
     wf_xrpc_client_free(client);
     metalbear_server_free(server);
+    if (firehose >= 0) close(firehose);
 
     /* Restart on the same data directory: stored credentials survive, and the
      * account is found through the registry rather than through configuration
