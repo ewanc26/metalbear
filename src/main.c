@@ -249,6 +249,7 @@ int main(int argc, char **argv) {
     ENV_STR("METALBEAR_LISTEN", listen_address);
     ENV_STR("METALBEAR_DATA", data_directory);
     ENV_STR("METALBEAR_SERVICE_DID", service_did);
+    ENV_STR("METALBEAR_MOD_SERVICE_DID", mod_service_did);
     ENV_STR("METALBEAR_PUBLIC_URL", public_url);
     ENV_STR("METALBEAR_USER_DOMAIN", user_domain);
     ENV_STR("METALBEAR_PLC_ROTATION_KEY", plc_rotation_key);

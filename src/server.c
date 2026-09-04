@@ -245,12 +245,12 @@ const char *bearer_token(const char *header) {
     return header + sizeof(prefix) - 1;
 }
 
-/* Decode the `sub` claim from a JWT *without* verifying its signature. This
- * is used only to route the request to the correct account's auth store, which
- * then performs real signature/expiry/scope verification. Returns a
- * caller-owned string, or NULL on any parse failure. */
-char *jwt_subject(const char *token) {
-    if (!token) return NULL;
+/* Decode a named claim from a JWT *without* verifying its signature. This is
+ * used only to route a request to the verifier that then performs real
+ * signature/expiry/scope verification. Returns a caller-owned string, or NULL
+ * on any parse failure. */
+char *jwt_claim(const char *token, const char *name) {
+    if (!token || !name) return NULL;
     const char *first = strchr(token, '.');
     if (!first) return NULL;
     const char *second = strchr(first + 1, '.');
@@ -268,12 +268,16 @@ char *jwt_subject(const char *token) {
     cJSON *payload = cJSON_ParseWithLength((const char *)raw, raw_len);
     free(raw);
     if (!payload) return NULL;
-    cJSON *sub = cJSON_GetObjectItemCaseSensitive(payload, "sub");
+    cJSON *value = cJSON_GetObjectItemCaseSensitive(payload, name);
     char *result = NULL;
-    if (cJSON_IsString(sub) && sub->valuestring[0])
-        result = strdup(sub->valuestring);
+    if (cJSON_IsString(value) && value->valuestring[0])
+        result = strdup(value->valuestring);
     cJSON_Delete(payload);
     return result;
+}
+
+char *jwt_subject(const char *token) {
+    return jwt_claim(token, "sub");
 }
 
 /*
@@ -703,7 +707,8 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
         }
         return WF_OK;
     }
-    if (req->params && cJSON_IsObject(req->params)) {
+    if (req->params && cJSON_IsObject(req->params) &&
+        strcmp(req->nsid, "app.bsky.actor.getPreferences") != 0) {
         cJSON *repo = cJSON_GetObjectItemCaseSensitive(req->params, "repo");
         cJSON *did = cJSON_GetObjectItemCaseSensitive(req->params, "did");
         cJSON *target =
@@ -716,7 +721,11 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
              * here with a misleading AuthenticationRequired, instead of the
              * NotFound/InvalidRequest an unknown identifier actually
              * deserves. context_for_identifier is the same DID-then-handle
-             * resolution the rest of this file uses. */
+             * resolution the rest of this file uses. getPreferences is
+             * exempt: its `did` query param is the mod-service target, and
+             * the handler resolves it (400 NotFound for an unknown DID) —
+             * a pre-auth 401 here would win before the mod-service verifier
+             * ever runs. */
             if (!context_for_identifier(server, target->valuestring))
                 return WF_ERR_PERMISSION;
         }
@@ -1068,6 +1077,34 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
                       req->nsid ? req->nsid : "-",
                       req->host_header ? req->host_header : "-");
             return WF_ERR_PERMISSION;
+        }
+
+        /* app.bsky.actor.getPreferences accepts a moderator service's JWT as
+         * an alternative to a user access token (the reference's
+         * authorizationOrModService, the only route wired for it). A valid
+         * service token from the configured mod_service DID bypasses the
+         * per-account `sub` routing below and runs the handler in
+         * WF_XRPC_PRINCIPAL_SERVICE mode, where the account acted on comes
+         * from the undocumented `did` query param. A bearer token that fails
+         * mod-service verification (unconfigured, malformed, wrong issuer,
+         * bad signature, or a route other than getPreferences) falls through
+         * to the normal user-token path unchanged. */
+        if (strcmp(req->nsid, "app.bsky.actor.getPreferences") == 0 &&
+            server->mod_service_did && server->mod_service_did[0]) {
+            char *iss = NULL;
+            if (metalbear_verify_mod_service_auth(server->mod_service_did,
+                                                  server->service_did, provided,
+                                                  &iss) == WF_OK &&
+                iss) {
+                LOG_DEBUG("authenticate: mod-service granted did=%s nsid=%s "
+                          "host=%s",
+                          iss, req->nsid ? req->nsid : "-",
+                          req->host_header ? req->host_header : "-");
+                req->authed_subject = iss;
+                req->authed_principal_kind = WF_XRPC_PRINCIPAL_SERVICE;
+                return WF_OK;
+            }
+            free(iss);
         }
 
         /* Route to the account named by the token's `sub` claim, then verify
@@ -1676,6 +1713,8 @@ static bool copy_config(metalbear_server *server,
         server->appview_url = strdup(config->appview_url);
     if (config->appview_did && config->appview_did[0])
         server->appview_did = strdup(config->appview_did);
+    if (config->mod_service_did && config->mod_service_did[0])
+        server->mod_service_did = strdup(config->mod_service_did);
     load_lexicons(server, config->lexicon_dir);
     return server->service_did && (!config->public_url || server->public_url) &&
            server->user_domain && server->data_directory;
@@ -2918,6 +2957,7 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->plc_url);
     free(server->appview_url);
     free(server->appview_did);
+    free(server->mod_service_did);
     wf_lexicon_registry_free(server->lexicons);
     free(server);
 }

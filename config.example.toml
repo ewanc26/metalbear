@@ -14,6 +14,10 @@ port          = 2583
 threads       = 4                    # request worker threads
 data          = "data"               # data directory
 service_did   = "did:web:pds.example.com"
+# Moderator service (e.g. ozone) DID trusted to read another account's
+# preferences through the undocumented `did` parameter on
+# app.bsky.actor.getPreferences (the reference PDS's PDS_MOD_SERVICE_DID).
+# # mod_service_did = "did:web:ozone.example.com"
 public_url    = "https://pds.example.com"   # derived from a did:web service DID if omitted
 user_domain   = ".pds.example.com"   # suffix accounts may register handles under
 # contact_email = "admin@example.com"

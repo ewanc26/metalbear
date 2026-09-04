@@ -103,6 +103,11 @@ appview:
   url: "https://api.bsky.app"
   did: "did:web:api.bsky.app"
 
+# Moderator service (e.g. ozone) DID trusted to read another account's
+# preferences through the undocumented `did` parameter on
+# app.bsky.actor.getPreferences (the reference PDS's PDS_MOD_SERVICE_DID).
+# mod_service_did: "did:web:ozone.example.com"
+
 # dns:
 #   # Publishes the `_atproto` TXT records that make minted handles resolve.
 #   #
