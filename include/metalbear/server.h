@@ -121,6 +121,13 @@ typedef struct metalbear_config {
      * service-auth JWT minted from the PDS's repo key. */
     const char *appview_url;
     const char *appview_did;
+    /* Moderator service (e.g. ozone) DID this PDS trusts to read another
+     * account's preferences. When set, app.bsky.actor.getPreferences
+     * additionally accepts a service JWT whose issuer is this DID (bare or
+     * with a `#atproto_labeler` fragment) and acts on the undocumented `did`
+     * query param, matching the reference's PDS_MOD_SERVICE_DID. NULL/empty
+     * disables the mod-service path. */
+    const char *mod_service_did;
     /* Directory of lexicon JSON documents used to validate records on write.
      * NULL falls back to the install/source locations; when no corpus is
      * found, writes are stored unvalidated and report "unknown". */
