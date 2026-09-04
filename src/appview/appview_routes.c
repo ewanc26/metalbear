@@ -6,6 +6,9 @@
 #include "metalbear/log.h"
 #include "metalbear/oauth/auth.h"
 
+#include "wolfram/identity.h"
+#include "wolfram/server.h"
+
 #include <cJSON.h>
 #include <curl/curl.h>
 #include <stdbool.h>
@@ -62,17 +65,33 @@ static char *proxy_header_dup(const char *val, const char *line_end) {
 
 typedef struct proxy_headers {
     char *content_type;
+    char *content_encoding;
+    char *content_language;
     char *repo_rev; /* `atproto-repo-rev`: how far the upstream has indexed */
+    char *content_labelers; /* `atproto-content-labelers` */
+    char *retry_after;
 } proxy_headers;
 
 static void proxy_headers_free(proxy_headers *h) {
     if (!h) return;
     free(h->content_type);
+    free(h->content_encoding);
+    free(h->content_language);
     free(h->repo_rev);
+    free(h->content_labelers);
+    free(h->retry_after);
     h->content_type = NULL;
+    h->content_encoding = NULL;
+    h->content_language = NULL;
     h->repo_rev = NULL;
+    h->content_labelers = NULL;
+    h->retry_after = NULL;
 }
 
+/* Captured upstream response headers that must reach the client, matching the
+ * reference PDS's responseHeaders() forward list (content-* + atproto-content-
+ * labelers/retry-after) plus atproto-repo-rev (used internally for the
+ * read-after-write munge and forwarded like the reference). */
 static size_t proxy_header_cb(char *ptr, size_t size, size_t nmemb,
                               void *userdata) {
     proxy_headers *out = (proxy_headers *)userdata;
@@ -81,12 +100,93 @@ static size_t proxy_header_cb(char *ptr, size_t size, size_t nmemb,
     if ((val = proxy_header_value(ptr, total, "Content-Type")) != NULL) {
         free(out->content_type);
         out->content_type = proxy_header_dup(val, ptr + total);
+    } else if ((val = proxy_header_value(ptr, total, "Content-Encoding")) !=
+               NULL) {
+        free(out->content_encoding);
+        out->content_encoding = proxy_header_dup(val, ptr + total);
+    } else if ((val = proxy_header_value(ptr, total, "Content-Language")) !=
+               NULL) {
+        free(out->content_language);
+        out->content_language = proxy_header_dup(val, ptr + total);
     } else if ((val = proxy_header_value(ptr, total, "atproto-repo-rev")) !=
                NULL) {
         free(out->repo_rev);
         out->repo_rev = proxy_header_dup(val, ptr + total);
+    } else if ((val = proxy_header_value(ptr, total,
+                                         "atproto-content-labelers")) != NULL) {
+        free(out->content_labelers);
+        out->content_labelers = proxy_header_dup(val, ptr + total);
+    } else if ((val = proxy_header_value(ptr, total, "Retry-After")) != NULL) {
+        free(out->retry_after);
+        out->retry_after = proxy_header_dup(val, ptr + total);
     }
     return total;
+}
+
+/* Add the captured upstream response headers to the outbound XRPC response,
+ * so the caller sees the proxied endpoint's real content metadata and
+ * labeler/retry signalling. Content-Type is owned by the response's own
+ * content_type field; the rest ride the generic header list. */
+static void proxy_forward_response_headers(wf_xrpc_response *resp,
+                                           const proxy_headers *h) {
+    if (!resp || !h) return;
+    if (h->content_encoding)
+        (void)wf_xrpc_response_add_header(resp, "Content-Encoding",
+                                          h->content_encoding);
+    if (h->content_language)
+        (void)wf_xrpc_response_add_header(resp, "Content-Language",
+                                          h->content_language);
+    if (h->repo_rev)
+        (void)wf_xrpc_response_add_header(resp, "atproto-repo-rev",
+                                          h->repo_rev);
+    if (h->content_labelers)
+        (void)wf_xrpc_response_add_header(resp, "atproto-content-labelers",
+                                          h->content_labelers);
+    if (h->retry_after)
+        (void)wf_xrpc_response_add_header(resp, "Retry-After", h->retry_after);
+}
+
+/* Append the AppView-forwarding request headers to the curl header list,
+ * matching the reference PDS pipethrough's request header set (accept-encoding
+ * defaulting to identity, accept-language, atproto-accept-labelers, x-bsky-
+ * topics, and every x-atproto-* header verbatim). Returns true on success. */
+static bool proxy_forward_request_headers(const wf_xrpc_request *req,
+                                          struct curl_slist **hdrs) {
+    const char *enc = (req->accept_encoding && req->accept_encoding[0])
+                          ? req->accept_encoding
+                          : "identity";
+    char enc_hdr[256];
+    snprintf(enc_hdr, sizeof(enc_hdr), "Accept-Encoding: %s", enc);
+    *hdrs = curl_slist_append(*hdrs, enc_hdr);
+    if (req->accept_language && req->accept_language[0]) {
+        char lang[512];
+        snprintf(lang, sizeof(lang), "Accept-Language: %s",
+                 req->accept_language);
+        *hdrs = curl_slist_append(*hdrs, lang);
+    }
+    if (req->atproto_accept_labelers && req->atproto_accept_labelers[0]) {
+        char labelers[1024];
+        snprintf(labelers, sizeof(labelers), "atproto-accept-labelers: %s",
+                 req->atproto_accept_labelers);
+        *hdrs = curl_slist_append(*hdrs, labelers);
+    }
+    if (req->x_bsky_topics && req->x_bsky_topics[0]) {
+        char topics[512];
+        snprintf(topics, sizeof(topics), "X-Bsky-Topics: %s",
+                 req->x_bsky_topics);
+        *hdrs = curl_slist_append(*hdrs, topics);
+    }
+    if (req->atproto_headers) {
+        for (size_t i = 0; i < req->atproto_headers_count; i++) {
+            char line[2048];
+            int n = snprintf(line, sizeof(line), "%s: %s",
+                             req->atproto_headers[i].name,
+                             req->atproto_headers[i].value);
+            if (n < 0 || (size_t)n >= sizeof(line)) continue;
+            *hdrs = curl_slist_append(*hdrs, line);
+        }
+    }
+    return *hdrs != NULL;
 }
 
 /* Service ids that have been renamed on the network. The AppView's did:web
@@ -140,26 +240,26 @@ static char *resolve_did_web_service(const char *did, const char *service_id) {
     CURL *curl = curl_easy_init();
     if (!curl) return NULL;
     proxy_buf_t body = {0};
-    char *ct = NULL;
+    proxy_headers hdrs = {0};
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, proxy_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, proxy_header_cb);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &ct);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &hdrs);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
     CURLcode rc = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
     if (rc != CURLE_OK || !body.data) {
         free(body.data);
-        free(ct);
+        proxy_headers_free(&hdrs);
         return NULL;
     }
 
     cJSON *doc = cJSON_Parse(body.data);
     free(body.data);
     if (!doc) {
-        free(ct);
+        proxy_headers_free(&hdrs);
         return NULL;
     }
 
@@ -195,7 +295,7 @@ static char *resolve_did_web_service(const char *did, const char *service_id) {
         }
     }
     cJSON_Delete(doc);
-    free(ct);
+    proxy_headers_free(&hdrs);
     return endpoint;
 }
 
@@ -580,6 +680,7 @@ static wf_status proxy_appview(metalbear_server *server,
         snprintf(xff, sizeof(xff), "X-Forwarded-For: %s", req->client_ip);
         hdrs = curl_slist_append(hdrs, xff);
     }
+    proxy_forward_request_headers(req, &hdrs);
 
     proxy_buf_t body_out = {0};
     proxy_headers hdrs_out = {0};
@@ -624,9 +725,11 @@ static wf_status proxy_appview(metalbear_server *server,
     if (hdrs_out.content_type) {
         wf_xrpc_response_set_content_type(resp, hdrs_out.content_type);
     }
+    proxy_forward_response_headers(resp, &hdrs_out);
     /* Read-after-write: splice in the requester's own records that the
      * upstream has not indexed yet, so a just-written post is visible to its
      * author immediately rather than only once the AppView catches up. */
+
     char *munged = NULL;
     if (status == 200 && body_out.data && body_out.len > 0 &&
         hdrs_out.repo_rev && hdrs_out.repo_rev[0] && requester_did &&
@@ -766,6 +869,7 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
     /* libcurl sets Host from the target URL; do not override it with the
      * original request's Host or Cloudflare-style frontends will reject the
      * proxied connection. */
+    proxy_forward_request_headers(req, &hdrs);
 
     proxy_buf_t body_out = {0};
     proxy_headers hdrs_out = {0};
@@ -810,6 +914,7 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
     if (hdrs_out.content_type) {
         wf_xrpc_response_set_content_type(resp, hdrs_out.content_type);
     }
+    proxy_forward_response_headers(resp, &hdrs_out);
     if (body_out.data && body_out.len > 0) {
         wf_xrpc_response_set_body(resp, body_out.data, body_out.len);
     }
@@ -1065,14 +1170,161 @@ wf_status appview_unspecced_get_age_assurance(void *ctx,
  * The reference PDS proxies these to the AppView too, but MetalBear stores
  * them locally rather than round-tripping through an upstream — see the
  * exclusion of these two NSIDs from the generic proxy fallback in server.c. */
+
+/* Verify an inbound mod-service JWT. See the declaration in appview_routes.h
+ * for the contract; this mirrors packages/pds/src/auth-verifier.ts's
+ * modService/verifyServiceJwt (iss allowlist, aud + lxm binding) on top of
+ * wolfram's wf_server_verify_service_auth (structure, exp, signature). */
+wf_status metalbear_verify_mod_service_auth(const char *mod_service_did,
+                                            const char *local_service_did,
+                                            const char *token, char **out_iss) {
+    char *did = NULL;
+    char *didkey = NULL;
+    wf_service_auth_claims claims = {0};
+    wf_status status = WF_ERR_PERMISSION;
+
+    if (!out_iss) return WF_ERR_INVALID_ARG;
+    *out_iss = NULL;
+    if (!mod_service_did || !mod_service_did[0] || !local_service_did ||
+        !local_service_did[0] || !token)
+        return WF_ERR_PERMISSION;
+
+    /* Issuer check first, before any resolution: an access token's `iss` is
+     * the OAuth provider, and a user JWT's `iss`/`sub` is never the trusted
+     * mod service — reject cheaply so ordinary auth does not pay for a DID
+     * resolution it will not use. */
+    char *iss = jwt_claim(token, "iss");
+    if (!iss) return WF_ERR_PERMISSION;
+    bool trusted = strcmp(iss, mod_service_did) == 0;
+    if (!trusted) {
+        size_t ml = strlen(mod_service_did);
+        trusted = strncmp(iss, mod_service_did, ml) == 0 &&
+                  strcmp(iss + ml, "#atproto_labeler") == 0;
+    }
+    if (!trusted) goto done;
+
+    /* Signing key: the bare DID, unless the token's issuer carried the
+     * `#atproto_labeler` service fragment, in which case the document's
+     * `#atproto_label` key verifies (matches the reference's
+     * `serviceId === 'atproto_labeler' ? 'atproto_label' : 'atproto'`). A
+     * did:key issuer IS its own signing key and resolves offline; every other
+     * method resolves the published verification method from the DID
+     * document (network), exactly like the repo-import path and the
+     * reference's did-resolver. */
+    const char *frag = strchr(iss, '#');
+    const char *key_id = frag && strcmp(frag, "#atproto_labeler") == 0
+                             ? "#atproto_label"
+                             : "#atproto";
+    size_t dl = frag ? (size_t)(frag - iss) : strlen(iss);
+    did = malloc(dl + 1);
+    if (!did) {
+        status = WF_ERR_ALLOC;
+        goto done;
+    }
+    memcpy(did, iss, dl);
+    did[dl] = '\0';
+
+    if (strncmp(did, "did:key:", 8) == 0) {
+        didkey = did;
+        did = NULL;
+    } else {
+        wf_xrpc_client *client = wf_xrpc_client_new("https://localhost");
+        if (!client) {
+            status = WF_ERR_ALLOC;
+            goto done;
+        }
+        wf_status kst =
+            wf_did_resolve_verification_key(client, did, key_id, &didkey);
+        wf_xrpc_client_free(client);
+        if (kst != WF_OK || !didkey) goto done;
+    }
+
+    /* Structural/signature/expiry verification, then the aud + lxm bindings
+     * the reference checks separately from the signature. */
+    if (wf_server_verify_service_auth(token, didkey, 0, &claims) != WF_OK)
+        goto done;
+    if (!claims.aud || strcmp(claims.aud, local_service_did) != 0) goto done;
+    if (!claims.lxm || strcmp(claims.lxm, "app.bsky.actor.getPreferences") != 0)
+        goto done;
+
+    /* Everything checked: surfaces the token's issuer exactly as sent,
+     * fragment included, matching the reference's mod_service credentials. */
+    *out_iss = iss;
+    iss = NULL;
+    status = WF_OK;
+
+done:
+    wf_service_auth_claims_free(&claims);
+    free(didkey);
+    free(did);
+    free(iss);
+    return status;
+}
+
+/* Handler-side hasAccessFull (the reference's isAccessFull / isModerator):
+ * a mod-service request is a moderator and always gets everything; a user
+ * access token needs full scope. Returns WF_OK and sets *scope (0 = full)
+ * for the user path. */
+static bool request_has_access_full(const wf_xrpc_request *request,
+                                    metalbear_account_context *acct) {
+    if (request->authed_principal_kind == WF_XRPC_PRINCIPAL_SERVICE)
+        return true;
+    metalbear_access_scope scope = METALBEAR_ACCESS_FULL;
+    const char *provided = bearer_token(request->auth_header);
+    if (metalbear_auth_verify_access_scope(acct->auth, provided, &scope) !=
+        WF_OK)
+        return false;
+    return scope == METALBEAR_ACCESS_FULL;
+}
+
+/* app.bsky.actor.defs.personalDetailsPref — the sole full-access-only pref
+ * (upstream preference/util.ts isFullAccessOnlyPref). Hidden from a reader
+ * without hasAccessFull and rejected on write by one. */
+#define PERSONAL_DETAILS_PREF_TYPE "app.bsky.actor.defs.personalDetailsPref"
+/* app.bsky.actor.defs.declaredAgePref — computed from personalDetailsPref's
+ * birthDate (upstream isReadOnlyPref); never persisted by the client, so a
+ * writer drops it rather than storing a derived value. */
+#define DECLARED_AGE_PREF_TYPE "app.bsky.actor.defs.declaredAgePref"
+
+static bool pref_is_type(const cJSON *pref, const char *type) {
+    cJSON *t = cJSON_GetObjectItemCaseSensitive(pref, "$type");
+    return cJSON_IsString(t) && t->valuestring &&
+           strcmp(t->valuestring, type) == 0;
+}
+
 wf_status get_actor_preferences(void *ctx, const wf_xrpc_request *request,
                                 wf_xrpc_response *response) {
     metalbear_server *server = ctx;
-    metalbear_account_context *acct = resolve_request_context(server, request);
-    if (!acct) {
-        wf_xrpc_response_set_error(response, 401, "InvalidToken",
-                                   "Invalid access token");
-        return WF_OK;
+    metalbear_account_context *acct = NULL;
+    char *target = NULL;
+    if (request->authed_principal_kind == WF_XRPC_PRINCIPAL_SERVICE) {
+        /* Mod-service request (verified in authenticate): act on the account
+         * named by the undocumented `did` query param, not the token's own
+         * subject — the reference's getAccountDidFromParams path. */
+        cJSON *did =
+            request->params
+                ? cJSON_GetObjectItemCaseSensitive(request->params, "did")
+                : NULL;
+        if (cJSON_IsString(did) && did->valuestring[0])
+            target = did->valuestring;
+        if (!target || strncmp(target, "did:", 4) != 0) {
+            wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                       "Invalid or missing did parameter");
+            return WF_OK;
+        }
+        acct = context_for_did(server, target);
+        if (!acct) {
+            wf_xrpc_response_set_error(response, 400, "NotFound",
+                                       "Repo not found");
+            return WF_OK;
+        }
+    } else {
+        acct = resolve_request_context(server, request);
+        if (!acct) {
+            wf_xrpc_response_set_error(response, 401, "InvalidToken",
+                                       "Invalid access token");
+            return WF_OK;
+        }
     }
     char *prefs_json = NULL;
     if (metalbear_account_store_prefs_get(acct->account, &prefs_json) !=
@@ -1088,6 +1340,23 @@ wf_status get_actor_preferences(void *ctx, const wf_xrpc_request *request,
         cJSON *empty = cJSON_CreateObject();
         cJSON_AddItemToObject(empty, "preferences", cJSON_CreateArray());
         return set_json(response, empty);
+    }
+    if (!request_has_access_full(request, acct)) {
+        /* hasAccessFull=false: drop the full-access-only pref from the
+         * response (upstream prefAllowed), matching what a standard-scope
+         * session is permitted to see. */
+        cJSON *prefs = cJSON_GetObjectItemCaseSensitive(root, "preferences");
+        if (cJSON_IsArray(prefs)) {
+            cJSON *item = prefs->child;
+            while (item) {
+                cJSON *next = item->next;
+                if (pref_is_type(item, PERSONAL_DETAILS_PREF_TYPE)) {
+                    cJSON_DetachItemViaPointer(prefs, item);
+                    cJSON_Delete(item);
+                }
+                item = next;
+            }
+        }
     }
     return set_json(response, root);
 }
@@ -1120,15 +1389,46 @@ wf_status put_actor_preferences(void *ctx, const wf_xrpc_request *request,
                                    "preferences must be an array");
         return WF_OK;
     }
+    if (!request_has_access_full(request, acct)) {
+        /* hasAccessFull=false: refuse to persist the full-access-only pref
+         * (upstream transactor's forbiddenPrefs check) and drop the derived
+         * read-only pref below, which upstream never stores. */
+        cJSON *item = prefs->child;
+        while (item) {
+            if (pref_is_type(item, PERSONAL_DETAILS_PREF_TYPE)) {
+                cJSON_Delete(parsed);
+                wf_xrpc_response_set_error(
+                    response, 400, "InvalidRequest",
+                    "Do not have authorization to set "
+                    "preferences: " PERSONAL_DETAILS_PREF_TYPE);
+                return WF_OK;
+            }
+            item = item->next;
+        }
+    }
+    /* The derived declaredAgePref is computed server-side from
+     * personalDetailsPref.birthDate and never stored (upstream isReadOnlyPref
+     * — the read filter above and this write drop run for full and standard
+     * access alike). Removes it, then serializes the filtered preferences, so
+     * what is persisted matches the reference. */
+    {
+        cJSON *item = prefs->child;
+        while (item) {
+            cJSON *next = item->next;
+            if (pref_is_type(item, DECLARED_AGE_PREF_TYPE)) {
+                cJSON_DetachItemViaPointer(prefs, item);
+                cJSON_Delete(item);
+            }
+            item = next;
+        }
+    }
+    char *body_copy = cJSON_PrintUnformatted(parsed);
     cJSON_Delete(parsed);
-    char *body_copy = malloc(request->body_len + 1);
     if (!body_copy) {
         wf_xrpc_response_set_error(response, 500, "InternalError",
                                    "allocation failed");
         return WF_OK;
     }
-    memcpy(body_copy, request->body, request->body_len);
-    body_copy[request->body_len] = '\0';
     if (metalbear_account_store_prefs_put(acct->account, body_copy) != WF_OK) {
         free(body_copy);
         wf_xrpc_response_set_error(response, 500, "InternalError",
