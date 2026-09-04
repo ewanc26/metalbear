@@ -294,6 +294,12 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_server COMMAND test_metalbear)
 
+  add_executable(test_metalbear_mod_service test/test_mod_service.c)
+  target_link_libraries(test_metalbear_mod_service PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_mod_service
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_mod_service COMMAND test_metalbear_mod_service)
+
   add_executable(test_metalbear_auth test/test_auth.c)
   target_link_libraries(test_metalbear_auth PRIVATE metalbear_core)
   add_test(NAME metalbear_auth COMMAND test_metalbear_auth)
