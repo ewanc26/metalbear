@@ -84,6 +84,7 @@ static bool parse_bool(const char *v, bool *out) {
     UINT("server.threads", thread_count)                                       \
     STR("server.data", data_directory)                                         \
     STR("server.service_did", service_did)                                     \
+    STR("server.mod_service_did", mod_service_did)                             \
     STR("server.public_url", public_url)                                       \
     STR("server.user_domain", user_domain)                                     \
     STR("server.contact_email", account_email)                                 \

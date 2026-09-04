@@ -105,6 +105,11 @@ struct metalbear_server {
     metalbear_email *email;
 #endif
     char *service_did;
+    /* Moderator service (e.g. ozone) DID trusted to read another account's
+     * preferences via app.bsky.actor.getPreferences's undocumented `did`
+     * query param, mirroring the reference's PDS_MOD_SERVICE_DID. NULL when
+     * unset, in which case getPreferences never accepts a service JWT. */
+    char *mod_service_did;
     char *public_url;
     char *user_domain;
     char *data_directory;
@@ -248,10 +253,16 @@ bool check_endpoint_rate_limit(wf_rate_limiter *tier_a, wf_rate_limiter *tier_b,
  * header is absent or uses a different scheme. */
 const char *bearer_token(const char *header);
 
-/* Decode the `sub` claim from a JWT *without* verifying its signature. Used
- * only to route a request to the account whose auth store can then perform
- * real signature/expiry/scope verification. Returns a caller-owned string
- * (free() it), or NULL on any parse failure. */
+/* Decode a named claim from a JWT *without* verifying its signature. Used
+ * only to route a request to the verifier that can then perform real
+ * signature/expiry/scope verification (the `sub` claim picks the account
+ * whose auth store checks an access token; the `iss` claim decides whether
+ * a token is worth attempting mod-service verification at all, before any
+ * DID resolution). Returns a caller-owned string (free() it), or NULL on
+ * any parse failure. */
+char *jwt_claim(const char *token, const char *name);
+
+/* Decode the `sub` claim from a JWT *without* verifying its signature. */
 char *jwt_subject(const char *token);
 
 /* The reference PDS's assertRepoAvailability, which every sync read runs
