@@ -1,606 +1,196 @@
-# MetalBear agent guidance
+#AGENTS.md
 
-MetalBear is a C23-first AT Protocol PDS built on the sibling Wolfram SDK.
+Guidance for AI coding agents working in this repository. Human contributors
+may find it useful too, but the audience is agents.
 
-The project is implemented primarily in C23. C++ is permitted for complex or sensitive components where C is insufficient — specifically RAII-based resource management (e.g. sqlite3, OpenSSL), performance-critical code, and third-party library integrations that have no C equivalent. All C++ usage must follow strict isolation via `extern "C"` modules. Public headers, exported APIs, protocol handlers, and the core server architecture remain C23. C++ components must expose a C ABI (`extern "C"` where required), and exceptions must never cross the C/C++ boundary. Default to C for new code; introduce C++ only when the complexity, resource management, or performance requirements justify it.
+## Project overview
 
-The server runs on a multithreaded model: libmicrohttpd serves requests from a thread pool (auto-sized to CPUs * 2 when `thread_count` is 0, otherwise configurable via `thread_count`), and each WebSocket subscription runs on its own pthread. All shared state — the route table, sequencer, account cache, repo store, blob store, OAuth store, and report store — must be guarded by a mutex. New code must document its locking discipline and use the `_locked` internal-variant pattern to avoid recursive-lock deadlocks.
+A native C/C++23 Minecraft: Java Edition server focused on predictable, low RAM
+usage. Zincfox is an experimental clean-room server implementation: the goal is
+not to clone the vanilla server architecture in C++, but to build the protocol,
+simulation, world and persistence layers around explicit ownership, bounded
+queues and measurable memory budgets from the start.
 
-It provides a runnable PDS foundation, supporting multi-account hosting.
+- **Language:** C17 is available for small leaf components where it reduces
+  runtime/dependency surface; C++23 is the default for protocol, server,
+  storage, and world state. `snake_case` for functions and variables,
+  `PascalCase` for types.
+- **Build:** CMake, C17/C++23 strict by target, `-Wall -Wextra -Wpedantic
+  -Wconversion -Wsign-conversion`. Tests are per-file executables run through `ctest`,
+  following the account's other native repos (`clay/`, `wolfram/`, `keepsake/`).
+- **Target:** macOS and Linux desktop. Windows is untested (as elsewhere in this
+  account).
 
-## Read first and architecture
+## Repository layout
 
-- `/Volumes/Storage/Developer/Git/atproto` is the protocol and PDS behavior authority. Inspect its lexicons and PDS implementation before changing endpoint semantics.
-- <https://atproto.com> is the normative specification, and says things the
-  reference source does not spell out — the sync spec's requirements on `rev`
-  ordering, clock-drift rejection, `prevData` chain verification and what a
-  consuming relay may reject are stated there and nowhere in the TypeScript.
-  Read <https://atproto.com/specs/sync> before touching the firehose, and the
-  relevant `specs/` page before any wire-format change. Where the two appear
-  to disagree, the lexicons and reference implementation win for behaviour,
-  but the spec is what other implementations were written against.
-- `src/server.c` is the central file: server lifecycle
-  (`metalbear_server_create`/`_start`), XRPC route registration, and the auth
-  callback. Most protocol handlers have moved out into per-domain route
-  files it registers against — see "File organization" below;
-  `src/server_internal.h` is the private header those files and server.c
-  share.
-- `src/admin/admin_routes.c` — `com.atproto.admin.*` handlers.
-- `src/identity/identity_routes.c` — `com.atproto.identity.*` handlers, DID
-  document resolution/caching, and the PLC operation flow.
-- `src/oauth/oauth_credentials.c` — the `metalbear_oauth_subject_resolver` /
-  `metalbear_oauth_credential_verifier` callbacks `/oauth/authorize` uses to
-  resolve and verify a `login_hint` against a local account.
-- `src/session/session_routes.c` — `com.atproto.server.{create,get,refresh,delete}Session`
-  and app-password handlers.
-- `src/account/account_routes.c` — `createAccount`, email
-  confirmation/update, password reset, invite codes, `checkAccountStatus`,
-  `reserveSigningKey`.
-- `src/sync/sync_routes.c` — every `com.atproto.sync.*` handler
-  (`getRepo`, `getBlocks`, `getRepoStatus`, `listBlobs`, `getRecord`,
-  `getBlob`, `listRepos`, `listReposByCollection`, `getHead`, `getCheckout`)
-  plus `requestCrawl`.
-- `src/appview/appview_routes.c` — the `app.bsky.*`/`chat.bsky.*` AppView
-  reverse-proxy plumbing and its ~30 thin per-lexicon wrappers, plus the
-  generic fallback proxy for unmatched NSIDs.
-- `src/moderation/moderation_routes.c` — `com.atproto.moderation.createReport`.
-- `cpp/metalbear/account.cpp` manages credential storage, app passwords, email tokens, and account state (active/deactivated) in a per-account SQLite database. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
-- `src/oauth/auth.c` manages session tokens (access/refresh JWTs) with scrypt-hashed refresh tokens and scope-based access control.
-- `src/sequencer.c` handles the firehose event stream (commits, identity, account, sync events) with configurable retention.
-- `cpp/metalbear/account_registry.cpp` manages the multi-account registry, mapping account DIDs to their respective data directory paths. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
-- `src/email.c` is the optional SMTP email client using libcurl.
-- `src/repo/backup.c` implements repository backup/restore with CRC32 checksums.
-- `src/oauth/oauth.c` handles OAuth 2.0 token endpoints.
-- `src/oauth/oauth_scope.c` implements OAuth auth scope parsing and matching for AT Protocol granular permissions. Parses static scopes (`atproto`, `transition:*`) and dynamic repo scopes (`repo:<collection>?action=<action>`). Integrated with the authentication callback in `server.c` to enforce scope-based access control on repo write operations.
-- `src/repo/repo_store.c` is the durable, writable repo storage engine
-  (CBOR<->JSON, MST/commit persistence, the `metalbear_repo_store_*` public
-  CRUD API). `src/repo/repo_routes.c` is its `com.atproto.repo.*` XRPC
-  handlers (`createRecord`, `putRecord`, `applyWrites`, `importRepo`, etc.) —
-  these reach into the engine's internals as directly as the engine itself
-  does (`h_import_repo` manipulates the CAR/head/signing key while replaying
-  an import), sharing `src/repo/repo_store_internal.h`. `src/repo/did_document.c`
-  builds W3C DID documents and is fully self-contained. `src/repo/blob_store.c`
-  / `src/repo/blob_store_server.c` are the blob persistence layer and its routes.
-- `src/account/account_context.c` / `src/account/account_cache.c` resolve and cache the per-request account context (DID, repo, auth) route handlers share.
-- `src/dns/handle_dns.c` / `src/dns/handle_dns_rfc2136.c` publish the `_atproto` handle-resolution TXT records (static zone file and RFC 2136 dynamic update, respectively).
-- `src/moderation/report.c` is the SQLite-backed report store; `src/moderation/moderation_routes.c` is its `createReport` handler.
-- `src/ops/metrics.c` / `src/ops/update_watcher.c` back `GET /metrics` and the self-update checker.
-- `cpp/metalbear/key_rotation.cpp` manages P-256 signing key rotation. Migrated from C to C++17 with RAII for the sqlite3 handle; the public C ABI is preserved via `extern "C"`.
-- `include/metalbear/` contains all public headers.
+```
+include/zincfox/       public/internal C/C++ interfaces
+src/protocol/          VarInt, framing, packet/state codecs
+src/server/            connection lifecycle and dispatch
+src/world/             world/chunk state (future)
+src/entity/            entity/player storage (future)
+src/storage/           region/persistence backends (future)
+test/                  unit and protocol regression tests
+docs/                  design notes and compatibility records
+```
 
-## File organization
+Dependency direction is inward from higher-level game/server code to small
+protocol/net abstractions. Do not let world/entity code call raw socket APIs.
 
-Every file deals with one part of a scope — one XRPC lexicon domain, one
-subsystem, one storage engine. `server.c` at 8619 lines used to hold nearly
-every protocol handler in the codebase; it and `repo_store.c` were split
-along these lines, and the same standard applies to new code and to the
-next oversized file found, not just the ones already done.
+## Module boundaries — read before editing
 
-Modular structure is mandatory, not a style preference:
+- **Protocol code owns all wire-format parsing.** `src/protocol/` must stay
+  free of server lifecycle concerns;
+`src / server /` must stay free of game -
+        state concerns
+            .The boundary is the `protocol::handle_packet` dispatch interface.-
+        **Version -
+        specific packet definitions stay in `src /
+            protocol /`.**Transport and game systems must not accumulate packet
+                              IDs or
+    version checks.Put version tables /
+            codecs behind the protocol layer so supporting another Minecraft
+                release does not fork the whole server.-
+        **Connection state is owned by `src /
+            server /`.**The protocol layer sees only
+                            borrowed `std::span` payloads; it must not retain decoded packet objects
+  after dispatch.
+- **No global mutable server state.** A subsystem that owns a thread must
+  expose shutdown/join semantics and memory/queue bounds.
 
-- **New protocol handlers go in domain-scoped files, never `server.c`.**
-  A lexicon namespace's XRPC handlers live in
-  `src/<domain>/<domain>_routes.c` with a matching `.h` in the same
-  directory; `server.c` includes that header and registers the handlers,
-  and defines none of them. `server.c` is the server lifecycle
-  (`metalbear_server_start`/`_free`), the auth callback, route
-  registration, and the small shared helpers those need — nothing else.
-  A handler written into `server.c` is a review failure; the `video`
-  routes in `src/video/video_routes.c` are the template to follow.
-- **Keep `server.c` under ~3000 lines.** It is the largest hand-written
-  file; every handler that used to live here has been extracted into its
-  domain (`upload_blob` into `src/repo/blob_store_server.c`,
-  `check_signup_queue`/`request_account_delete`/`delete_account` into
-  `src/account/`, `getActorPreferences`/`putActorPreferences` into
-  `src/appview/`, `health`/`operator_info`/`describe_server` into the new
-  `src/ops/ops_routes.c`). Add code to it only as a short-lived step toward
-  removing it. A change that grows any hand-written file past ~3000 lines
-  must split it in the same change — the standard below applies to the
-  next oversized file found, not just the ones already done.
+## Build and run
 
-- **Domain-scoped route files**: XRPC handlers for one lexicon namespace
-  (or one clearly-bounded cluster within a namespace, e.g. `sync_routes.c`
-  covering `com.atproto.sync.*`) live in their own `src/<domain>/<domain>_routes.c`,
-  declared via a matching `.h` in the same directory. `server.c` includes
-  that header and registers the handlers; it does not define them.
-- **Internal headers share what the public API must not expose.** A struct
-  that is opaque in `include/metalbear/*.h` for external consumers (e.g.
-  `metalbear_server`, `metalbear_repo_store`) sometimes has fields several
-  files within the module need directly — route handlers reading
-  `server->public_url`, `h_import_repo` manipulating the repo store's CAR
-  and head directly. The real definition and any cross-cutting helper
-  functions those files call go in a private `<module>_internal.h`
-  (`server_internal.h`, `repo_store_internal.h`) next to the files that
-  share it — never duplicated per file, never added to the public header.
-  A function only needs exposing here if something outside its own file
-  calls it; keep everything else `static`.
-- **The public header doesn't move.** Splitting an implementation file does
-  not change `include/metalbear/*.h` — every function declared there keeps
-  its existing declaration, so external callers (including cross-file calls
-  within this same repo, like `server.c` calling
-  `metalbear_xrpc_server_register_pds_repo_resolver_ex`) need no changes.
-- **A cluster carved out of a larger block stays in its own domain even
-  when its neighbors don't.** `resolve_oauth_subject`/`verify_oauth_credential`
-  sat inside what was otherwise the identity cluster in `server.c`, but they
-  are OAuth login-credential callbacks (`metalbear_oauth_subject_resolver` /
-  `_credential_verifier`), not DID/identity XRPC handlers — they moved to
-  `src/oauth/` instead of riding along with `src/identity/`. Physical
-  proximity in the original file is not a reason to keep unrelated things
-  together; check what a function's callers actually are before deciding
-  where it belongs.
-- **One extraction, one commit, verified before the next.** Each split is
-  its own `refactor:` commit: full clean rebuild, full `ctest` run,
-  `clang-format` on the touched files (re-run build + tests after
-  formatting — a reflow can shift a multi-line signature's continuation
-  indent without changing behavior, but confirm it didn't), push, and a
-  green CI run before starting the next file. Don't stack unverified splits.
-- **Size alone doesn't mandate a split.** A large file that genuinely deals
-  with one scope — one lexicon namespace with a lot of surface area, one
-  cohesive subsystem — is not automatically a violation (a single-domain
-  file may legitimately run several hundred lines above the threshold
-  above). Look for actual domain mixing (a session handler and a moderation
-  handler in the same file) before deciding a file needs dividing, not just
-  a line count; a file past ~3000 lines must still be split or justified.
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+./build/zincfox [--port 1-65535]
+```
 
-## Commits
+"Verified" means: clean build (zero warnings under the strict flags), `ctest`
+green, and — for anything touching the network path — a real client connection
+path for the claimed states with automated regression fixtures retained where
+licensing permits.
 
-- **Atomic conventional commits**: one logical change per commit, scoped by
-  module — `feat(server)`, `fix(sequencer)`, `docs(agents)`. Never mix
-  unrelated changes; in particular do not combine a code change with a docs
-  update. Split into sequential commits instead.
-- **Honest attribution**: add a `Co-authored-by:` trailer crediting an AI agent when it materially contributed. AI assistance is welcome and should be credited accurately.
+## Configuration
 
-Matches the sibling Wolfram repository's convention, so the two histories read
-the same way.
-
-## Roadmap
-
-Public kanban board: https://github.com/users/ewanc26/projects/1
-
-Use the kanban board to track work across columns: **Backlog** → **Todo** →
-**In Progress** → **Done**. When picking up a task, move it to **In
-Progress**; when finished and released, move it to **Done**. Add new items
-for upcoming work with `gh project item-create 1 --owner ewanc26 --title
-"..." --body "..."`. Link related PRs or issues with `gh project item-add 1
---owner ewanc26 --url <url>`. View in browser with `gh project view 1
---owner ewanc26 --web`.
+- **All configurable behavior belongs in the global `zincfox.conf` file.** Do
+  not add hidden environment flags, command-only switches, or per-module
+  configuration files for server behavior. A new setting must have a bounded
+  type/range, a documented default, load/save coverage, and an explanation of
+  its retained-memory or resource effect when relevant.
+- Configuration must never make an unbounded queue, cache, world, or player
+  store possible. Dynamic choices must resolve to one of documented finite
+  limits and select the safe lower limit when host information is unavailable.
 
 ## Versioning
 
-- **Tag every version bump**: a commit that changes `VERSION` in
-  `CMakeLists.txt` must also create a signed annotated git tag on that commit:
-  `git tag -s v<major>.<minor>.<patch> -m "v<major>.<minor>.<patch>"` (use `-s`
-  when a signing key is available, otherwise `-a`). Push tags with
-  `git push --tags`.
-- **Bump in the same commit**: the version change and the tag must refer to the
-  same commit — no separate bump commit without a tag.
-- **Create a GitHub release for every version bump**: after tagging, create a
-  release via `gh release create v<major>.<minor>.<patch> --title "v<major>.<minor>.<patch>" --generate-notes` (the tag is named by that single positional; a second positional would be treated as an upload file). The release must be created in the same commit as the tag — no separate release without a tag.
-- **Version independently**: MetalBear and Wolfram are sibling projects, not a
-  single release unit. Bump each on its own history and let their versions
-  drift; there is no requirement that they share a version string or release
-  together.
+- Releases use strict semantic versioning `v<major>.<minor>.<patch>`.
+- The version lives only in the `VERSION` line of `CMakeLists.txt`; derive any
+  runtime version string from that single source of truth, not a separate file.
 - **No version jumps**: bump from the immediately previous released version.
-  Never skip a patch, minor, or major number; do not backfill gaps with
-  phantom tags or releases.
-- **Attach binaries starting at 1.0.0**: releases before 1.0.0 are source-only
-  (`gh release create` with no upload). From the 1.0.0 release onward, every
-  release must also attach built binaries as release assets (e.g. `gh release
-  upload v<major>.<minor>.<patch> <path>...`) — built via the same flow as
-  local verification (`cmake --build build`), for each platform the project
-  ships prebuilt artifacts for.
+  Never skip a patch, minor, or major number; do not backfill gaps with phantom
+  tags or releases.
+- **Substantial changes require a release cut**: a user-visible protocol or
+  gameplay behavior, persistence/world-format change, compatibility claim,
+  public interface change, or material resource-budget change must not be
+  allowed to accumulate indefinitely after a release. Before merging the next
+  substantial tranche, audit the commits since the latest tag and cut the next
+  sequential version when the tranche is ready. Documentation-only, test-only,
+  formatting, and internal refactors do not require a version cut unless they
+  change the published contract.
+- **Release procedure follows Wolfram**: change the single `VERSION` line,
+  create a signed annotated `v<major>.<minor>.<patch>` tag on that same commit
+  (falling back to an annotated tag only when signing is unavailable), push the
+  commit and tag, and create the matching GitHub release with generated notes.
+  For pre-1.0 releases, publish source only; attach built artifacts starting at
+  `v1.0.0`.
 
-## Release and redeploy
+## Code style
 
-A shipped feature runs one flow end to end. Skipping a step is how a page
-stays stale or a daemon rebuilds the same state twice.
+- Header guards (`ZINCFOX_PROTOCOL_<FILE>_HPP`), not `#pragma once` — matches
+  the convention in `wolfram/include/wolfram/` and `clay/include/clay/`.
+- `.clang-format` in this repo (LLVM base, 4-space indent, 80 columns,
+  attached braces) — run `clang-format -i` on changed files.
+- Comments explain *why*, sparingly; never narrate obvious code.
+- No C++ exceptions for expected protocol/server states. Use explicit
+  result/error types. Reserve exceptions/aborts for genuine programmer errors.
+- Avoid RTTI-heavy or virtual object hierarchies for packets/entities when
+  tagged values or tables are simpler.
 
-1. **Verify locally**: `cmake -S . -B build && cmake --build build && ctest
-   --test-dir build --output-on-failure`. When the landing page or another
-   `frontend/` surface changed, also rebuild the frontend with `npm run build`
-   in `frontend/`.
-2. **Commit and version**: land the feature as its own atomic conventional
-   commit, then a `version: bump to x.y.z` commit changing `VERSION` in
-   `CMakeLists.txt`. Tag that commit (`git tag -s vx.y.z -m "vx.y.z"`), push
-   `main` and the tag, and create the GitHub release in the same commit as the
-   tag — no bump without a tag, no release without one.
-3. **Deploy to bear1.croft.click**: export the built commit so it's baked into
-   the image (the build context excludes `.git`, so `docker compose build`
-   can't detect it on its own): `METALBEAR_BUILD_COMMIT=$(git rev-parse
-   --short=12 HEAD)` in `MetalBear`, then `docker compose build bear-pds &&
-   docker compose up -d bear-pds` in `/Volumes/Storage/Server/bear` with that
-   variable exported. Skipping the export silently degrades `commit` in
-   `operator.json`/`/_debug/health` to `"unknown"` instead of failing the
-   build, so this is easy to miss. When the frontend changed, `npm run
-   build` in `frontend/` (step 1) is the entire deploy step — edge-gateway
-   bind-mounts `frontend/build` directly at `/srv/bear1-site`
-   (`/Volumes/Storage/Server/stack/docker-compose.edge-gateway.yaml`), so
-   nginx picks up the fresh build with no copy and no restart needed.
-   Finally write the deployed commit pair to `.last-build-commit` as
-   `<metalbear HEAD>:<wolfram HEAD>` —
-   the daemon at `/Volumes/Storage/Server/stack/server-daemon.sh` rebuilds
-   whenever that marker differs from the checkouts' current HEADs, so syncing
-   it is what stops a duplicate build. Verify on the public ingress, not
-   localhost: `curl https://bear1.croft.click/xrpc/_health` for the version,
-   `/_debug/health` (admin-gated) for the debug dump.
+## Memory invariants
 
-## Public updates on ewan.bear1.croft.click
+The initial scaffold deliberately chooses simple fixed bounds:
 
-The account `ewan.bear1.croft.click` (DID `did:plc:74wjsq6fb6xx62lauj3fma2w`)
-on the bear1 dev PDS is this project's public test, documentation, and update
-channel: test posts and records, federation checks, and release/development
-updates are published from it so they are visible to the network and serve as
-the project's public devlog. Credentials live in
-`/Volumes/Storage/Server/bear/.env` — `METALBEAR_PASSWORD` is the account
-password, `METALBEAR_APP_PASSWORD` is the `dev-tooling` app password the
-tooling uses. Never commit them or paste them into logs.
+- 32 connection slots;
+- one 8 KiB receive buffer per slot;
+- one 128 KiB transmit buffer per slot (sized for one columnar 24-section
+  chunk frame with full sky light);
+- one small protocol / session record per slot;
+- one `pollfd` table for the listener plus those slots.
 
-Post an update with the Wolfram CLI from a shell that has sourced that `.env`:
+The fixed socket-buffer payload is therefore **4.25 MiB** at maximum connection
+capacity (32 slots x 136 KiB), plus small connection/poller metadata and
+operating-system socket buffers. This is not a promise that the process RSS is
+4.25 MiB, but it is the first explicit retained-memory budget owned by Zincfox
+itself.
 
-    wolfram post https://bear1.croft.click ewan.bear1.croft.click "$METALBEAR_APP_PASSWORD" <text>
+When adding a subsystem, document its steady-state and worst-case retained
+memory in the PR when practical.
 
-Verify the post with `com.atproto.repo.getRecord` on the published URI. When
-the release flow deploys a new version, post the update in the same pass — a
-shipped feature is not finished until the network can see it. `bear1.croft.click`
-routes through a Cloudflare tunnel; if it does not resolve from the build host,
-curl `https://bear1.croft.click/xrpc/_health` after DNS recovers before
-assuming the host is down.
+Every long-lived subsystem should answer four questions:
 
-**Record keys are real TIDs, always — never hand-crafted.** Every record
-created for testing or the devlog (posts, `put-record`, `applyWrites`) must
-use a real, freshly generated TID record key (`wf_tid_now` or the `wolf`
-CLI's auto-rkey path) — never a hand-made rkey such as `3l7v6qvideo`. A
-record that is not a valid 13-character base32 TID is accepted and stored by
-the PDS (`getRecord` succeeds) but the public AppView the feed is proxied to
-(`METALBEAR_APPVIEW_URL`) silently never ingests it: the record is invisible
-on the network while local verification looks green. This is not a theory —
-a hand-made rkey post sat missing from the feed for exactly this reason.
-Always verify network visibility through the AppView
-(`app.bsky.feed.getAuthorFeed` / `getPostThread`, which require a session
-token), never `com.atproto.repo.getRecord` alone.
+1. What owns this memory?
+2. What is the normal retained size?
+3. What is the maximum retained size or eviction/backpressure rule?
+4. What input can cause the subsystem to grow?
 
-## The landing page is two pages
+## Commits and pull requests
 
-`GET /` on the PDS port serves `landing_handler`'s static HTML and is almost
-never seen. The public page at bear1.croft.click is the SvelteKit frontend in
-`frontend/`, prerendered to `build/` and served by edge-gateway directly from
-there via a bind mount at `/srv/bear1-site`
-(`/Volumes/Storage/Server/stack/docker-compose.edge-gateway.yaml`) — `npm run
-build` is the whole deploy step, nothing copies it anymore. Every prerendered
-page (`login.html`, `account.html`, `account/app-passwords.html`,
-`oauth/consent.html`, and whatever a future route adds) is a separate static
-file, and nginx needs each one to exist in `build/`. The page reads what it
-displays from the server at request time, so anything it shows must come
-from a public endpoint a browser can fetch — `operator.json` carries
-`software.version` and `software.wolframVersion` for exactly that reason. A
-version added only to `landing_handler` is invisible on the public site, and
-a rebuilt frontend is not a redeployed container: the server still has to be
-rebuilt with the matching `operator.json` change.
+Matches the convention in `wolfram/AGENTS.md` / `keepsake/AGENTS.md`.
 
-`stack/nginx/bear1.conf` needs an exact-match `location = <path>` for every
-frontend page, each pointing at that page's prerendered file (nginx always
-prefers an exact match over a prefix match, which is what lets
-`/oauth/consent` be carved safely out of the otherwise fully backend-owned
-`/oauth/` prefix in `proxy-pds-api.inc`). Everything not covered by one of
-these locations falls through to the PDS via the generic `location /`, so a
-new frontend route without a matching nginx entry doesn't 404 — it silently
-proxies to the backend and gets whatever that path means there instead
-(usually a 400). Adding a route under `frontend/src/routes/` means adding
-the matching `location =` block in the same change, not a followup.
+- **Atomic conventional commits**: every commit is exactly one logical change.
+  Scope by module — `feat(protocol)`, `feat(server)`, `fix(net)`,
+  `test(protocol)`, etc. Never combine a code change with a docs update, or
+  changes to two unrelated modules, in one commit. Write the message to explain
+  the reasoning, not just restate the file list. Split multi-concern work into
+  sequential commits instead.
+- **Metadata files may be updated directly on `main`.** This covers project-level
+  metadata and documentation such as `AGENTS.md`, `README.md`, `docs/**`, and
+  similar non-code files that guide how the repository is maintained.
+- **All other work lands via feature branches and pull requests.** Code,
+  tests, build scripts, and any behavioral change must be developed on a
+  dedicated `feat/<area>` or `fix/<area>` branch and merged through a PR so
+  review and CI run before it reaches `main`.
+- **Honest attribution**: commits may carry a `Co-authored-by:` trailer crediting
+  an AI agent, and may reference the specific model used, in the commit message,
+  a PR, or code comments — attribution should reflect who/what actually did the
+  work.
+- **No commented-out code** left in place; delete dead code or move it to a
+  test.
 
-## Reuse and safety
+## Issue tracking
 
-- Reuse Wolfram primitives and server infrastructure. Do not copy Wolfram code into this repository or hand-roll cryptography.
-- **Libraries first, hand-rolling last**: before writing any algorithm, encoding, hash, or cryptographic operation from scratch, prefer an established, maintained library — reuse Wolfram primitives first, then third-party libraries (SQLite, OpenSSL, libcurl, libmicrohttpd, cJSON). This is a strict policy: hand-rolling is the last resort, used only where no suitable library exists, and then isolated behind a single wrapper with a comment recording what was considered and why. Never hand-roll cryptography, hashing, base64url, canonical DAG-CBOR, JWT, or TLS. Verify a candidate library actually exists and links on the target (pkg-config, CMake `find_package`) before designing around it; never assume a library is available.
-- **Prefer C++ where it is beneficial**: RAII-based resource management (e.g. sqlite3, OpenSSL), performance-critical code, and third-party library integrations with no C equivalent. Use C++ rather than error-prone manual-cleanup C where it is clearly safer; default to C otherwise. Always use `extern "C"` for any wrapper so the rest of the codebase can consume it without C++ headers or types. Where a C library equivalent exists, prefer the C one.
-- Keep authentication, repository ownership, persistence, and protocol errors explicit. Never return fabricated success for an unfinished endpoint.
-- Never commit secrets, live credentials, signing keys, or PDS data.
+- **Track every discovered issue**: a bug, protocol mismatch, portability
+  defect, missing test, documentation inconsistency, or deferred compatibility
+  problem found during development or review must have a GitHub issue unless it
+  is fixed in the same atomic change and leaves no follow-up work.
+- Create issues with the repository templates under
+  `.github/ISSUE_TEMPLATE/` (`bug_report.yml` for defects and
+  `feature_request.yml` for requested behavior). Include the exact version or
+  commit, reproduction or evidence, affected protocol state, and relevant
+  test/CI output. Do not substitute private notes or an untracked TODO for a
+  reportable issue.
+- Link the issue from the implementing pull request and close it only when the
+  fix or explicitly scoped follow-up has been verified. Release audits must
+  review open issues before declaring a tranche complete.
 
-## Endpoint correctness
+## Do not do these without explicit human sign-off
 
-- Every endpoint's input/output schema must match its lexicon definition from
-  `/Volumes/Storage/Developer/Git/atproto`. Use the exact field names, required
-  fields, and error codes specified in the lexicon, not ad-hoc alternatives.
-- Session responses (`createSession`, `refreshSession`, `createAccount`) must
-  include `email` and `emailConfirmed` fields when email is configured.
-- Error codes must use lexicon-defined names (e.g. `InvalidHandle`,
-  `HandleNotAvailable`, `ExpiredToken`) rather than generic names like
-  `InvalidRequest` or `InternalError`. Equally, do not invent names that merely
-  sound official: the `com.atproto.repo` write endpoints declare only
-  `InvalidSwap`, and the reference reports every other failure as plain
-  `InvalidRequest` with a descriptive message. Read the lexicon's `errors`
-  array and the reference handler before choosing a name — an invented one is
-  as unusable to a client as a generic one, and harder to spot.
-- The precision belongs in the message when the name is generic: `Invalid
-  record key: <rkey>`, `Invalid $type: expected <x>, got <y>`, `Too many
-  writes. Max: 200`.
-- Records must be validated against the lexicon corpus on write. A collection
-  with no schema is `validationStatus: "unknown"` and still stored; a
-  collection with a schema that the record violates is rejected. Never store a
-  record that fails a schema you have.
-- Auth callback must check `is_public_route` before DID ownership validation,
-  since public route bodies may contain DIDs being created/registered, not
-  accessed.
-- Query-string parameters arrive as JSON **strings**, never numbers or bools —
-  there is no lexicon at the HTTP layer to coerce them. Read them with
-  `query_param_int` / `query_param_bool`; a bare `cJSON_IsNumber` or
-  `cJSON_IsTrue` test silently discards every value a client sends and falls
-  back to the default.
-- Closed unions in a response (e.g. `applyWrites` results) must carry the
-  `$type` that discriminates each member, or a strict client rejects the whole
-  payload.
-
-## The firehose is the only thing the network actually sees
-
-Reads can be perfect while a PDS is invisible. Every federation bug found so
-far looked healthy from the outside: records stored, getRepo serving, commits
-verifying, and nothing reaching a relay. Check the wire, not the API.
-
-- **subscribeRepos is one stream for the host**, not per account. It is served
-  from the server's sequencer at the data root. Anything that publishes
-  elsewhere is invisible however correctly it is recorded.
-- **Every account context must publish into that sequencer.** It is wired in
-  `metalbear_account_context_open` so it cannot be forgotten; wiring it at a
-  call site once meant only one account ever federated.
-- **CID links are DAG-CBOR**: tag 42 wrapping a byte string whose first byte is
-  `0x00`. Our decoder tolerantly skips leading zeros, so a frame written
-  without the prefix round-trips through our own tests perfectly and is
-  rejected outright by every strict reader. Assert on encoded bytes, not
-  round-trips.
-- **Sequence numbers must never restart.** Cursors are per-host and consumers
-  persist them; a log that restarts at 1 hands out numbers already used and
-  wedges every consumer on FutureCursor. A fresh log is seeded above any value
-  the host could have issued.
-- **A quiet PDS must announce itself.** Relays are told about new data via
-  requestCrawl to `METALBEAR_CRAWLERS`, throttled to 20 minutes.
-- **Account lifecycle events belong on the host log, not a context.** Opening
-  an account context without the server's sequencer gives it a private log
-  that nothing reads, so creation events vanish and the network's first sight
-  of a DID is a bare `#commit`. Sequence lifecycle events against
-  `server->sequencer` directly: resolving a context first also means the event
-  is skipped whenever the account is not cached, which is how deleteAccount
-  came to announce nothing.
-- **`#sync` carries the commit block, not the repo.** The lexicon caps
-  `blocks` at 10000 bytes. Use `metalbear_repo_store_export_commit`; the
-  full-repo export grows with the account and silently passes the limit, so a
-  validating relay drops the event on exactly the accounts big enough to need
-  it.
-- **Frames must be canonical DAG-CBOR.** Three defects of this kind each made
-  the PDS unfederatable while every test passed, because our decoder tolerates
-  exactly what the encoder got wrong: CID links missing the `0x00` multibase
-  prefix, map keys out of canonical order, and integers encoded wider than
-  necessary. The last blocked federation for days — every integer was built at
-  64 bits, so the frame header's `op: 1` took eight bytes where one is
-  canonical, and a strict consumer failed on the header and dropped the
-  connection before reading a single event. From outside that is
-  indistinguishable from a relay refusing to talk to you.
-- When diagnosing, capture a `#commit` from `bsky.network` and one from the PDS
-  and compare them field by field **and byte by byte**. That is what found all
-  three, after a great deal of guessing did not.
-- **A relay that connects and leaves is not a relay that never came.** indigo
-  logs a validation failure and advances its cursor anyway, so a cursor stuck
-  at `-1` means the frame never decoded — not that it decoded and was
-  rejected. That distinction rules out every semantic check at once and points
-  straight at the encoding. Read the consumer's source before theorising.
-- Measurements need checking before conclusions do. "No requests from the
-  relay" was drawn from a log grep that could never have matched, because
-  traffic arrives through a tunnel and nginx logs the tunnel's address.
-- `tools/firehose_probe.cpp <host>` subscribes over the public ingress and
-  checks the frames a strict reader would reject. Like `verify_repo_car.cpp` it
-  is stdlib-only and shares no code with Wolfram — verifying our encoder with
-  our encoder proves nothing. Run it against the live host, not localhost: it
-  exercises the whole path a relay uses, TLS and proxy included.
-
-## Multi-account, with no privileged account
-
-There is no bootstrap account, and configuration names no account at all. A
-host exists before its first user; accounts arrive through
-`com.atproto.server.createAccount`, gated by invite codes unless
-`METALBEAR_INVITE_REQUIRED=false`. Admin endpoints authenticate with HTTP Basic
-against `METALBEAR_ADMIN_PASSWORD` and belong to no account.
-
-Anything server-wide belongs to the server, not to an account:
-
-- **PLC rotation key** — `server->plc_rotation` at `server_keys.sqlite3`,
-  seeded from `METALBEAR_PLC_ROTATION_KEY` when set and generated once
-  otherwise. It signs the genesis operation for every DID this host mints. A
-  configured key that cannot be adopted is fatal at startup: silently
-  substituting a generated one makes every DID minted afterwards
-  unrecoverable with the operator's real key.
-- **OAuth store** — `server->oauth` at `server_oauth.sqlite3`, one signing key
-  for the host. The account a token speaks for is recorded on the grant and
-  carried in the token's `sub`, never bound into the store. `login_hint`
-  names the account being authorized and is required, because with no default
-  identity a missing hint would otherwise hand the client somebody else's
-  session.
-- **The firehose log** — one per host at the data root.
-
-Resolve the account a request acts on, every time. Reaching through a
-configured account produced a deleteAccount that destroyed the wrong account,
-password resets that only ever worked for one, a firehose that served one
-account's log, public reads gated on an unrelated account's active flag, and
-`/.well-known/atproto-did` answering every unknown hostname with one account's
-identity — a wrong answer rather than a missing one.
-
-## Passkey (WebAuthn) login
-
-An alternative to password login, layered on the same device-session cookie
-`POST /oauth/signin` sets — passkey authentication ends by calling the same
-`finish_device_signin` helper, so everything downstream of "the browser has a
-device session" (`/oauth/authorize`'s approval step, account-management
-pages) treats the two identically. Routes (`src/oauth/oauth_routes.c`,
-registered in `metalbear_oauth_routes_register`):
-
-- `POST /oauth/passkey/register/options` / `.../register/verify` — requires
-  an existing device session for the target `did` (registering a passkey is
-  an account-management action, reached from `/account/security`, never
-  pre-login).
-- `POST /oauth/passkey/authenticate/options` / `.../authenticate/verify` —
-  unauthenticated, reached from the login page. `.../options` never
-  distinguishes "unknown account" from "no passkeys registered" in its
-  response (both look like `{"available": false}`), so it cannot be used to
-  enumerate handles.
-- `GET /oauth/passkey/list` / `POST /oauth/passkey/remove` — device-session
-  gated, scoped so one account can never list or remove another's passkey.
-
-The CBOR (attestationObject/authenticatorData/COSE_Key) and ceremony
-verification (challenge/origin/RP-ID-hash checks, ES256 signature
-verification, sign-counter clone detection) live in `src/oauth/webauthn.c` —
-a purpose-built parser, not wolfram's `wf_cbor_parse`: that decoder enforces
-DAG-CBOR's canonical map-key ordering, a real invariant for repo commits
-this SDK produces itself, but not one the WebAuthn spec places on a
-browser's `attestationObject` encoding, so reusing it risked silently
-failing registration on browsers that don't happen to match. Storage
-(passkeys, single-use challenges with a 120s TTL) is in `src/oauth/oauth.c`
-alongside `device_session`, in the same `metalbear_oauth_store`/SQLite file.
-
-Attestation is always requested as `"none"` (no attestation statement is
-ever verified) — the security property comes from the device-session cookie
-already proving password ownership at registration time, not from trusting
-the authenticator's make/model. Signature verification uses
-`wf_crypto_p256_verify_allow_malleable`, not `wf_crypto_p256_verify`: a
-WebAuthn authenticator's signature is not guaranteed low-S normalized the
-way this codebase's own P-256 signing is, and requiring it would reject
-otherwise-valid assertions from real hardware.
-
-Not implemented: usernameless/discoverable login (the login page always
-collects an identifier first, matching the password flow) and a JWT session
-bridge — passkey login only ever establishes a device session, so it can
-complete an OAuth consent redirect but cannot sign a user into the plain
-account pages the way password login's `com.atproto.server.createSession`
-does (see `frontend/src/routes/login/+page.svelte`'s
-`handlePasskeySignIn` comment).
-
-## Account migration and recovery
-
-Three related frontend pages give an account owner a way out that doesn't
-depend on this server staying cooperative:
-
-- `/account` "Download your data" — a thin client wrapper
-  (`downloadRepo` in `frontend/src/lib/pds.ts`) around the public,
-  unauthenticated `com.atproto.sync.getRepo`; not a privileged operation,
-  any relay could already fetch the same CAR file. `downloadRepo` inspects
-  the JSON error body on a non-2xx response and turns the server's
-  `RepoNotFound` (an empty repo — no records written yet) into a friendly
-  message instead of surfacing a bare `getRepo: 400`.
-- `/account/migrate` — a guided walkthrough of the standard migration
-  sequence (create account elsewhere, copy data over via the download
-  above, repoint identity via `requestPlcOperationSignature`), pointing at
-  `goat account migrate` for the parts that need a real client.
-- `/account/recovery-key` — the "PDS MOOver" idea applied here: walks the
-  user through adding a self-held PLC rotation key
-  (`goat key generate` + `goat account plc add-rotation-key`) *before* they
-  ever need to migrate, using the same `requestPlcOperationSignature`
-  email-token flow as `/account/migrate`. The point isn't backups, it's
-  independence — with a rotation key only the user holds, they can redirect
-  their own identity to a new server without this one's cooperation. See
-  David Buchanan's "Adversarial ATProto PDS Migration" (linked from the
-  page) for why that matters.
-
-All three are read-heavy/guidance pages, not new server endpoints — the
-only server-side surface they depend on is already-existing
-`requestPlcOperationSignature` (`com.atproto.identity.requestPlcOperationSignature`)
-and `getRepo`.
-
-## Identity: the signing key is the interop contract
-
-The single defect that makes a repo unfederatable is a DID document that
-advertises a signing key the repo does not sign with. Relays and AppViews
-reject such commits outright while the PDS reports success, so nothing surfaces
-it locally.
-
-- Whenever this server publishes a DID document (PLC operations,
-  `createAccount`), the key it publishes must be the key the repo store
-  actually holds. Pass it explicitly via
-  `metalbear_repo_store_open_with_key` /
-  `metalbear_account_context_open_with_key`; never let the repo generate its
-  own key after a document naming a different one has been published.
-- `didDoc` in any response is a **W3C DID document**: `verificationMethod` is
-  an array of Multikey entries keyed `<did>#atproto`. The `verificationMethods`
-  object map belongs only to unsigned PLC *operations*. Build documents with
-  `metalbear_did_document_build`.
-- `checkAccountStatus.validDid` and `describeRepo.handleIsCorrect` are
-  answers about the outside world; resolve the published document over the
-  network rather than reporting what this server believes.
-
-## Repo writes
-
-- `applyWrites` is atomic and produces exactly ONE signed commit and ONE
-  firehose `#commit` event listing every op. Use `wf_repo_apply_writes`; do not
-  loop over the single-record functions.
-- A record's CID covers its content only, so two records can legitimately share
-  one block. Deduplicate the block, never the MST entry.
-- Compare-and-swap failures return `WF_ERR_CONFLICT` and must surface as the
-  lexicon's `InvalidSwap`, which clients branch on to retry an optimistic
-  write. Deleting an absent record is a no-op success, not a 404.
-- Every create/put/delete/applyWrites handler tracks which blobs a record
-  references (`metalbear_blob_store_associate`/`_dissociate`, driven by
-  `metalbear_blob_walk_refs`), deleting a blob outright the moment no record
-  references it — mirrors the reference PDS's `record_blob` bookkeeping. A
-  record may reference a blob that has not been uploaded yet (the
-  `listMissingBlobs` migration flow depends on this); association is
-  best-effort and never rejects the write. When a record is replaced but
-  keeps referencing the SAME blob CID, dissociating the old value must skip
-  any CID the new value still names — the (cid, uri) pair does not change,
-  so an unconditional dissociate would delete a blob the record still uses.
-  `untrack_superseded_blobs` is the one function that gets this right; do
-  not reintroduce a separate unconditional dissociate helper.
-
-## Validation
-
-- Run `cmake -S . -B build && cmake --build build && ctest --test-dir build
-  --output-on-failure` before declaring a slice done.
-- Test configs name no account: set `invite_required = false` and create every
-  account the test needs through `com.atproto.server.createAccount`, which is
-  the same path a real client takes.
-- Every server route must have an offline end-to-end test in `test/test_server.c`
-  or a dedicated test file covering success, auth failure, and schema conformance.
-  Concurrency-critical paths must also have a parallel-requests test
-  (`test_xrpc_server_parallel` or equivalent) that issues concurrent requests
-  against the thread pool and verifies response integrity.
-- Test cleanup must remove all SQLite files (repo, auth, account, sequence,
-  registry) plus blob directories.
-- A green local suite does not prove federation. For identity or repo-format
-  changes, verify against the live dev PDS at `/Volumes/Storage/Server/bear`:
-  export the repo with `com.atproto.sync.getRepo` and check the commit
-  signature against the key published in the PLC directory, using something
-  other than Wolfram — verifying wolfram's output with wolfram proves nothing.
-
-## Wolfram submodule / CI compatibility
-
-- The Docker builds (`Dockerfile` and `Dockerfile.alpine`) copy the `wolfram`
-  sibling repo into `/src/wolfram` and build it as part of the MetalBear image.
-  MetalBear CI therefore depends on wolfram's CI being green — a wolfram
-  `clang-format` or build failure breaks the MetalBear Release workflow before
-  MetalBear's own build even starts.
-- When fixing MetalBear CI, check the wolfram run that feeds it:
-  `gh run list --repo ewanc26/wolfram --limit 5`. The wolfram `main` branch must
-  be buildable on Alpine (libcurl 8.x) before the MetalBear release workflow
-  can succeed.
-- Known wolfram issues that surface in MetalBear's Alpine build:
-  - `src/transport/websocket.c`: `curl_ws_recv`'s fifth parameter is `const
-    struct curl_ws_frame **` on Alpine/libcurl 8.x. Declare the local `meta`
-    pointer as `const struct curl_ws_frame *meta = NULL;` to avoid
-    `-Wincompatible-pointer-types` build failures.
-  - `src/cli/main.c`: the `clang-format (changed lines)` check inspects only
-    lines touched by the PR. After editing long string literals in the usage or
-    help text, run `clang-format -i src/cli/main.c` and commit the formatted
-    result — do not hand-format or leave alignment-based spacing.
-
-## Raspberry Pi 1 / Zero target
-
-- MetalBear's minor cross-compile target is a Raspberry Pi 1B/Zero
-  (ARM1176JZF-S, ARMv6Z). Since MetalBear pulls wolfram in via
-  `add_subdirectory` (see `WOLFRAM_SOURCE_DIR` in `CMakeLists.txt`), one
-  top-level configure cross-compiles both: `cmake
-  -DCMAKE_TOOLCHAIN_FILE=../wolfram/.devdeps/rpi1.cmake -B build-rpi1`. See
-  that file's header comment for the required toolchain/rootfs — a generic
-  Debian/Ubuntu "armhf" cross toolchain targets ARMv7 and produces a
-  SIGILL-on-boot binary for this CPU, and 64-bit atomics (the metrics
-  counters in `src/ops/metrics.c`, wolfram's DID-cache refcounts) need
-  `-march=armv6zk` specifically, not plain `armv6`, to lower to inline
-  LDREXD/STREXD rather than needing a libatomic call.
-- 256MB (rev1) or 512MB (rev2+) RAM, single core @ 700MHz. Not yet
-  benchmarked or verified on real hardware — the toolchain file only
-  establishes that the cross-build compiles/links; correctness and
-  performance on-device are unverified.
+- Add a JVM/Paper/Spigot server as the actual backend.
+- Copy Mojang proprietary server source or decompiled implementation code.
+- Add an unbounded network/task/chunk queue.
+- Replace protocol validation with permissive "best effort" parsing.
+- Introduce a dependency-heavy game/server framework.
+- Claim vanilla compatibility for a release without client/protocol tests.
+- Weaken warnings, sanitizers or tests merely to get CI green.
