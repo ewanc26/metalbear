@@ -1,90 +1,87 @@
-# Contributing to MetalBear
+# Contributing to Zincfox
 
-Thanks for your interest. MetalBear is a C23 AT Protocol PDS built on the
-sibling Wolfram SDK. C is the default language for all new code; C++ is permitted for complex or sensitive components where C is insufficient — RAII-based resource management, performance-critical code, and third-party library integrations with no C equivalent. All C++ must expose a C ABI via `extern "C"` and never leak C++ types across the boundary. A few ground rules help keep the codebase coherent.
+Zincfox is an experimental clean-room C/C++23 Minecraft: Java Edition server.
+The current implementation has an experimental protocol-767 login,
+configuration, and Play-spawn path validated with the MCP client, but no
+general real-client, version, or gameplay compatibility claim.
 
-## Core philosophy
+## Before submitting changes
 
-1. **Protocol parity**: cross-reference [bluesky-social/atproto](https://github.com/bluesky-social/atproto) and the sibling [wolfram](https://github.com/ewanc26/wolfram) repository when implementing anything protocol-level, rather than guessing at wire formats.
-2. **Reuse Wolfram primitives**: do not copy Wolfram code into this repository or hand-roll cryptography. Wolfram owns transport, identity, repo, crypto, and XRPC infrastructure.
-3. **Stubs are honest**: unimplemented functions return an error and carry a `TODO` explaining what's missing and why — never a silent no-op or a fabricated success.
-4. **Ownership is explicit**: every heap-allocated output has a matching `_free` function documented next to it. No hidden allocations, no implicit ownership transfer.
-
-## Code style
-
-- Follow the surrounding file's indentation and brace style.
-- Atomic conventional commits: every commit must contain exactly one logical change. Scope by module — `feat(server)`, `fix(auth)`, `docs(readme)`, etc.
-- Honest attribution: commits may add a `Co-authored-by:` trailer crediting an AI agent when it materially contributed.
-
-## Development workflow
-
-- **Build**: `make build` or `cmake -S . -B build && cmake --build build`
-- **Test**: `make test` or `ctest --test-dir build --output-on-failure`
-- **Clean**: `make clean`
-
-CMake defaults to the sibling `../wolfram` checkout. Set
-`-DWOLFRAM_SOURCE_DIR=/path/to/wolfram` to use another checkout.
-
-### Running a local instance
-
-`scripts/setup.sh --local` builds MetalBear and starts it on
-`http://localhost:2583` with no hostname, TLS, DNS, or federation required:
+Build and test with the repository's strict warnings enabled:
 
 ```sh
-scripts/setup.sh --local
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug \
+  -DZINCFOX_ENABLE_SANITIZERS=ON
+cmake --build build-san -j
+ctest --test-dir build-san --output-on-failure
 ```
 
-This is a real running PDS, not a mock: `createAccount`, repo writes, OAuth,
-and the firehose all work the same as a production instance. What's
-different is the identity:
+Run `clang-format` on changed C/C++ files. New protocol behavior needs positive,
+malformed-input, fragmentation, and boundary coverage. Network behavior must
+remain non-blocking and bounded; prefer fixed-capacity storage, reusable
+buffers, borrowed `std::span` inputs, and explicit ownership.
 
-- `service_did` is `did:web:localhost%3A2583` — did:web's port is
-  percent-encoded (`%3A`), and Wolfram's did:web resolver special-cases a
-  `localhost`/`localhost:<port>` host to resolve over plain HTTP instead of
-  HTTPS, so no reverse proxy or certificate is needed.
-- No `identity.plc_url` is set, so accounts mint a self-certifying `did:key`
-  instead of a `did:plc` (`account_routes.c` falls back to `did:key`
-  precisely when `plc_url` is unset). This matters beyond convenience: a
-  `did:plc` genesis operation is a permanent, public write to the live PLC
-  directory, and a throwaway dev account has no business making one. Set
-  `--dns-token`/`--dns-zone` and rerun without `--local` against a real
-  hostname when you actually need to test `did:plc` or federation.
-- `firehose.crawlers` is empty, so the instance never announces itself to a
-  relay.
+For the real-client regression path, set `ZINCFOX_MCP_ROOT` to the local
+`mcp-minecraft` checkout and run the server on `127.0.0.1:25565`:
 
-Handle and DID resolution for accounts on the instance stay entirely local —
-`com.atproto.identity.resolveHandle` checks the account registry before ever
-reaching for the network — so a client that insists on resolving over the
-open internet rather than asking the PDS directly won't find them. Point
-your client's PDS URL at `http://localhost:2583` directly.
+```sh
+ZINCFOX_MCP_ROOT=/path/to/mcp-minecraft node test/client_regression.mjs
+```
 
-`--local` implies `--dev` (the landing page says plainly that this is a
-testing instance). Combine it with the usual flags — `--port`, `--data`,
-`--config`, `--open` — as needed; see `scripts/setup.sh --help` for the full
-list.
+The harness uses two 1.21.1 clients, verifies both reach Play spawn, checks
+unsigned system-chat delivery, and exercises movement, terrain dig/place, and
+disconnect broadcasts. It uses unique bounded usernames and derives interaction
+coordinates from the generated surface so persisted player state cannot make a
+run accidentally pass or fail. It is a local development check because the MCP
+dependency is intentionally not vendored.
 
-## Validation
+## Protocol and compatibility
 
-- Run `ctest --test-dir build --output-on-failure` before declaring a slice done.
-- Every server route must have an offline end-to-end test in `test/test_server.c`
-  or a dedicated test file covering success, auth failure, and schema conformance.
-- Test cleanup must remove all SQLite files (repo, auth, account, sequence,
-  registry) plus blob directories.
+Protocol definitions belong in `src/protocol/` and version-specific behavior
+must remain isolated from transport and game state. Public references used for
+wire formats must be recorded in the change or its documentation. Do not copy
+Mojang code or claim a Minecraft version until a real client path and automated
+regression coverage exist.
 
-## References
+Every new long-lived allocation or queue must document its owner, normal size,
+maximum size, and growth/backpressure rule. The initial networking budget is
+32 connection slots with fixed 8 KiB receive and 128 KiB transmit buffers per slot.
+User-visible errors and connection drops must use a unique hexadecimal code;
+see `docs/error-codes.md`.
 
-- [bluesky-social/atproto](https://github.com/bluesky-social/atproto) — the canonical lexicons live under `lexicons/`.
-- [wolfram](https://github.com/ewanc26/wolfram) (C) — the sibling SDK providing transport, identity, repo, and crypto primitives.
-- [rsky](https://github.com/blacksky-algorithms/rsky) (Rust) — used for behavioural parity on identity, lexicon, repo, moderation, and OAuth flows.
+All configurable server behavior belongs in the global `zincfox.conf` file.
+New settings need a validated finite range, a documented default, load/save
+tests, and memory/resource documentation where applicable. Dynamic settings
+must resolve to documented finite limits when host information is unavailable.
 
-## Security
+## Commits and pull requests
 
-- Never commit secrets, live credentials, signing keys, or PDS data.
-- Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
-  Do not open a public issue for a security defect.
+Use a dedicated `feat/<area>` or `fix/<area>` branch; never push feature work
+directly to `main`. Make atomic conventional commits such as
+`feat(protocol): ...`, `fix(net): ...`, or `test(protocol): ...`. Pull
+requests should explain compatibility claims, memory bounds, test commands,
+portability, and any borrowed design or reference material.
 
-## Support the project
+## Releases
 
-Code is the most useful contribution, but not the only one. If you would rather
-fund the work than write it, MetalBear and Wolfram are both supported through
-[github.com/sponsors/ewanc26](https://github.com/sponsors/ewanc26).
+Zincfox uses strict semantic versions and cuts the next sequential release when
+a substantial tranche is ready. Substantial means a user-visible protocol or
+gameplay change, persistence/world-format change, compatibility claim, public
+interface change, or material resource-budget change; documentation-only,
+test-only, formatting, and internal refactoring changes do not require a
+release unless they alter the published contract.
+
+Before cutting a release, audit the commits since the latest tag. Update only
+the `VERSION` line in `CMakeLists.txt`, commit that bump with the finished
+tranche, create a signed annotated `v<major>.<minor>.<patch>` tag on the same
+commit (or an annotated tag if signing is unavailable), push both, and create a
+GitHub release with generated notes. Releases before `v1.0.0` are source-only;
+release artifacts begin with `v1.0.0`. Never skip a version or create a tag or
+release without its matching version commit.
+
+Zincfox is licensed under the GNU Affero General Public License v3.0. Keep
+license notices and attribution intact when using external references or
+borrowed designs.
