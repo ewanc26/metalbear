@@ -29,6 +29,7 @@
 
 #include <cJSON.h>
 #include <ftw.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -990,13 +991,9 @@ wf_status admin_get_invite_codes(void *ctx, const wf_xrpc_request *request,
     const char *sort = cJSON_IsString(sort_param) && sort_param->valuestring[0]
                            ? sort_param->valuestring
                            : "recent";
-    /* "usage" needs a use-count-ordered index this registry does not have
-     * yet; an honest 400 beats silently falling back to "recent" and
-     * returning results in an order the caller did not ask for. */
-    if (strcmp(sort, "recent") != 0) {
-        wf_xrpc_response_set_error(
-            response, 400, "InvalidRequest",
-            "only sort=recent is supported (usage sort is not implemented)");
+    if (strcmp(sort, "recent") != 0 && strcmp(sort, "usage") != 0) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "sort must be either recent or usage");
         return WF_OK;
     }
     cJSON *cursor_param =
@@ -1009,6 +1006,7 @@ wf_status admin_get_invite_codes(void *ctx, const wf_xrpc_request *request,
      * caller, who is only ever expected to echo it back verbatim. */
     char after_created_at[40] = {0};
     char after_code[256] = {0};
+    int after_uses = 0;
     if (cJSON_IsString(cursor_param) && cursor_param->valuestring[0]) {
         const char *sep = strchr(cursor_param->valuestring, '\x1f');
         if (!sep) {
@@ -1016,25 +1014,46 @@ wf_status admin_get_invite_codes(void *ctx, const wf_xrpc_request *request,
                                        "malformed cursor");
             return WF_OK;
         }
-        size_t created_len = (size_t)(sep - cursor_param->valuestring);
-        if (created_len >= sizeof(after_created_at) ||
+        size_t primary_len = (size_t)(sep - cursor_param->valuestring);
+        if (primary_len >= sizeof(after_created_at) ||
             strlen(sep + 1) >= sizeof(after_code)) {
             wf_xrpc_response_set_error(response, 400, "InvalidRequest",
                                        "malformed cursor");
             return WF_OK;
         }
-        memcpy(after_created_at, cursor_param->valuestring, created_len);
-        after_created_at[created_len] = '\0';
+        char primary[40];
+        memcpy(primary, cursor_param->valuestring, primary_len);
+        primary[primary_len] = '\0';
+        if (strcmp(sort, "usage") == 0) {
+            char *end = NULL;
+            long parsed = strtol(primary, &end, 10);
+            if (!primary[0] || !end || *end || parsed < 0 || parsed > INT_MAX) {
+                wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                           "malformed cursor");
+                return WF_OK;
+            }
+            after_uses = (int)parsed;
+        } else {
+            strcpy(after_created_at, primary);
+        }
         strcpy(after_code, sep + 1);
     }
     /* Fetch one extra row to learn whether a next page exists without a
      * separate COUNT query. */
     metalbear_invite_code_entry *icode_entries = NULL;
     size_t icode_count = 0;
-    if (metalbear_account_registry_list_invite_codes(
-            server->registry, after_created_at[0] ? after_created_at : NULL,
-            after_code[0] ? after_code : NULL, (size_t)limit + 1,
-            &icode_entries, &icode_count) != WF_OK) {
+    wf_status list_status =
+        strcmp(sort, "usage") == 0
+            ? metalbear_account_registry_list_invite_codes_by_usage(
+                  server->registry, after_uses,
+                  after_code[0] ? after_code : NULL, (size_t)limit + 1,
+                  &icode_entries, &icode_count)
+            : metalbear_account_registry_list_invite_codes(
+                  server->registry,
+                  after_created_at[0] ? after_created_at : NULL,
+                  after_code[0] ? after_code : NULL, (size_t)limit + 1,
+                  &icode_entries, &icode_count);
+    if (list_status != WF_OK) {
         icode_entries = NULL;
         icode_count = 0;
     }
@@ -1056,9 +1075,20 @@ wf_status admin_get_invite_codes(void *ctx, const wf_xrpc_request *request,
         /* There is a next page: point the cursor at the last row actually
          * returned (index `returned - 1`), not the lookahead row itself. */
         char next_cursor[296];
-        snprintf(next_cursor, sizeof(next_cursor), "%s\x1f%s",
-                 icode_entries[returned - 1].created_at,
-                 icode_entries[returned - 1].code);
+        if (strcmp(sort, "usage") == 0) {
+            metalbear_invite_code_use_entry *uses = NULL;
+            size_t use_count = 0;
+            metalbear_account_registry_get_invite_code_uses(
+                server->registry, icode_entries[returned - 1].code, &uses,
+                &use_count);
+            metalbear_invite_code_use_entries_free(uses, use_count);
+            snprintf(next_cursor, sizeof(next_cursor), "%zu\x1f%s", use_count,
+                     icode_entries[returned - 1].code);
+        } else {
+            snprintf(next_cursor, sizeof(next_cursor), "%s\x1f%s",
+                     icode_entries[returned - 1].created_at,
+                     icode_entries[returned - 1].code);
+        }
         cJSON_AddStringToObject(root, "cursor", next_cursor);
     }
     metalbear_invite_code_entries_free(icode_entries, icode_count);
