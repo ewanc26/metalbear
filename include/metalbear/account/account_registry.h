@@ -162,6 +162,14 @@ wf_status metalbear_account_registry_list_invite_codes(
     const char *after_code, size_t limit, metalbear_invite_code_entry **out,
     size_t *out_count);
 
+/* One page ordered by redemption count DESC, then code DESC, for
+ * admin.getInviteCodes?sort=usage. `after_uses`/`after_code` are the
+ * keyset cursor from the previous page. */
+wf_status metalbear_account_registry_list_invite_codes_by_usage(
+    metalbear_account_registry *registry, int after_uses,
+    const char *after_code, size_t limit, metalbear_invite_code_entry **out,
+    size_t *out_count);
+
 /* Every redemption of `code`, oldest first. Matches
  * com.atproto.server.defs#inviteCodeUse's {usedBy, usedAt} shape. */
 wf_status metalbear_account_registry_get_invite_code_uses(

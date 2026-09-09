@@ -180,6 +180,33 @@ int main(void) {
     CHECK(metalbear_account_registry_consume_invite_code(
               registry, code1, "did:plc:charlie") != WF_OK);
 
+    /* Usage-sorted global listing matches admin.getInviteCodes?sort=usage:
+     * redemption count descending, code descending as the tiebreaker, with
+     * a stable keyset cursor. */
+    {
+        metalbear_invite_code_entry *usage_page = NULL;
+        size_t usage_count = 0;
+        CHECK(metalbear_account_registry_list_invite_codes_by_usage(
+                  registry, 0, NULL, 2, &usage_page, &usage_count) == WF_OK);
+        CHECK(usage_count == 2);
+        if (usage_count == 2) {
+            CHECK(strcmp(usage_page[0].code, code1) == 0);
+            CHECK(strcmp(usage_page[1].code, code3) == 0);
+        }
+        metalbear_invite_code_entries_free(usage_page, usage_count);
+
+        usage_page = NULL;
+        usage_count = 0;
+        CHECK(metalbear_account_registry_list_invite_codes_by_usage(
+                  registry, 2, code1, 2, &usage_page, &usage_count) == WF_OK);
+        CHECK(usage_count == 2);
+        if (usage_count == 2) {
+            CHECK(strcmp(usage_page[0].code, code3) == 0);
+            CHECK(strcmp(usage_page[1].code, code2) == 0);
+        }
+        metalbear_invite_code_entries_free(usage_page, usage_count);
+    }
+
     /* Per-redemption use log: both real consumptions show up, in order,
      * the failed one does not. */
     {

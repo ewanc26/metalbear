@@ -129,8 +129,8 @@ wf_status metalbear_account_registry_open(const char *path,
     {
         char *err = nullptr;
         sqlite3_exec(reg->db.get(),
-                     "ALTER TABLE accounts ADD COLUMN email TEXT;",
-                     nullptr, nullptr, &err);
+                     "ALTER TABLE accounts ADD COLUMN email TEXT;", nullptr,
+                     nullptr, &err);
         if (err && !std::strstr(err, "duplicate column name")) {
             sqlite3_free(err);
             metalbear_account_registry_free(reg);
@@ -733,6 +733,85 @@ wf_status metalbear_account_registry_list_invite_codes(
         } else {
             (*out_count)++;
         }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&registry->mutex);
+    if (status != WF_OK) {
+        metalbear_invite_code_entries_free(*out, *out_count);
+        *out = nullptr;
+        *out_count = 0;
+    }
+    return status;
+}
+
+wf_status metalbear_account_registry_list_invite_codes_by_usage(
+    metalbear_account_registry *registry, int after_uses,
+    const char *after_code, size_t limit, metalbear_invite_code_entry **out,
+    size_t *out_count) {
+    if (!registry || !out || !out_count || limit == 0)
+        return WF_ERR_INVALID_ARG;
+    *out = nullptr;
+    *out_count = 0;
+    bool has_cursor = after_code && after_code[0];
+    pthread_mutex_lock(&registry->mutex);
+    sqlite3_stmt *stmt = nullptr;
+    wf_status status = WF_OK;
+    size_t capacity = 0;
+    const char *sql =
+        has_cursor
+            ? "SELECT ic.code,ic.for_account,ic.uses_remaining,ic.disabled,"
+              "ic.created_by,ic.created_at,COUNT(icu.code) AS uses "
+              "FROM invite_code ic LEFT JOIN invite_code_use icu "
+              "ON ic.code=icu.code GROUP BY ic.code "
+              "HAVING uses<? OR (uses=? AND ic.code<?) "
+              "ORDER BY uses DESC,ic.code DESC LIMIT ?;"
+            : "SELECT ic.code,ic.for_account,ic.uses_remaining,ic.disabled,"
+              "ic.created_by,ic.created_at,COUNT(icu.code) AS uses "
+              "FROM invite_code ic LEFT JOIN invite_code_use icu "
+              "ON ic.code=icu.code GROUP BY ic.code "
+              "ORDER BY uses DESC,ic.code DESC LIMIT ?;";
+    if (sqlite3_prepare_v2(registry->db.get(), sql, -1, &stmt, nullptr) !=
+        SQLITE_OK) {
+        status = WF_ERR_INTERNAL;
+    } else if (has_cursor) {
+        sqlite3_bind_int(stmt, 1, after_uses);
+        sqlite3_bind_int(stmt, 2, after_uses);
+        sqlite3_bind_text(stmt, 3, after_code, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 4, static_cast<sqlite3_int64>(limit));
+    } else {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(limit));
+    }
+    while (status == WF_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+        if (*out_count == capacity) {
+            size_t next = capacity ? capacity * 2 : 4;
+            void *resized = std::realloc(*out, next * sizeof(**out));
+            if (!resized) {
+                status = WF_ERR_ALLOC;
+                break;
+            }
+            *out = static_cast<metalbear_invite_code_entry *>(resized);
+            std::memset(*out + capacity, 0, (next - capacity) * sizeof(**out));
+            capacity = next;
+        }
+        auto *item = &(*out)[*out_count];
+        const char *code =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+        const char *account =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+        const char *creator =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
+        const char *created =
+            reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5));
+        item->code = code ? strdup(code) : nullptr;
+        item->for_account = account ? strdup(account) : nullptr;
+        item->uses_remaining = sqlite3_column_int(stmt, 2);
+        item->disabled = sqlite3_column_int(stmt, 3);
+        item->created_by = creator ? strdup(creator) : nullptr;
+        item->created_at = created ? strdup(created) : nullptr;
+        if (!item->code || !item->for_account)
+            status = WF_ERR_ALLOC;
+        else
+            (*out_count)++;
     }
     sqlite3_finalize(stmt);
     pthread_mutex_unlock(&registry->mutex);
