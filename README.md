@@ -649,3 +649,13 @@ in lockstep, and most of the protocol work lands in Wolfram first.
 
 [GNU AGPL-3.0](LICENSE). Running a modified MetalBear as a public PDS obliges
 you to offer its users the corresponding source.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=ewanc26%2Fmetalbear&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ewanc26/metalbear&type=date&theme=dark&legend=bottom-right" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ewanc26/metalbear&type=date&legend=bottom-right" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ewanc26/metalbear&type=date&legend=bottom-right" />
+ </picture>
+</a>
