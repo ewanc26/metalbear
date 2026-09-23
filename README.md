@@ -323,8 +323,8 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-By default CMake uses the sibling `../wolfram` checkout. Set
-`-DWOLFRAM_SOURCE_DIR=/path/to/wolfram` to use another checkout.
+Wolfram is fetched pinned to the released `v0.22.0` tag via CMake's
+FetchContent on the first configure, so no sibling checkout is needed.
 
 Or provision a host end to end — dependencies, build, secrets, a config file,
 and a running daemon:
