@@ -6,8 +6,10 @@
 # rather have glibc, because musl's DNS resolver and its stack sizes differ in
 # ways that are occasionally load-bearing.
 #
-# The build context is the parent directory holding both the MetalBear and
-# Wolfram source trees:
+# The build context is the parent directory holding the MetalBear source tree
+# (the release workflow checks it out at path `MetalBear`). Wolfram is fetched
+# directly by CMake's FetchContent pinned to a released tag (see
+# CMakeLists.txt), so the SDK always builds from the same commit.
 #
 #   docker build -f MetalBear/Dockerfile.alpine -t metalbear:alpine .
 
@@ -30,7 +32,6 @@ RUN apk add --no-cache \
 
 WORKDIR /src
 COPY MetalBear ./MetalBear
-COPY wolfram ./wolfram
 
 # The build context excludes .git (see the repo root's .dockerignore), so
 # CMake's own git-detection for METALBEAR_BUILD_COMMIT can never find one from
@@ -51,7 +52,6 @@ RUN cmake -S MetalBear -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
         -DMETALBEAR_BUILD_TESTS=OFF \
-        -DWOLFRAM_SOURCE_DIR=/src/wolfram \
         -DMETALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}" \
         -DMETALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}" \
     && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)" --target metalbear
@@ -80,7 +80,7 @@ COPY --from=build /src/build/metalbear /usr/local/bin/metalbear
 
 # The lexicon corpus records are validated against on write. Without it every
 # write is stored unchecked and reported as validationStatus "unknown".
-COPY --from=build /src/wolfram/lexicons /usr/local/share/metalbear/lexicons
+COPY --from=build /src/build/_deps/wolfram-src/lexicons /usr/local/share/metalbear/lexicons
 
 # Materialise /data in the image itself. It is normally a bind mount, but
 # without it `docker exec` cannot even start a process (it chdirs to WORKDIR

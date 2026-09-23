@@ -52,14 +52,6 @@ jobs:
         with:
           path: MetalBear
 
-      # Build the SDK from source at a matching commit rather than against
-      # whatever a package manager offers: the two move together.
-      - name: Check out Wolfram
-        uses: actions/checkout@v7
-        with:
-          repository: ewanc26/wolfram
-          path: wolfram
-
       - name: Install dependencies (Linux)
         if: matrix.os == 'linux'
         run: |
@@ -87,8 +79,7 @@ jobs:
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
-            -DMETALBEAR_BUILD_TESTS=OFF \
-            -DWOLFRAM_SOURCE_DIR=${{ github.workspace }}/wolfram
+            -DMETALBEAR_BUILD_TESTS=OFF
           # Only the binary this release ships. Building `all` also builds
           # Wolfram's own CLI, which links c-ares and so failed the macOS build
           # on a dependency nothing in the artifact uses.
@@ -110,7 +101,7 @@ jobs:
           data        = "/tmp/smoke/data"
           EOF
           METALBEAR_CONFIG=/tmp/smoke/config.toml \
-          METALBEAR_LEXICON_DIR=${{ github.workspace }}/wolfram/lexicons \
+          METALBEAR_LEXICON_DIR=${{ github.workspace }}/MetalBear/build/_deps/wolfram-src/lexicons \
             ./build/metalbear &
           PID=$!
           for _ in $(seq 1 30); do
@@ -130,7 +121,7 @@ jobs:
           cp MetalBear/README.md MetalBear/LICENSE "dist/$NAME/" 2>/dev/null || true
           # Records are validated against this corpus; without it every write is
           # stored unchecked and reported as validationStatus "unknown".
-          cp -R wolfram/lexicons "dist/$NAME/lexicons"
+          cp -R MetalBear/build/_deps/wolfram-src/lexicons "dist/$NAME/lexicons"
 
           cat > "dist/$NAME/RUNNING.md" <<'EOF'
           # Running this build
@@ -200,11 +191,6 @@ jobs:
         with:
           path: MetalBear
 
-      - uses: actions/checkout@v7
-        with:
-          repository: ewanc26/wolfram
-          path: wolfram
-
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
@@ -269,8 +255,10 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          # The context is the parent of both checkouts, which is the layout
-          # the Dockerfiles expect so the SDK builds from a known commit.
+          # The context is the parent directory holding the MetalBear checkout,
+          # the layout the Dockerfiles expect. Wolfram is fetched by CMake's
+          # FetchContent inside the build (see CMakeLists.txt), so no separate
+          # checkout is needed and the SDK always builds from the pinned tag.
           context: .
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}

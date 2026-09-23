@@ -129,18 +129,41 @@ if(METALBEAR_PROFILE STREQUAL "minimal")
   endforeach()
 endif()
 
-set(WOLFRAM_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../wolfram"
-    CACHE PATH "Path to the Wolfram source tree")
-
-if(NOT EXISTS "${WOLFRAM_SOURCE_DIR}/CMakeLists.txt")
-  message(FATAL_ERROR "WOLFRAM_SOURCE_DIR does not point to a Wolfram checkout")
-endif()
+# Wolfram is fetched pinned to a released tag by default, like the other
+# wolfram consumers in this account (atperson, keepsake, bluesky-dadaist).
+# The server target is what MetalBear links, so WOLFRAM_BUILD_SERVER stays ON;
+# tests/examples and the C++ wrapper are unnecessary here.
+#
+# A dev build can opt into a live sibling checkout instead by setting
+# METALBEAR_WOLFRAM_SOURCE_DIR (e.g. -DMETALBEAR_WOLFRAM_SOURCE_DIR=../wolfram).
+# The pin is the expected path; the sibling is a development override.
+set(METALBEAR_WOLFRAM_SOURCE_DIR "" CACHE PATH
+    "Path to a wolfram checkout to build instead of the pinned release (dev only)")
 
 set(WOLFRAM_BUILD_SERVER ON CACHE BOOL "" FORCE)
 set(WOLFRAM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WOLFRAM_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WOLFRAM_BUILD_CPP OFF CACHE BOOL "" FORCE)
-add_subdirectory("${WOLFRAM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/wolfram")
+
+if(METALBEAR_WOLFRAM_SOURCE_DIR)
+  if(NOT EXISTS "${METALBEAR_WOLFRAM_SOURCE_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR
+      "METALBEAR_WOLFRAM_SOURCE_DIR does not point to a wolfram checkout: "
+      "'${METALBEAR_WOLFRAM_SOURCE_DIR}'")
+  endif()
+  message(STATUS "MetalBear: dev-mode wolfram checkout at ${METALBEAR_WOLFRAM_SOURCE_DIR}")
+  set(METALBEAR_WOLFRAM_ROOT "${METALBEAR_WOLFRAM_SOURCE_DIR}")
+  add_subdirectory("${METALBEAR_WOLFRAM_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/wolfram")
+else()
+  include(FetchContent)
+  FetchContent_Declare(
+    wolfram
+    GIT_REPOSITORY https://github.com/ewanc26/wolfram.git
+    GIT_TAG v0.22.0
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(wolfram)
+  set(METALBEAR_WOLFRAM_ROOT "${wolfram_SOURCE_DIR}")
+endif()
 get_target_property(METALBEAR_CJSON_SOURCE_DIR cjson SOURCE_DIR)
 target_compile_options(cjson PRIVATE -Wno-keyword-macro)
 
@@ -216,7 +239,7 @@ target_compile_definitions(
   PUBLIC METALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}"
   PUBLIC METALBEAR_BUILD_TIME="${METALBEAR_BUILD_TIME}"
   PUBLIC METALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}"
-  PUBLIC METALBEAR_SOURCE_WOLFRAM_LEXICON_DIR="${WOLFRAM_SOURCE_DIR}/lexicons")
+  PUBLIC METALBEAR_SOURCE_WOLFRAM_LEXICON_DIR="${METALBEAR_WOLFRAM_ROOT}/lexicons")
 
 # Propagate module enable/disable to the preprocessor so source files can
 # #ifdef-guard module-specific includes, route registrations, and struct
@@ -321,7 +344,7 @@ if(METALBEAR_BUILD_TESTS)
   target_link_libraries(test_metalbear_oauth_metadata PRIVATE metalbear_core)
   target_include_directories(
     test_metalbear_oauth_metadata PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
-                                          "${WOLFRAM_SOURCE_DIR}/test")
+                                          "${METALBEAR_WOLFRAM_ROOT}/test")
   add_test(NAME metalbear_oauth_metadata COMMAND test_metalbear_oauth_metadata)
 
   # private_key_jwt client auth at the token endpoint: serves the client's
@@ -335,7 +358,7 @@ if(METALBEAR_BUILD_TESTS)
             OpenSSL::Crypto)
   target_include_directories(
     test_metalbear_oauth_token_assertion
-    PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}" "${WOLFRAM_SOURCE_DIR}/test"
+    PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}" "${METALBEAR_WOLFRAM_ROOT}/test"
             ${MICROHTTPD_INCLUDE_DIR})
   add_test(NAME metalbear_oauth_token_assertion
            COMMAND test_metalbear_oauth_token_assertion)
@@ -360,7 +383,7 @@ if(METALBEAR_BUILD_TESTS)
   target_link_libraries(test_metalbear_video_upload PRIVATE metalbear_core
                                                             SQLite3::SQLite3)
   target_include_directories(test_metalbear_video_upload
-                             PRIVATE "${WOLFRAM_SOURCE_DIR}/test")
+                             PRIVATE "${METALBEAR_WOLFRAM_ROOT}/test")
   add_test(NAME metalbear_video_upload COMMAND test_metalbear_video_upload)
 
   add_executable(test_metalbear_account_cache test/test_account_cache.c)
@@ -550,10 +573,10 @@ if(METALBEAR_BUILD_TESTS)
   target_link_libraries(test_metalbear_repo_store PRIVATE metalbear_core)
   target_include_directories(
     test_metalbear_repo_store PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
-                                      "${WOLFRAM_SOURCE_DIR}/test")
+                                      "${METALBEAR_WOLFRAM_ROOT}/test")
   target_compile_definitions(
     test_metalbear_repo_store
-    PRIVATE METALBEAR_TEST_LEXICON_DIR="${WOLFRAM_SOURCE_DIR}/lexicons")
+    PRIVATE METALBEAR_TEST_LEXICON_DIR="${METALBEAR_WOLFRAM_ROOT}/lexicons")
   add_test(NAME metalbear_repo_store COMMAND test_metalbear_repo_store)
 
   add_executable(test_metalbear_repo_store_resolver
@@ -562,7 +585,7 @@ if(METALBEAR_BUILD_TESTS)
                         PRIVATE metalbear_core)
   target_include_directories(
     test_metalbear_repo_store_resolver PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
-                                               "${WOLFRAM_SOURCE_DIR}/test")
+"${METALBEAR_WOLFRAM_ROOT}/test")
   add_test(NAME metalbear_repo_store_resolver
            COMMAND test_metalbear_repo_store_resolver)
 
@@ -577,7 +600,7 @@ if(METALBEAR_BUILD_TESTS)
   target_link_libraries(test_metalbear_blob_gc PRIVATE metalbear_core)
   target_include_directories(
     test_metalbear_blob_gc PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
-                                   "${WOLFRAM_SOURCE_DIR}/test")
+                                   "${METALBEAR_WOLFRAM_ROOT}/test")
   add_test(NAME metalbear_blob_gc COMMAND test_metalbear_blob_gc)
 
   add_executable(test_metalbear_import_repo test/test_import_repo.c)
