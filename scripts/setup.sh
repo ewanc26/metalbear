@@ -130,11 +130,8 @@ if [ -n "$MISSING" ]; then
 	fi
 fi
 
-# Wolfram is a sibling checkout by default; fetch it if absent.
-if [ ! -d "../wolfram" ] && [ -z "${WOLFRAM_SOURCE_DIR:-}" ]; then
-	say "Cloning Wolfram (the SDK MetalBear is built on)"
-	git clone --depth 1 https://github.com/ewanc26/wolfram.git ../wolfram
-fi
+# Wolfram is fetched pinned to a released tag by CMake's FetchContent during
+# the configure step below -- no sibling checkout required.
 
 # ---------------------------------------------------------------------- build
 

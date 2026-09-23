@@ -1,9 +1,10 @@
 # MetalBear — a C23-first AT Protocol Personal Data Server with isolated C++ modules.
 #
-# The build context is the parent directory holding both the MetalBear and
-# Wolfram source trees, so the image always builds the SDK from the same commit
-# rather than against whatever a registry happens to have. The release workflow
-# assembles that layout; locally it is the parent of the two checkouts.
+# The build context is the parent directory holding the MetalBear source tree
+# (the release workflow checks it out at path `MetalBear`). Wolfram is fetched
+# directly by CMake's FetchContent pinned to a released tag (see
+# CMakeLists.txt), so the image always builds the SDK from the same commit
+# rather than against whatever a registry happens to have.
 #
 #   docker build -f MetalBear/Dockerfile -t metalbear .
 #
@@ -51,15 +52,14 @@ WORKDIR /src
 # only masked the problem for this image while CI and every other consumer
 # still broke.
 COPY MetalBear ./MetalBear
-COPY wolfram ./wolfram
 
-# The build context excludes .git (see the repo root's .dockerignore), so
-# CMake's own git-detection for METALBEAR_BUILD_COMMIT can never find one from
-# in here. Accept it as a build arg instead, computed on the host where .git
-# is available -- docker-compose.yaml passes it from METALBEAR_BUILD_COMMIT in
-# the shell environment at `docker compose build` time. Defaults to "unknown"
-# so a plain `docker build` with no arg still degrades the same way CMake's
-# own fallback does, rather than failing.
+# The build context typically excludes .git, so CMake's own git-detection for
+# METALBEAR_BUILD_COMMIT can never find one from in here. Accept it as a build
+# arg instead, computed on the host where .git is available -- the bear dev
+# compose (docker-compose.yaml) passes it from METALBEAR_BUILD_COMMIT in the
+# shell environment at `docker compose build` time. Defaults to "unknown" so a
+# plain `docker build` with no arg still degrades the same way CMake's own
+# fallback does, rather than failing.
 ARG METALBEAR_BUILD_COMMIT=unknown
 
 # Where this image sits on the software release life cycle (see README.md's
@@ -76,7 +76,6 @@ RUN cmake -S MetalBear -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
         -DMETALBEAR_BUILD_TESTS=OFF \
-        -DWOLFRAM_SOURCE_DIR=/src/wolfram \
         -DMETALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}" \
         -DMETALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}" \
     && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)" --target metalbear
@@ -94,10 +93,9 @@ FROM build AS dev
 RUN cmake -S MetalBear -B MetalBear/build \
         -DCMAKE_BUILD_TYPE=Debug \
         -DMETALBEAR_BUILD_TESTS=ON \
-        -DWOLFRAM_SOURCE_DIR=/src/wolfram \
     && cmake --build MetalBear/build --parallel "$(nproc 2>/dev/null || echo 4)"
 WORKDIR /src/MetalBear
-ENV METALBEAR_LEXICON_DIR=/src/wolfram/lexicons
+ENV METALBEAR_LEXICON_DIR=/src/MetalBear/build/_deps/wolfram-src/lexicons
 CMD ["/bin/bash"]
 
 FROM debian:bookworm-slim AS runtime
@@ -129,7 +127,7 @@ COPY --from=build /src/build/metalbear /usr/local/bin/metalbear
 
 # The lexicon corpus records are validated against on write. Without it every
 # write is stored unchecked and reported as validationStatus "unknown".
-COPY --from=build /src/wolfram/lexicons /usr/local/share/metalbear/lexicons
+COPY --from=build /src/build/_deps/wolfram-src/lexicons /usr/local/share/metalbear/lexicons
 
 # Materialise /data in the image itself. It is normally a bind mount, but
 # without it in the image `docker exec` cannot even start a process (it chdirs

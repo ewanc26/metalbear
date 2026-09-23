@@ -40,12 +40,8 @@ jobs:
 
       - name: Configure
         run: |
-          if [ ! -d "${{ github.workspace }}/../wolfram" ]; then
-            git clone https://github.com/ewanc26/wolfram "${{ github.workspace }}/../wolfram"
-          fi
           cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DWOLFRAM_SOURCE_DIR="${{ github.workspace }}/../wolfram"
+            -DCMAKE_BUILD_TYPE=Debug
 
       - name: Build
         run: cmake --build build -j"$(nproc)"

@@ -1,0 +1,124 @@
+# MetalBear — dev-mode Dockerfile that builds against the LIVE sibling Wolfram
+# checkout instead of the pinned release.
+#
+# This exists for active cross-development on bear1.croft.click: the deploy
+# stack keeps a writeable ../wolfram checkout and wants a rebuild whenever
+# *either* repo changes. Everything else (CI, release images, plain `docker
+# build`) uses Dockerfile, which fetches Wolfram pinned to v0.22.0 via
+# FetchContent. Keep this file in sync with Dockerfile — the only differences
+# are the wolfram COPY, the METALBEAR_WOLFRAM_SOURCE_DIR flag, and the lexicon
+# paths (add_subdirectory keeps lexicons at their source location, not under
+# build/_deps/wolfram-src).
+#
+# The build context MUST be the parent directory holding BOTH the MetalBear
+# and wolfram checkouts (the bear dev compose uses context /Users/ewan/Developer/Git):
+#
+#   docker build -f MetalBear/Dockerfile.devsibling -t metalbear:devsibling .
+#
+# Select it from a dev deployment via a compose toggle such as
+# ${BEAR_PDS_DOCKERFILE:-MetalBear/Dockerfile}; the pinned Dockerfile remains
+# the default.
+
+FROM debian:bookworm AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        cmake \
+        gcc \
+        g++ \
+        make \
+        pkg-config \
+        git \
+        libsqlite3-dev \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        libsecp256k1-dev \
+        libmicrohttpd-dev \
+        libzstd-dev \
+        libidn2-dev \
+        libpcre2-dev \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Debian bookworm ships libc-ares 1.18.1; Wolfram requires >= 1.28 for the
+# DNS record API. Build from the c-ares main branch so pkg-config finds a
+# version that satisfies the check and the runtime stage carries the matching
+# shared library.
+RUN git clone --depth 1 https://github.com/c-ares/c-ares.git /tmp/c-ares \
+    && cmake -B /tmp/c-ares/build -S /tmp/c-ares \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCARES_SHARED=ON \
+            -DCARES_STATIC=OFF \
+    && cmake --build /tmp/c-ares/build --parallel \
+    && cmake --install /tmp/c-ares/build \
+    && rm -rf /tmp/c-ares
+
+WORKDIR /src
+# The POSIX feature-test macros glibc needs are set by Wolfram's CMake target
+# and inherited here, so no global CFLAGS override is required. Setting it here
+# only masked the problem for this image while CI and every other consumer
+# still broke.
+COPY MetalBear ./MetalBear
+# Dev mode only: the live sibling checkout, built in place via
+# METALBEAR_WOLFRAM_SOURCE_DIR instead of the pinned FetchContent fetch.
+COPY wolfram ./wolfram
+
+ARG METALBEAR_BUILD_COMMIT=unknown
+ARG METALBEAR_RELEASE_STAGE=beta
+
+RUN cmake -S MetalBear -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DMETALBEAR_BUILD_TESTS=OFF \
+        -DMETALBEAR_BUILD_COMMIT="${METALBEAR_BUILD_COMMIT}" \
+        -DMETALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}" \
+        -DMETALBEAR_WOLFRAM_SOURCE_DIR=/src/wolfram \
+    && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)" --target metalbear
+
+FROM build AS dev
+RUN cmake -S MetalBear -B MetalBear/build \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DMETALBEAR_BUILD_TESTS=ON \
+        -DMETALBEAR_WOLFRAM_SOURCE_DIR=/src/wolfram \
+    && cmake --build MetalBear/build --parallel "$(nproc 2>/dev/null || echo 4)"
+WORKDIR /src/MetalBear
+ENV METALBEAR_LEXICON_DIR=/src/wolfram/lexicons
+CMD ["/bin/bash"]
+
+FROM debian:bookworm-slim AS runtime
+
+LABEL org.opencontainers.image.title="MetalBear" \
+      org.opencontainers.image.description="A C23-first AT Protocol Personal Data Server with isolated C++ modules" \
+      org.opencontainers.image.source="https://github.com/ewanc26/metalbear" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
+RUN apt-get update     && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libsqlite3-0 \
+        libcurl4 \
+        libssl3 \
+        libsecp256k1-1 \
+        libmicrohttpd12 \
+        libzstd1 \
+        libidn2-0 \
+        libpcre2-8-0 \
+        zlib1g \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /usr/local/lib/libcares.so* /usr/local/lib/
+RUN ldconfig
+
+COPY --from=build /src/build/metalbear /usr/local/bin/metalbear
+
+COPY --from=build /src/wolfram/lexicons /usr/local/share/metalbear/lexicons
+
+RUN mkdir -p /data
+WORKDIR /data
+ENV METALBEAR_DATA=/data \
+    METALBEAR_LISTEN=0.0.0.0 \
+    METALBEAR_LEXICON_DIR=/usr/local/share/metalbear/lexicons
+EXPOSE 2583
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:${METALBEAR_PORT:-2583}/xrpc/_health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/metalbear"]
