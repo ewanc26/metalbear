@@ -4,7 +4,7 @@
 # This exists for active cross-development on bear1.croft.click: the deploy
 # stack keeps a writeable ../wolfram checkout and wants a rebuild whenever
 # *either* repo changes. Everything else (CI, release images, plain `docker
-# build`) uses Dockerfile, which fetches Wolfram pinned to v0.22.0 via
+# build`) uses Dockerfile, which fetches Wolfram pinned to v0.25.0 via
 # FetchContent. Keep this file in sync with Dockerfile — the only differences
 # are the wolfram COPY, the METALBEAR_WOLFRAM_SOURCE_DIR flag, and the lexicon
 # paths (add_subdirectory keeps lexicons at their source location, not under
