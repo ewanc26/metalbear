@@ -323,7 +323,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Wolfram is fetched pinned to the released `v0.22.0` tag via CMake's
+Wolfram is fetched pinned to the released `v0.25.0` tag via CMake's
 FetchContent on the first configure, so no sibling checkout is needed.
 
 Or provision a host end to end — dependencies, build, secrets, a config file,
