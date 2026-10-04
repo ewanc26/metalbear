@@ -326,6 +326,18 @@ ctest --test-dir build --output-on-failure
 Wolfram is fetched pinned to the released `v0.25.0` tag via CMake's
 FetchContent on the first configure, so no sibling checkout is needed.
 
+Two of its behaviours are worth knowing before writing code against it,
+because both differ from the `v0.22.0` pin this tree was last green against:
+
+- A rejected credential comes back as `WF_ERR_AUTH`, not `WF_ERR_HTTP` — a
+  401, or an `ExpiredToken`/`InvalidToken` error name, when no refresh fixed
+  it. Callers that only care that the call was refused have to accept either;
+  `response.status` is still what says which refusal it was.
+- Clients follow HTTP redirects by default, bounded to five hops. Anything
+  that needs the redirect rather than its destination has to say so: the
+  OAuth browser flow, where `/oauth/authorize` answers with a 302 and a
+  `Location`, calls `wf_xrpc_client_set_max_redirects(client, 0)` first.
+
 Or provision a host end to end — dependencies, build, secrets, a config file,
 and a running daemon:
 
