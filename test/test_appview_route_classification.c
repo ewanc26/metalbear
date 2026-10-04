@@ -161,8 +161,14 @@ static void *mock_upstream_run(void *arg) {
         int fd = accept(mock->listen_fd, NULL, NULL);
         if (fd < 0) continue;
 
+        /* Claim the capture slot and publish the count *before* answering.
+         * The caller reads the count as soon as it holds the response, so a
+         * request counted after the write is a request it cannot see, and a
+         * route that really was proxied reads as one that never reached the
+         * AppView. Taking the slot here also keeps two connections out of one
+         * capture buffer if requests ever overlap. */
         pthread_mutex_lock(&mock->mutex);
-        int slot = mock->count;
+        int slot = mock->count++;
         pthread_mutex_unlock(&mock->mutex);
         if (slot >= (int)ROUTE_COUNT) {
             close(fd);
@@ -189,10 +195,6 @@ static void *mock_upstream_run(void *arg) {
                                        "{}";
         write_all(fd, response, sizeof(response) - 1);
         close(fd);
-
-        pthread_mutex_lock(&mock->mutex);
-        mock->count++;
-        pthread_mutex_unlock(&mock->mutex);
     }
     return NULL;
 }

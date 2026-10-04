@@ -63,6 +63,17 @@ static int failures;
         }                                                                      \
     } while (0)
 
+/* Did the server answer, and refuse? Since wolfram v0.25.0 a refusal that is
+ * about the credential -- a 401, or an ExpiredToken/InvalidToken error name --
+ * comes back as WF_ERR_AUTH rather than WF_ERR_HTTP, so that a caller can fail
+ * fast instead of retrying or reading the error body as data. See the
+ * WF_ERR_AUTH comment in wolfram's src/transport/xrpc.c. These tests care that
+ * the call was refused; the response.status check after each one is what pins
+ * down which refusal it was. */
+static int refused(wf_status s) {
+    return s == WF_ERR_HTTP || s == WF_ERR_AUTH;
+}
+
 static cJSON *json_response(wf_response *response) {
     return cJSON_ParseWithLength(response->body ? response->body : "",
                                  response->body_len);
@@ -527,8 +538,8 @@ int main(void) {
     /* Its refresh token is minted but never persisted, so refreshing it fails
      * closed exactly like any other route this scope cannot reach. */
     wf_xrpc_client_set_auth(client, mallory_takendown_refresh);
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.refreshSession", "{}",
-                            &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(client, "com.atproto.server.refreshSession",
+                                    "{}", &response)));
     CHECK(response.status == 401);
     wf_response_free(&response);
 

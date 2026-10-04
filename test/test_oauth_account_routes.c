@@ -283,6 +283,14 @@ int main(void) {
              (unsigned)metalbear_server_port(server));
     wf_xrpc_client *client = wf_xrpc_client_new(base);
     CHECK(client != NULL);
+    /* This client is the user agent, and the browser flow's whole point is
+     * that /oauth/authorize answers with a 302 and a Location, which is what
+     * these tests read. Wolfram's client has followed redirects by default
+     * since v0.25.0, which would put the test on the consent page instead of
+     * the redirect -- or, once a code has been issued, send it chasing
+     * client.example and fail on a name that does not resolve. Off, so what
+     * the test asserts is what the PDS put on the wire. */
+    wf_xrpc_client_set_max_redirects(client, 0);
 
     char *alice_tok =
         create_account(client, "alice.example.com", "alice-secret-pw");
