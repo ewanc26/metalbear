@@ -44,6 +44,17 @@ static int failures;
         }                                                                      \
     } while (0)
 
+/* Did the server answer, and refuse? Since wolfram v0.25.0 a refusal that is
+ * about the credential -- a 401, or an ExpiredToken/InvalidToken error name --
+ * comes back as WF_ERR_AUTH rather than WF_ERR_HTTP, so that a caller can fail
+ * fast instead of retrying or reading the error body as data. See the
+ * WF_ERR_AUTH comment in wolfram's src/transport/xrpc.c. These tests care that
+ * the call was refused; the response.status check after each one is what pins
+ * down which refusal it was. */
+static int refused(wf_status s) {
+    return s == WF_ERR_HTTP || s == WF_ERR_AUTH;
+}
+
 static cJSON *json_response(wf_response *response) {
     return cJSON_ParseWithLength(response->body ? response->body : "",
                                  response->body_len);
@@ -948,8 +959,9 @@ int main(void) {
                  "%s/xrpc/com.atproto.server.createInviteCode", base);
 
         /* A bearer token is refused. */
-        CHECK(wf_xrpc_procedure(client, "com.atproto.server.createInviteCode",
-                                "{\"useCount\":5}", &response) == WF_ERR_HTTP);
+        CHECK(refused(wf_xrpc_procedure(client,
+                                        "com.atproto.server.createInviteCode",
+                                        "{\"useCount\":5}", &response)));
         CHECK(response.status == 401);
         wf_response_free(&response);
 
@@ -1571,10 +1583,9 @@ int main(void) {
     wf_response_free(&response);
 
     /* confirmEmail with both email and bad token returns InvalidToken */
-    CHECK(wf_xrpc_procedure(
-              client, "com.atproto.server.confirmEmail",
-              "{\"email\":\"alice@example.com\",\"token\":\"bogus\"}",
-              &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(
+        client, "com.atproto.server.confirmEmail",
+        "{\"email\":\"alice@example.com\",\"token\":\"bogus\"}", &response)));
     CHECK(response.status == 400);
     json = json_response(&response);
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
@@ -1631,9 +1642,9 @@ int main(void) {
     wf_response_free(&response);
 
     wf_xrpc_client_set_auth(client, desktop_access);
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.createAppPassword",
-                            "{\"name\":\"forbidden\"}",
-                            &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(client,
+                                    "com.atproto.server.createAppPassword",
+                                    "{\"name\":\"forbidden\"}", &response)));
     CHECK(response.status == 401);
     wf_response_free(&response);
     CHECK(wf_xrpc_query(client, "com.atproto.server.listAppPasswords", NULL,
@@ -1651,28 +1662,28 @@ int main(void) {
     /* requestPlcOperationSignature/signPlcOperation require ACCESS_FULL in
      * the reference (identity.ts) -- an app password, privileged or not,
      * must never reach a PLC identity operation. */
-    CHECK(wf_xrpc_procedure(client,
-                            "com.atproto.identity.requestPlcOperationSignature",
-                            "{}", &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(
+        client, "com.atproto.identity.requestPlcOperationSignature", "{}",
+        &response)));
     CHECK(response.status == 401);
     wf_response_free(&response);
-    CHECK(wf_xrpc_procedure(client, "com.atproto.identity.signPlcOperation",
-                            "{\"token\":\"whatever\"}",
-                            &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(client,
+                                    "com.atproto.identity.signPlcOperation",
+                                    "{\"token\":\"whatever\"}", &response)));
     CHECK(response.status == 401);
     wf_response_free(&response);
     /* requestAccountDelete, requestEmailUpdate, getAccountInviteCodes: also
      * ACCESS_FULL-only in the reference, no takendown exception. */
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestAccountDelete",
-                            "{}", &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(
+        client, "com.atproto.server.requestAccountDelete", "{}", &response)));
     CHECK(response.status == 401);
     wf_response_free(&response);
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.requestEmailUpdate",
-                            "{}", &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(
+        client, "com.atproto.server.requestEmailUpdate", "{}", &response)));
     CHECK(response.status == 401);
     wf_response_free(&response);
-    CHECK(wf_xrpc_query(client, "com.atproto.server.getAccountInviteCodes",
-                        NULL, &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_query(
+        client, "com.atproto.server.getAccountInviteCodes", NULL, &response)));
     CHECK(response.status == 401);
     wf_response_free(&response);
 
@@ -1722,8 +1733,8 @@ int main(void) {
     CHECK(response.status == 401);
     wf_response_free(&response);
     wf_xrpc_client_set_auth(client, desktop_refresh);
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.refreshSession", "{}",
-                            &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(client, "com.atproto.server.refreshSession",
+                                    "{}", &response)));
     CHECK(response.status == 401);
     wf_response_free(&response);
     free(desktop_password);
@@ -2271,9 +2282,9 @@ int main(void) {
     wf_response_free(&response);
 
     /* confirmEmail without token should fail */
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.confirmEmail",
-                            "{\"email\":\"new@example.com\"}",
-                            &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(client, "com.atproto.server.confirmEmail",
+                                    "{\"email\":\"new@example.com\"}",
+                                    &response)));
     CHECK(response.status == 400);
     json = json_response(&response);
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
@@ -2282,10 +2293,9 @@ int main(void) {
     wf_response_free(&response);
 
     /* confirmEmail with wrong email should fail */
-    CHECK(wf_xrpc_procedure(
-              client, "com.atproto.server.confirmEmail",
-              "{\"email\":\"wrong@example.com\",\"token\":\"bogus\"}",
-              &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(
+        client, "com.atproto.server.confirmEmail",
+        "{\"email\":\"wrong@example.com\",\"token\":\"bogus\"}", &response)));
     CHECK(response.status == 400);
     wf_response_free(&response);
 
@@ -2308,8 +2318,8 @@ int main(void) {
              "\"correct horse battery staple\","
              "\"token\":\"wrongtoken\"}",
              alice_did);
-    CHECK(wf_xrpc_procedure(client, "com.atproto.server.deleteAccount",
-                            del_bad_body, &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(client, "com.atproto.server.deleteAccount",
+                                    del_bad_body, &response)));
     CHECK(response.status == 400);
     json = json_response(&response);
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
@@ -2352,10 +2362,9 @@ int main(void) {
 
     /* resetPassword with wrong token should fail the same way when a bearer
      * token IS present, too — auth is simply irrelevant to this route. */
-    CHECK(
-        wf_xrpc_procedure(client, "com.atproto.server.resetPassword",
-                          "{\"token\":\"bad\",\"password\":\"newpassword123\"}",
-                          &response) == WF_ERR_HTTP);
+    CHECK(refused(wf_xrpc_procedure(
+        client, "com.atproto.server.resetPassword",
+        "{\"token\":\"bad\",\"password\":\"newpassword123\"}", &response)));
     CHECK(response.status == 400);
     json = json_response(&response);
     CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
@@ -2560,8 +2569,8 @@ int main(void) {
                                     "{}", &response) == WF_OK);
             CHECK(response.status == 200);
             wf_response_free(&response);
-            CHECK(wf_xrpc_procedure(client, "com.atproto.server.refreshSession",
-                                    "{}", &response) == WF_ERR_HTTP);
+            CHECK(refused(wf_xrpc_procedure(
+                client, "com.atproto.server.refreshSession", "{}", &response)));
             CHECK(response.status == 401);
             wf_response_free(&response);
             free(rotated_refresh);
@@ -2685,8 +2694,9 @@ int main(void) {
                      "\"password\":\"correct horse battery staple\","
                      "\"token\":\"totallywrong\"}",
                      alice_did);
-            CHECK(wf_xrpc_procedure(client, "com.atproto.server.deleteAccount",
-                                    del_bad_body2, &response) == WF_ERR_HTTP);
+            CHECK(refused(wf_xrpc_procedure(client,
+                                            "com.atproto.server.deleteAccount",
+                                            del_bad_body2, &response)));
             CHECK(response.status == 400);
             wf_response_free(&response);
 
