@@ -47,6 +47,17 @@ static int failures;
         }                                                                      \
     } while (0)
 
+/* Did the server answer, and refuse? Since wolfram v0.25.0 a refusal that is
+ * about the credential -- a 401, or an ExpiredToken/InvalidToken error name --
+ * comes back as WF_ERR_AUTH rather than WF_ERR_HTTP, so that a caller can fail
+ * fast instead of retrying or reading the error body as data. See the
+ * WF_ERR_AUTH comment in wolfram's src/transport/xrpc.c. These tests care that
+ * the call was refused; the response.status check after each one is what pins
+ * down which refusal it was. */
+static int refused(wf_status s) {
+    return s == WF_ERR_HTTP || s == WF_ERR_AUTH;
+}
+
 static int rmtree_remove_cb(const char *path, const struct stat *sb, int type,
                             struct FTW *ftwbuf) {
     (void)sb;
@@ -108,7 +119,7 @@ int main(void) {
         /* The exact refusal shape doesn't matter as much as "the server
          * answered at all, with an error, instead of dying" -- but confirm
          * it's a refusal, not an accidental success. */
-        CHECK(s == WF_ERR_HTTP);
+        CHECK(refused(s));
         CHECK(response.status == 400 || response.status == 401);
         wf_response_free(&response);
     }
