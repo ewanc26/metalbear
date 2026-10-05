@@ -18,7 +18,7 @@ an AT Protocol Personal Data Server written primarily in C and C++
 
 The full rules are in [AGENTS.md](AGENTS.md#flow); the short version is a
 branch named `<type>/<slug>`, conventional commit subjects, a pull request
-filled in from the template, and a green `ci gate` before it merges. Nothing
+filled in from the template, and a green `ci gate` before it merges. Pull requests are merged with rebase, so every commit on a branch lands on `main` as written: keep each one standalone, and fix review comments with new `fix(scope): ...` commits rather than merging `main` in. Nothing
 goes straight to `main`. Two scripts check this for you and can be run before
 pushing: `tools/flow-check.sh` (see its header for the environment it reads)
 and `tools/check-drift.sh`.
