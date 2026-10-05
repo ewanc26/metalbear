@@ -38,23 +38,10 @@ static bool starts_with(const char *str, const char *prefix) {
     return str && prefix && strncmp(str, prefix, strlen(prefix)) == 0;
 }
 
-static bool is_nsid_char(char c) {
-    return isalnum((unsigned char)c) || c == '.' || c == '-';
-}
-
+/* NSID syntax is Wolfram's (wf_syntax_nsid_is_valid): at least three
+ * segments, a letters-only name segment, the length limits. */
 static bool is_valid_nsid(const char *str) {
-    if (!str || !*str) return false;
-
-    /* Must contain at least one dot */
-    const char *dot = strchr(str, '.');
-    if (!dot) return false;
-
-    /* All characters must be valid NSID characters */
-    for (const char *p = str; *p; p++) {
-        if (!is_nsid_char(*p)) return false;
-    }
-
-    return true;
+    return str && wf_syntax_nsid_is_valid(str) != 0;
 }
 
 /* "*" or a valid NSID -- an rpc: lxm entry. */

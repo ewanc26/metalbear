@@ -398,31 +398,27 @@ static const char *request_account_did(metalbear_server *server,
 bool split_at_uri(const char *uri, char *authority, size_t authority_sz,
                   char *collection, size_t collection_sz, char *rkey,
                   size_t rkey_sz) {
-    if (!uri || strncmp(uri, "at://", 5) != 0) return false;
-    const char *parts[3];
-    size_t lengths[3];
-    const char *p = uri + 5;
-    for (int i = 0; i < 3; i++) {
-        parts[i] = p;
-        size_t n = 0;
-        while (p[n] && p[n] != '/') n++;
-        lengths[i] = n;
-        if (n == 0) return false;
-        p += n;
-        if (i < 2) {
-            if (*p != '/') return false;
-            p++;
-        }
-    }
-    if (*p != '\0') return false;
+    if (!uri) return false;
+    /* The syntax rules (authority, NSID, record key, no fragment) are
+     * Wolfram's; only the "all three present and they fit" policy is ours. */
+    wf_syntax_aturi parsed;
+    if (!wf_syntax_aturi_parse(uri, &parsed)) return false;
+    bool ok = parsed.authority && parsed.collection && parsed.record_key &&
+              !parsed.fragment;
+    const char *parts[3] = {parsed.authority, parsed.collection,
+                            parsed.record_key};
     char *outs[3] = {authority, collection, rkey};
     size_t sizes[3] = {authority_sz, collection_sz, rkey_sz};
-    for (int i = 0; i < 3; i++) {
-        if (lengths[i] >= sizes[i]) return false;
-        memcpy(outs[i], parts[i], lengths[i]);
-        outs[i][lengths[i]] = '\0';
+    for (int i = 0; ok && i < 3; i++) {
+        size_t n = strlen(parts[i]);
+        if (n == 0 || n >= sizes[i]) {
+            ok = false;
+            break;
+        }
+        memcpy(outs[i], parts[i], n + 1);
     }
-    return true;
+    wf_syntax_aturi_free(&parsed);
+    return ok;
 }
 
 /* Return the cached context for `did`. The returned context is owned by the
