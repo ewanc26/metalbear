@@ -23,6 +23,8 @@ goes straight to `main`. Two scripts check this for you and can be run before
 pushing: `tools/flow-check.sh` (see its header for the environment it reads)
 and `tools/check-drift.sh`.
 
+Releases go through `tools/release.sh`, never by hand-tagging.
+
 ## Recent direction
 
 Recent commits: Sync AGENTS.md from zincfox; Sync AGENTS.md from zincfox; Sync CONTRIBUTING.md from zincfox; Sync CONTRIBUTING.md from zincfox; test(server): cover mod-service auth for getPreferences
