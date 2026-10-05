@@ -331,12 +331,38 @@ jobs:
           pattern: metalbear-*
           merge-multiple: true
 
+      # The updater's inputs (pdsadmin/metalbear-update.sh): one SHA256SUMS
+      # covering every archive, and, when the owner has provided a signing
+      # key, a detached OpenSSH signature over it. The key is a repository
+      # secret supplied by the owner; this step never generates one and never
+      # prints it. Without the secret the release ships unsigned and the
+      # updater runs in SHA-256-only mode.
+      - name: Checksums and signature
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          cd artifacts
+          cat metalbear-*.tar.gz.sha256 | sort -k2 > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          if [ -n "$RELEASE_SIGNING_KEY" ]; then
+            umask 077
+            keyfile="$(mktemp)"
+            printf '%s\n' "$RELEASE_SIGNING_KEY" > "$keyfile"
+            ssh-keygen -q -Y sign -f "$keyfile" -n file SHA256SUMS
+            rm -f "$keyfile"
+            echo "signed SHA256SUMS"
+          else
+            echo "::warning::RELEASE_SIGNING_KEY is not set; publishing SHA256SUMS unsigned"
+          fi
+
       - name: Publish
         uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/*.tar.gz
             artifacts/*.sha256
+            artifacts/SHA256SUMS
+            artifacts/SHA256SUMS.sig
           generate_release_notes: true
           body: |
             ## Container image

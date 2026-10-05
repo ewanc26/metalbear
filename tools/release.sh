@@ -5,6 +5,7 @@
 # Usage:
 #   tools/release.sh [--dry-run] prepare <major|minor|patch|x.y.z>
 #   tools/release.sh [--dry-run] tag
+#   tools/release.sh check-assets vX.Y.Z
 #
 # A release is two steps with a merge between them, because main only changes
 # through a green pull request:
@@ -18,6 +19,10 @@
 #            push the annotated tag vX.Y.Z. release.yml does the rest and
 #            refuses a tag that disagrees with the CMake version or is not on
 #            main (its `verify` job).
+#
+#   check-assets  After release.yml has finished: download SHA256SUMS and every
+#            archive it lists from the published release and verify them, the
+#            same inputs pdsadmin/metalbear-update.sh consumes. Read-only.
 #
 # Requires: git, cmake, a C/C++ toolchain; `gh` (authenticated) for `tag`.
 set -euo pipefail
@@ -131,6 +136,30 @@ tag)
 	git tag -a "$tag" -m "$tag" "$sha"
 	git push origin "$tag"
 	echo ">> Pushed $tag; release.yml will verify and publish."
+	;;
+check-assets)
+	valid="^v[0-9]+\.[0-9]+\.[0-9]+$"
+	[[ "$arg" =~ $valid ]] || usage
+	command -v curl >/dev/null || fail "curl not found"
+	url="https://github.com/ewanc26/metalbear/releases/download/$arg"
+	tmp="$(mktemp -d)"
+	trap 'rm -rf "$tmp"' EXIT
+	curl -fsSL -o "$tmp/SHA256SUMS" "$url/SHA256SUMS" || fail "release $arg has no SHA256SUMS"
+	[ -s "$tmp/SHA256SUMS" ] || fail "SHA256SUMS is empty"
+	for p in linux-x86_64 linux-aarch64 macos-arm64; do
+		grep -q " metalbear-$p.tar.gz$" "$tmp/SHA256SUMS" || fail "SHA256SUMS does not list metalbear-$p.tar.gz"
+	done
+	while read -r _ name; do
+		curl -fsSL -o "$tmp/$name" "$url/$name" || fail "cannot download $name"
+	done <"$tmp/SHA256SUMS"
+	(cd "$tmp" && if command -v sha256sum >/dev/null; then sha256sum -c SHA256SUMS; else shasum -a 256 -c SHA256SUMS; fi) ||
+		fail "checksum verification failed"
+	if curl -fsSL -o "$tmp/SHA256SUMS.sig" "$url/SHA256SUMS.sig" 2>/dev/null; then
+		echo ">> SHA256SUMS.sig present (verify it with ssh-keygen -Y verify and the release key)"
+	else
+		echo ">> WARNING: release is unsigned"
+	fi
+	echo ">> $arg assets verified"
 	;;
 *) usage ;;
 esac
