@@ -26,31 +26,39 @@ Every MetalBear build carries stamped values from CMake. A release must never sh
 - Use feature branches and pull requests.
 - Treat generated files, credentials, deployment configuration, and release metadata as sensitive.
 
-## Flow
+<!-- flow:begin -->
+## Unified flow (canonical: ewanc26/wolfram, docs/flow.md)
 
-Follow this for every change. Rules first, rationale after.
+This block is byte-identical in every repo of the stack and is drift-checked by CI. Do not edit a copy; change it by PR to wolfram, then copy it out.
 
-1. Never commit or push to `main`. Branch from `main`, named `<type>/<slug>` (type: feat, fix, chore, docs, test, ci, refactor, perf, build, revert, style, audit, release; slug lowercase `a-z0-9._-`).
-2. Commit subjects and the PR title are `<type>(<scope>): <summary>`. Commits are atomic. Never push an empty commit. Never force-push.
-3. End agent commits with the `Co-Authored-By:` and `Claude-Session:` trailers for the session; end agent PR descriptions with the generated-with line and session link.
-4. Open a PR using `.github/PULL_REQUEST_TEMPLATE.md`. Keep it small. State exactly what was verified and where (host, emulator, hardware); never claim hardware you did not use.
-5. Update AGENTS.md, README and `docs/` in the same PR as the change.
-6. Merge with rebase only (`merge_method: rebase`), never squash and never a merge commit, and only when the `ci gate` check is green. Every commit lands on `main` as written, so each must be a standalone conventional commit that builds and passes tests; write review fixes as real `fix(scope): ...` commits. Never merge `main` into a PR branch. If a PR cannot be rebased cleanly, cut a fresh branch from `main`, cherry-pick, open a new PR linking the old one, and close the old one with a comment. A red check is never an end state: read the job log, reproduce, root-cause, fix, push, repeat. Never skip, disable or delete a test to get green. A red `main` is fixed before anything else.
-7. Wolfram changes land first; adopt a new Wolfram by bumping the tag in `CMakeLists.txt`, `README.md` and `Dockerfile.devsibling` together, after building and running ctest against it.
-8. Release only with `tools/release.sh` (`prepare`, merge the bump PR, then `tag`), only from a green, merged `main`. Never hand-tag. `release.yml`'s `verify` job refuses a tag that is not `vX.Y.Z`, differs from the CMake VERSION, is not on `main`, or lacks a green `ci gate`.
-9. The self-updater is `pdsadmin/metalbear-update.sh`; its inputs are `release.yml`'s archives and `SHA256SUMS[.sig]`. Keep it, `docs/updating.md`, `deploy/systemd/` and `test/update/test_update.sh` in step with any change to release asset names or data layout. It must stay opt-in (check-only by default), refuse to update without a verified backup, roll back on a failed health check, and never read, print or store credentials. Never generate or commit a signing key: it is the repository secret `RELEASE_SIGNING_KEY`, supplied by the owner.
-10. Do not commit secrets. Do not publish to registries or Vercel from here.
+- Branch from main as `<type>/<slug>`. Types: feat fix docs ci chore refactor test perf build ui release (titles and commits also allow revert). Slug: lowercase `a-z 0-9 . _ -`.
+- Commit subjects and PR titles are Conventional Commits: `type(scope): summary`. Keep commits focused. Never push an empty commit.
+- Agent commits end with the `Co-Authored-By:` and `Claude-Session:` trailers the session supplies. PR descriptions use `.github/PULL_REQUEST_TEMPLATE.md` (What this changes, Verification, Docs) and end with the session link.
+- Nothing goes straight to main. Branch, open a PR, wait for green CI, merge the PR with a rebase merge (never squash, never a merge commit). Required checks: `CI gate` and `flow / conventions`.
+- A rebase merge lands every commit on main as written, so each commit stands alone: a conventional subject, builds, passes tests. Write review fixes as real conventional commits (`fix(scope): ...`), never "address review".
+- Never force-push, so a PR branch is never rebased locally, and never merge main into a PR branch (a merge commit breaks the rebase merge; the flow check fails it). If a PR is behind or conflicted and GitHub can still rebase-merge it cleanly, merge it once CI is green on the current head. Otherwise cut a fresh branch from main, cherry-pick the commits, open a new PR linking the old one, and close the old one with a comment.
+- Never merge red. Never force-push. Never skip, disable or delete a test to get green: read the job log, reproduce, fix the root cause, wait, repeat. A red main is fixed before anything else.
+- Update AGENTS.md, README and docs/ in the same PR as the change. AGENTS.md is imperative and exact; README and docs are user-facing prose.
+- State exactly what was verified and where (host, emulator, hardware). Never claim hardware you did not use.
+- Releases go through the repo's own release script only, and only after every consumer in the stack has been verified against the change.
+- Anything only the owner can supply (credentials, hardware results, money, irreversible actions): file an issue labelled `needs-owner` and move on.
+- No secrets in the repo or its CI. No Vercel. No registry publishing.
+<!-- flow:end -->
 
-Required status check: `ci gate`
+## MetalBear specifics
 
-Enforcement:
+Rules on top of the flow above.
 
-- `tools/flow-check.sh` (CI job `flow`) checks rule 1 (branch name), 2 (title, commit subjects, empty commits, no merge commits) and the template sections of rule 4.
-- `tools/check-drift.sh` (CI job `drift`) checks that the Wolfram pin, the DNS provider count, the required check named above, and the PR template agree with the code. Change both sides together.
-- `ci gate` aggregates every non-informational job. Add new jobs to its `needs`.
-- Branch protection (require `ci gate`, no force-push, no direct push to `main`, rebase merging only) must be set by the repository owner; the API refuses it to agents. Until it is, `ci gate` is advisory to GitHub but binding on agents under rule 6.
-
-Why: the stack (wolfram, metalbear, cobalt, indigo, platinum) is changed by several agents at once. Small PRs, a single gate and mechanical checks keep any one agent from breaking another's base.
+- Required status checks: `CI gate` and `flow / conventions`. Required status check: `CI gate`
+- `CI gate` aggregates every non-informational job in `ci.yml`. Add new jobs to its `needs`; `tools/check-drift.sh` fails if you forget.
+- Adopt a new Wolfram by bumping the tag in `CMakeLists.txt`, `README.md` and `Dockerfile.devsibling` together, after building and running ctest against it. Wolfram changes land first.
+- Release only with `tools/release.sh` (`prepare`, merge the bump PR, then `tag`), only from a green, merged `main`. Never hand-tag. `release.yml`'s `verify` job refuses a tag that is not `vX.Y.Z`, differs from the CMake VERSION, is not on `main`, or lacks a green `CI gate`.
+- The self-updater is `pdsadmin/metalbear-update.sh`; its inputs are `release.yml`'s archives and `SHA256SUMS[.sig]`. Keep it, `docs/updating.md`, `deploy/systemd/` and `test/update/test_update.sh` in step with any change to release asset names or data layout. It must stay opt-in (check-only by default), refuse to update without a verified backup, roll back on a failed health check, and never read, print or store credentials. Never generate or commit a signing key: it is the repository secret `RELEASE_SIGNING_KEY`, supplied by the owner.
+- `docs/logo.svg` is the single source of the bear. `frontend/` SVGs must contain all of its rects (drift check). After changing it, run `python3 tools/gen_icons.py` to regenerate `admin-mobile/assets/*.png` (needs Pillow) and commit the result.
+- Issues and issue comments are written in the owner's first person (plain British English, dry, specific: "I've found", "I want") and end with the exact line `_Written by Claude on my behalf._`. PR descriptions keep the session link instead.
+- Do not reimplement Wolfram primitives; `tools/check-drift.sh` fails on known local copies.
+- `tools/check-drift.sh` (CI job `drift`) is metalbear's own drift check: Wolfram pin, DNS provider count, the required check named above, release gating, updater platforms, the bear, no local Wolfram primitives. The canonical flow files are checked separately by Wolfram's `flow / drift`.
+- Branch protection (require `CI gate` and `flow / conventions`, no force-push, no direct push to `main`, rebase merging only) must be set by the repository owner and is tracked in a `needs-owner` issue; the API refuses it to agents.
 
 ## Recent history
 

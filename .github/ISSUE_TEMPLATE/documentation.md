@@ -5,6 +5,8 @@ title: "[docs]: "
 labels: ["documentation"]
 assignees: []
 ---
+<!-- Written by an agent? Use the owner's first person (plain British English, dry, specific: "I've found", "I want") and end with the exact line `_Written by Claude on my behalf._` -->
+
 
 ## What needs improving?
 - File / page (e.g. `README.md`, `docs/multi-account.md`, `config.example.toml`,
