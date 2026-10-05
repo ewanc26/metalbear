@@ -392,6 +392,14 @@ static void test_dynamic_scopes(void) {
     mb_scope_permission_free(perm);
     PASS();
 
+    TEST("rpc lxm must be a real NSID (Wolfram's syntax, not just 'has a dot')");
+    perm = mb_scope_permission_parse("rpc:foo.bar?aud=did:web:mod.example.com");
+    ASSERT(perm == NULL, "a two-segment lxm is not an NSID and must not parse");
+    perm = mb_scope_permission_parse(
+        "rpc:com.atproto.repo.1bad?aud=did:web:mod.example.com");
+    ASSERT(perm == NULL, "an NSID name segment may not start with a digit");
+    PASS();
+
     TEST("rpc:*?aud=* is rejected as an unbounded blanket grant");
     perm = mb_scope_permission_parse("rpc:*?aud=*");
     ASSERT(perm == NULL, "rpc:*?aud=* must not parse");
