@@ -476,7 +476,7 @@ Omit the section and handle resolution stays entirely the operator's business.
 A provider named without credentials is refused at startup rather than accepted:
 a host that mints accounts and silently writes no records is only discovered
 when every handle shows as `handle.invalid`, long after the accounts exist. So
-is a provider name that is not one of the three, for the same reason.
+is a provider name that is not one of the four, for the same reason.
 
 ## Run
 
