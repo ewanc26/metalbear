@@ -1,0 +1,12 @@
+# Opt-in. Not enabled by anything; the operator enables it deliberately, after
+# choosing a maintenance window. Applying restarts the server.
+[Unit]
+Description=MetalBear automatic update window
+
+[Timer]
+# Sunday, 04:00 local time. Change it.
+OnCalendar=Sun *-*-* 04:00:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target
