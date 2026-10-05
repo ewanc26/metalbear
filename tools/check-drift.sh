@@ -12,6 +12,7 @@
 #   3. The status check AGENTS.md says is required exists in ci.yml and
 #      depends on every job there that is not informational.
 #   4. The PR template carries the sections flow-check.sh demands.
+#   5. release.yml gates its build jobs on `verify`.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -73,6 +74,19 @@ while IFS= read -r s; do
 	grep -qxF "$s" .github/PULL_REQUEST_TEMPLATE.md ||
 		err "PULL_REQUEST_TEMPLATE.md lacks '$s', which tools/flow-check.sh requires"
 done < <(grep -o '"[^"]*"' <<<"$sections" | tr -d '"')
+
+# 5. Release gating ---------------------------------------------------------
+python3 - <<'PY' || fail=1
+import sys, yaml
+jobs = yaml.safe_load(open(".github/workflows/release.yml"))["jobs"]
+if "verify" not in jobs:
+    sys.exit("drift: release.yml has no 'verify' job")
+for k in ("binaries", "image"):
+    n = jobs[k].get("needs", [])
+    n = [n] if isinstance(n, str) else n
+    if "verify" not in n:
+        sys.exit(f"drift: release.yml job '{k}' does not need 'verify'")
+PY
 
 [ "$fail" -eq 0 ] || { echo "drift: FAILED" >&2; exit 1; }
 echo "drift: ok"
