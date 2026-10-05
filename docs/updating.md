@@ -52,14 +52,15 @@ Startup applies schema changes in place (`CREATE TABLE IF NOT EXISTS`, `ALTER
 TABLE ... ADD COLUMN`), and the databases carry no schema version. The script
 therefore cannot tell which releases change the schema, so it treats every
 update as one that might, and refuses to run without a snapshot to return to.
-Recording a schema version would let it say more; that is tracked in the
-issue linked from the pull request that added this.
+Recording a schema version would let it say more; that is
+[#56](https://github.com/ewanc26/metalbear/issues/56).
 
 ## Release signing
 
 Releases are published with a `SHA256SUMS` file. `release.yml` signs it with
 an OpenSSH ed25519 key when the repository secret `RELEASE_SIGNING_KEY` exists.
-That key has to come from the owner and has not been created yet, so current
+That key has to come from the owner and has not been created yet
+([#55](https://github.com/ewanc26/metalbear/issues/55)), so current
 releases are unsigned. When it exists, put the public half in an
 `allowed_signers` file (`metalbear-release ssh-ed25519 AAAA...`) and set
 `SIGNERS_FILE`. After a release, `tools/release.sh check-assets vX.Y.Z`
