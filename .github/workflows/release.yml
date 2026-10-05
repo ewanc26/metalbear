@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   # Gate for everything below. A tag is only releasable if it is vX.Y.Z, equals
-  # the VERSION in CMakeLists.txt, points at a commit on main, and `ci gate`
+  # the VERSION in CMakeLists.txt, points at a commit on main, and `CI gate`
   # passed on that commit. tools/release.sh produces such tags; this refuses
   # one made any other way. A manual dry run has no tag, so the checks that
   # need one are skipped.
@@ -49,14 +49,14 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
             || { echo "::error::$GITHUB_SHA is not on main"; exit 1; }
 
-      - name: ci gate passed on the tagged commit
+      - name: CI gate passed on the tagged commit
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           state="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
-            --jq '[.check_runs[] | select(.name == "ci gate")] | map(.conclusion) | .[0] // "missing"')"
-          [ "$state" = success ] || { echo "::error::'ci gate' on $GITHUB_SHA is '$state'"; exit 1; }
+            --jq '[.check_runs[] | select(.name == "CI gate")] | map(.conclusion) | .[0] // "missing"')"
+          [ "$state" = success ] || { echo "::error::'CI gate' on $GITHUB_SHA is '$state'"; exit 1; }
 
   binaries:
     name: ${{ matrix.name }}

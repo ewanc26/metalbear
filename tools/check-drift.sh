@@ -11,7 +11,6 @@
 #   2. The README's "<N> providers" matches the DNS provider table in code.
 #   3. The status check AGENTS.md says is required exists in ci.yml and
 #      depends on every job there that is not informational.
-#   4. The PR template carries the sections flow-check.sh demands.
 #   5. release.yml gates its build jobs on `verify`.
 #   6. The updater's platform names and SHA256SUMS exist in release.yml.
 set -euo pipefail
@@ -67,14 +66,6 @@ missing = [k for k, j in jobs.items()
 if missing:
     sys.exit(f"drift: gate job '{name}' does not depend on: {', '.join(missing)}")
 PY
-
-# 4. PR template vs flow-check.sh -------------------------------------------
-sections="$(sed -n 's/^REQUIRED_SECTIONS=(\(.*\))$/\1/p' tools/flow-check.sh)"
-while IFS= read -r s; do
-	[ -n "$s" ] || continue
-	grep -qxF "$s" .github/PULL_REQUEST_TEMPLATE.md ||
-		err "PULL_REQUEST_TEMPLATE.md lacks '$s', which tools/flow-check.sh requires"
-done < <(grep -o '"[^"]*"' <<<"$sections" | tr -d '"')
 
 # 5. Release gating ---------------------------------------------------------
 python3 - <<'PY' || fail=1

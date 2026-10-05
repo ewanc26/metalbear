@@ -1,22 +1,13 @@
 ## What this changes
-A short description of the change and the problem it solves.
+<!-- What changed and which problem it solves. Link the issue if there is one. -->
 
-## Why
-Context a reviewer would not get from the diff — the failure it fixes, the spec it
-follows, or the deployment it unblocks. Link the issue if there is one.
+## Verification
+<!-- What you ran and where: host, emulator or hardware. Say exactly which; do not claim hardware you did not use. -->
+
+## Docs
+<!-- AGENTS.md, README and docs/ updated in this PR, or why none needed. -->
 
 ## Checklist
-- [ ] `ctest --test-dir build --output-on-failure` passes
-- [ ] New or changed routes have an end-to-end test covering success, auth failure,
-      and schema conformance
-- [ ] Tests clean up every SQLite file and blob directory they create
-- [ ] Commits are atomic and conventional (`feat(server)`, `fix(auth)`, `docs(readme)`)
-- [ ] `Co-authored-by:` trailers accurately reflect all contributors, human and AI
-- [ ] No secrets, live credentials, signing keys, or PDS data in the diff
-- [ ] Branch, title and commits follow the flow in AGENTS.md (`tools/flow-check.sh`)
-- [ ] Docs updated if behaviour or configuration changed
-
-## Protocol parity
-If this touches protocol surface, note what you checked it against
-([atproto](https://github.com/bluesky-social/atproto),
-[rsky](https://github.com/blacksky-algorithms/rsky), or a live PDS) — or say N/A.
+- [ ] CI is green (`CI gate` and `flow / conventions`)
+- [ ] No secrets, tokens or signing keys in the diff
+- [ ] Tests added or changed with the behaviour; none skipped, disabled or deleted
