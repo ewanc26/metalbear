@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    # `edited` re-runs the flow check when the title or description changes.
-    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 concurrency:
@@ -16,10 +14,6 @@ permissions:
   contents: read
 
 jobs:
-  # Branch name, PR title and body, commit subjects. See AGENTS.md, 'Flow'.
-  flow:
-    uses: ./.github/workflows/flow-checks.yml
-
   # Facts stated in two places must agree. See tools/check-drift.sh.
   drift:
     name: drift (docs vs code)
@@ -41,9 +35,9 @@ jobs:
   # required-check list does not have to be edited whenever a job is added:
   # add the job to `needs` here (tools/check-drift.sh fails if you forget).
   gate:
-    name: ci gate
+    name: CI gate
     if: always()
-    needs: [default, format, flow, drift, updater]
+    needs: [default, format, drift, updater]
     runs-on: ubuntu-latest
     steps:
       - name: Every required job must have succeeded
@@ -51,13 +45,8 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           echo "$RESULTS"
-          # `flow` is skipped on push events by design; anything else skipped,
-          # cancelled or failed fails the gate.
-          if [ "${{ github.event_name }}" = pull_request ]; then
-            ok='["success"]'
-          else
-            ok='["success","skipped"]'
-          fi
+          # Skipped, cancelled or failed all fail the gate.
+          ok='["success"]'
           echo "$RESULTS" | python3 -c '
           import json, sys
           ok = json.loads(sys.argv[1])

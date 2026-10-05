@@ -15,7 +15,7 @@
 #            "chore(version): bump to X.Y.Z". You then push the branch and open
 #            a pull request for it as for any other change.
 #   tag      After that PR has merged, from an up-to-date main: confirm the
-#            version has no tag yet and that `ci gate` is green on HEAD, then
+#            version has no tag yet and that `CI gate` is green on HEAD, then
 #            push the annotated tag vX.Y.Z. release.yml does the rest and
 #            refuses a tag that disagrees with the CMake version or is not on
 #            main (its `verify` job).
@@ -126,9 +126,9 @@ tag)
 	command -v gh >/dev/null || fail "gh not found"
 	sha="$(git rev-parse HEAD)"
 	state="$(gh api "repos/{owner}/{repo}/commits/$sha/check-runs" \
-		--jq '[.check_runs[] | select(.name == "ci gate")] | map(.conclusion) | .[0] // "missing"')"
-	[ "$state" = success ] || fail "'ci gate' on $sha is '$state', not 'success'; not releasing"
-	echo ">> $tag at $sha: ci gate green"
+		--jq '[.check_runs[] | select(.name == "CI gate")] | map(.conclusion) | .[0] // "missing"')"
+	[ "$state" = success ] || fail "'CI gate' on $sha is '$state', not 'success'; not releasing"
+	echo ">> $tag at $sha: CI gate green"
 	if ((dry_run)); then
 		echo ">> Dry run: nothing tagged."
 		exit 0
