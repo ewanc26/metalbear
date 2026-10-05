@@ -22,8 +22,45 @@ permissions:
   packages: write
 
 jobs:
+  # Gate for everything below. A tag is only releasable if it is vX.Y.Z, equals
+  # the VERSION in CMakeLists.txt, points at a commit on main, and `ci gate`
+  # passed on that commit. tools/release.sh produces such tags; this refuses
+  # one made any other way. A manual dry run has no tag, so the checks that
+  # need one are skipped.
+  verify:
+    name: verify tag
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Tag matches the CMake version and is on main
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag '$tag' is not vX.Y.Z"; exit 1; }
+          version="$(awk '/^project\(/,/\)[[:space:]]*$/' CMakeLists.txt \
+            | sed -n 's/.*VERSION[[:space:]]\{1,\}\([0-9][0-9.]*\).*/\1/p' | head -1)"
+          [ "$tag" = "v$version" ] || { echo "::error::tag $tag but CMakeLists.txt VERSION is $version"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$GITHUB_SHA is not on main"; exit 1; }
+
+      - name: ci gate passed on the tagged commit
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          state="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+            --jq '[.check_runs[] | select(.name == "ci gate")] | map(.conclusion) | .[0] // "missing"')"
+          [ "$state" = success ] || { echo "::error::'ci gate' on $GITHUB_SHA is '$state'"; exit 1; }
+
   binaries:
     name: ${{ matrix.name }}
+    needs: verify
     runs-on: ${{ matrix.runs-on }}
     strategy:
       fail-fast: false
@@ -156,6 +193,7 @@ jobs:
 
   image:
     name: image (${{ matrix.name }})
+    needs: verify
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
