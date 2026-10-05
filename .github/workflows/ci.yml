@@ -4,13 +4,59 @@ on:
   push:
     branches: [main]
   pull_request:
+    # `edited` re-runs the flow check when the title or description changes.
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  # Branch name, PR title and body, commit subjects. See AGENTS.md, 'Flow'.
+  flow:
+    uses: ./.github/workflows/flow-checks.yml
+
+  # Facts stated in two places must agree. See tools/check-drift.sh.
+  drift:
+    name: drift (docs vs code)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: tools/check-drift.sh
+
+  # The one status check branch protection requires. It exists so that the
+  # required-check list does not have to be edited whenever a job is added:
+  # add the job to `needs` here (tools/check-drift.sh fails if you forget).
+  gate:
+    name: ci gate
+    if: always()
+    needs: [default, format, flow, drift]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every required job must have succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          # `flow` is skipped on push events by design; anything else skipped,
+          # cancelled or failed fails the gate.
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            ok='["success"]'
+          else
+            ok='["success","skipped"]'
+          fi
+          echo "$RESULTS" | python3 -c '
+          import json, sys
+          ok = json.loads(sys.argv[1])
+          bad = {k: v["result"] for k, v in json.load(sys.stdin).items() if v["result"] not in ok}
+          if bad:
+              sys.exit(f"gate: not green: {bad}")
+          ' "$ok"
+
   default:
     name: default build + ctest
     runs-on: ubuntu-latest
