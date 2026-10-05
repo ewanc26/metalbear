@@ -13,6 +13,7 @@
 #      depends on every job there that is not informational.
 #   4. The PR template carries the sections flow-check.sh demands.
 #   5. release.yml gates its build jobs on `verify`.
+#   6. The updater's platform names and SHA256SUMS exist in release.yml.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -87,6 +88,13 @@ for k in ("binaries", "image"):
     if "verify" not in n:
         sys.exit(f"drift: release.yml job '{k}' does not need 'verify'")
 PY
+
+# 6. Updater platforms vs release matrix -----------------------------------
+for p in $(grep -o 'echo \(linux\|macos\)-[a-z0-9_]*' pdsadmin/metalbear-update.sh | cut -d' ' -f2 | sort -u); do
+	grep -q "name: $p\$" .github/workflows/release.yml ||
+		err "pdsadmin/metalbear-update.sh expects platform '$p' but release.yml builds no such archive"
+done
+grep -q 'SHA256SUMS' .github/workflows/release.yml || err "release.yml does not publish SHA256SUMS, which the updater needs"
 
 [ "$fail" -eq 0 ] || { echo "drift: FAILED" >&2; exit 1; }
 echo "drift: ok"

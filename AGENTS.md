@@ -38,7 +38,8 @@ Follow this for every change. Rules first, rationale after.
 6. Merge only when the `ci gate` check is green. A red check is never an end state: read the job log, reproduce, root-cause, fix, push, repeat. Never skip, disable or delete a test to get green. A red `main` is fixed before anything else.
 7. Wolfram changes land first; adopt a new Wolfram by bumping the tag in `CMakeLists.txt`, `README.md` and `Dockerfile.devsibling` together, after building and running ctest against it.
 8. Release only with `tools/release.sh` (`prepare`, merge the bump PR, then `tag`), only from a green, merged `main`. Never hand-tag. `release.yml`'s `verify` job refuses a tag that is not `vX.Y.Z`, differs from the CMake VERSION, is not on `main`, or lacks a green `ci gate`.
-9. Do not commit secrets. Do not publish to registries or Vercel from here.
+9. The self-updater is `pdsadmin/metalbear-update.sh`; its inputs are `release.yml`'s archives and `SHA256SUMS[.sig]`. Keep it, `docs/updating.md`, `deploy/systemd/` and `test/update/test_update.sh` in step with any change to release asset names or data layout. It must stay opt-in (check-only by default), refuse to update without a verified backup, roll back on a failed health check, and never read, print or store credentials. Never generate or commit a signing key: it is the repository secret `RELEASE_SIGNING_KEY`, supplied by the owner.
+10. Do not commit secrets. Do not publish to registries or Vercel from here.
 
 Required status check: `ci gate`
 

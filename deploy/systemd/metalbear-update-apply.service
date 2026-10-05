@@ -1,0 +1,10 @@
+[Unit]
+Description=Apply the latest MetalBear release (stops and restarts the server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/metalbear-update.sh apply
+Nice=19
+IOSchedulingClass=idle
