@@ -1,0 +1,13 @@
+[Unit]
+Description=Check for a new MetalBear release (read-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Exit status 10 means "update available", which is not a failure.
+SuccessExitStatus=10
+ExecStart=/usr/local/bin/metalbear-update.sh check
+# A Pi 1 has one core and little RAM; stay out of the server's way.
+Nice=19
+IOSchedulingClass=idle

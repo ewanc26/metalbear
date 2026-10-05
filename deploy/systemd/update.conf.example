@@ -1,0 +1,17 @@
+# /etc/metalbear/update.conf — settings for pdsadmin/metalbear-update.sh.
+# A shell fragment. Every line is optional; the defaults are shown.
+# Keep secrets out of this file: the updater needs none.
+
+SERVICE="metalbear"                           # systemd unit to stop and start
+BIN="/usr/local/bin/metalbear"                # installed binary
+LEXICON_DIR=""                                # installed lexicon corpus, e.g. /usr/local/share/metalbear/lexicons
+DATA_DIR="/var/lib/metalbear"                 # METALBEAR_DATA
+BACKUP_DIR="/var/backups/metalbear"           # pre-update snapshots; needs ~2x the SQLite files free
+HEALTH_URL="http://127.0.0.1:2583/xrpc/_health"
+HEALTH_TIMEOUT=60                             # seconds to wait before rolling back
+
+# Authenticity. Without this only the SHA-256 is checked, which catches
+# corruption but not a compromised release. Point it at an OpenSSH
+# allowed_signers file holding the release public key, one line:
+#   metalbear-release ssh-ed25519 AAAA...
+# SIGNERS_FILE="/etc/metalbear/release-signers"

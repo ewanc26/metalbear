@@ -28,13 +28,22 @@ jobs:
       - uses: actions/checkout@v7
       - run: tools/check-drift.sh
 
+  # pdsadmin/metalbear-update.sh against a local release server and a stub
+  # binary: checksum, signature, backup, rollback. Needs no network.
+  updater:
+    name: updater (local release server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: test/update/test_update.sh
+
   # The one status check branch protection requires. It exists so that the
   # required-check list does not have to be edited whenever a job is added:
   # add the job to `needs` here (tools/check-drift.sh fails if you forget).
   gate:
     name: ci gate
     if: always()
-    needs: [default, format, flow, drift]
+    needs: [default, format, flow, drift, updater]
     runs-on: ubuntu-latest
     steps:
       - name: Every required job must have succeeded

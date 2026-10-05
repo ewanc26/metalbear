@@ -312,6 +312,14 @@ MetalBear does not terminate TLS. Bind it to loopback and put a reverse proxy
 in front, forwarding WebSocket upgrades — without those the firehose will not
 serve and the host will never federate.
 
+### Updating
+
+A prebuilt install can update itself from these releases, only when you run
+it: `pdsadmin/metalbear-update.sh check` reports, `apply` checks the SHA-256
+(and a signature, once one is configured), snapshots the databases, installs,
+and rolls back if the health check fails. How it works, and what has and has
+not been tested, is in [docs/updating.md](docs/updating.md).
+
 ## Build and test
 
 Wolfram's server dependencies are required (`libmicrohttpd`, SQLite,
