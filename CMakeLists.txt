@@ -159,7 +159,7 @@ else()
   FetchContent_Declare(
     wolfram
     GIT_REPOSITORY https://github.com/ewanc26/wolfram.git
-    GIT_TAG v0.25.0
+    GIT_TAG v0.26.0
     GIT_SHALLOW TRUE)
   FetchContent_MakeAvailable(wolfram)
   set(METALBEAR_WOLFRAM_ROOT "${wolfram_SOURCE_DIR}")
