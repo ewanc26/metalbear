@@ -12,7 +12,7 @@
 #   HEAD_SHA   the PR head commit (default HEAD)
 #
 # Checks: branch name, conventional title, template sections present in the
-# body, conventional commit subjects, no empty commits. Everything it reports
+# body, conventional commit subjects, no empty commits, no merge commits. Everything it reports
 # is a rule from AGENTS.md; change them together (tools/check-drift.sh keeps
 # the template and this file in step).
 #
@@ -54,6 +54,12 @@ for s in "${REQUIRED_SECTIONS[@]}"; do
 	if ! grep -qxF "$s" <<<"$PR_BODY"; then
 		err "PR body is missing the section '$s' from .github/PULL_REQUEST_TEMPLATE.md"
 	fi
+done
+
+# Merge commits: PRs are rebase-merged, so a merge commit on the branch would
+# be rewritten or refused. Rebase or cherry-pick onto a fresh branch instead.
+for m in $(git rev-list --merges "$BASE_SHA..$HEAD_SHA"); do
+	err "commit ${m:0:9} is a merge commit; rebase instead (PRs are rebase-merged)"
 done
 
 # Commits: conventional subjects, none empty. Merge commits are skipped.
