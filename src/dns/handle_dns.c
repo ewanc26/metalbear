@@ -3,7 +3,7 @@
 /*
  * handle_dns.c — publish the `_atproto` TXT records that make handles resolve.
  *
- * Three providers are implemented behind one interface. They agree on what has
+ * Four providers are implemented behind one interface. They agree on what has
  * to happen — read the record, write it if it differs, delete it when the
  * account goes — and disagree about nearly everything else: how a record is
  * addressed, whether TXT content is quoted, whether a record even has an
@@ -20,8 +20,10 @@
  *               a name/type pair is one RRset replaced wholesale, TXT content
  *               is stored quoted, absence is a 404 rather than an empty list,
  *               and the minimum TTL is an hour.
+ *   rfc2136     No HTTP and no vendor: a TSIG-signed dynamic update over TCP
+ *               to a nameserver, in handle_dns_rfc2136.c.
  *
- * Reading before writing is what makes all three idempotent. Creating blindly
+ * Reading before writing is what makes all four idempotent. Creating blindly
  * would leave two TXT records at the same name on the second call, and a
  * handle with two conflicting DIDs resolves to neither.
  */
