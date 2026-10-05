@@ -1,0 +1,10 @@
+name: flow
+# The unified-flow checks are Wolfram's; see docs/flow.md there.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  flow:
+    uses: ewanc26/wolfram/.github/workflows/flow-reusable.yml@main

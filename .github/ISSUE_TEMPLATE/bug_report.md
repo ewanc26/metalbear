@@ -5,6 +5,8 @@ title: "[bug]: "
 labels: ["bug"]
 assignees: []
 ---
+<!-- Written by an agent? Use the owner's first person (plain British English, dry, specific: "I've found", "I want") and end with the exact line `_Written by Claude on my behalf._` -->
+
 
 ## Affected area
 Which part of MetalBear? e.g. `server`/routes, `auth`/sessions, `oauth`, `repo_store`,
