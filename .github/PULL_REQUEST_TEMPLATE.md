@@ -13,6 +13,7 @@ follows, or the deployment it unblocks. Link the issue if there is one.
 - [ ] Commits are atomic and conventional (`feat(server)`, `fix(auth)`, `docs(readme)`)
 - [ ] `Co-authored-by:` trailers accurately reflect all contributors, human and AI
 - [ ] No secrets, live credentials, signing keys, or PDS data in the diff
+- [ ] Branch, title and commits follow the flow in AGENTS.md (`tools/flow-check.sh`)
 - [ ] Docs updated if behaviour or configuration changed
 
 ## Protocol parity
