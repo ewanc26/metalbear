@@ -1,0 +1,18 @@
+# Repository metadata: the single source for this repository's description,
+# homepage, topics and features. `core` is identical in all five repos and is
+# drift-checked against Wolfram's copy. The `repo` block is this repo's own.
+#
+# The sandbox the agents work in cannot write repository metadata, so the owner
+# applies it: tools/apply-repo-metadata.sh (see docs/flow.md). CI compares the
+# live values with this file; until `enforce_live` is true that comparison only
+# warns, so a repo is not red for a setting only the owner can change.
+core:
+  topics: [at-protocol, atproto, bluesky, c]
+  has_wiki: false          # docs/ is the source of truth
+  has_discussions: false
+  has_projects: false
+repo:
+  description: "An AT Protocol Personal Data Server written primarily in C and C++."
+  homepage: "https://bear1.croft.click"
+  topics: [atproto, atproto-pds, atprotocol, bluesky, c, clang, pds]
+  enforce_live: false
