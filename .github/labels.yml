@@ -1,0 +1,126 @@
+# Label definitions: the single source for this repository's labels.
+#
+# `core` and `renames` are identical in all five repos of the stack and are
+# drift-checked against Wolfram's copy (tools/repo_sync.py labels check). Change
+# them by PR to Wolfram, then copy them out. A repo adds labels only under
+# `local`, and only `area: <x>` (plus `platform: <x>` in Wolfram). Every label
+# has a description of at most 100 characters. One colour per family: area blue,
+# impact red, workflow yellow, platform purple, triage grey; kinds keep the
+# GitHub defaults' names and colours.
+#
+# Apply with: tools/labels-sync.sh apply   (renames first, then create/update)
+
+core:
+- name: bug
+  color: d73a4a
+  description: Something isn't working
+- name: enhancement
+  color: a2eeef
+  description: New feature or request
+- name: documentation
+  color: 0075ca
+  description: Improvements or additions to documentation
+- name: refactor
+  color: f9d0c4
+  description: Restructuring with no change in behaviour
+- name: test
+  color: c2e0c6
+  description: 'Tests: new, changed or missing coverage'
+- name: chore
+  color: ededed
+  description: Maintenance that is none of the above
+- name: question
+  color: d876e3
+  description: Further information is requested
+- name: 'area: atproto'
+  color: 1d76db
+  description: 'AT Protocol behaviour: XRPC, lexicons, repos, sync, identity'
+- name: 'area: auth'
+  color: 1d76db
+  description: Sign-in, OAuth, sessions and tokens
+- name: 'area: build'
+  color: 1d76db
+  description: Build system and toolchains
+- name: 'area: ci'
+  color: 1d76db
+  description: Continuous integration and release workflows
+- name: 'area: docs'
+  color: 1d76db
+  description: README, docs/ and agent guidance
+- name: 'area: infra'
+  color: 1d76db
+  description: Deployment and hosting
+- name: 'area: ui'
+  color: 1d76db
+  description: Screens, layout and drawing
+- name: 'area: input'
+  color: 1d76db
+  description: Controllers, keyboard, touch and pointer input
+- name: 'area: storage'
+  color: 1d76db
+  description: 'Persistence: databases, files and saved state'
+- name: 'area: network'
+  color: 1d76db
+  description: Transport, TLS and connectivity
+- name: 'area: media'
+  color: 1d76db
+  description: Images, video and audio
+- name: 'area: update'
+  color: 1d76db
+  description: Self-update and release manifests
+- name: 'impact: breaking'
+  color: b60205
+  description: Breaks existing callers or data
+- name: 'impact: performance'
+  color: b60205
+  description: Speed, memory or battery
+- name: 'impact: security'
+  color: b60205
+  description: Security-relevant; report vulnerabilities privately
+- name: 'impact: accessibility'
+  color: b60205
+  description: Affects people using assistive features
+- name: needs-owner
+  color: fbca04
+  description: 'Needs something only the owner can supply: credential, hardware result, decision'
+- name: parity
+  color: fbca04
+  description: Gap or difference between clients
+- name: duplication
+  color: fbca04
+  description: Logic copied between repos that belongs in Wolfram
+- name: duplicate
+  color: cfd3d7
+  description: This issue or pull request already exists
+- name: invalid
+  color: cfd3d7
+  description: This doesn't seem right
+- name: wontfix
+  color: cfd3d7
+  description: This will not be worked on
+- name: good first issue
+  color: cfd3d7
+  description: Good for newcomers
+- name: help wanted
+  color: cfd3d7
+  description: Extra attention is needed
+renames:
+  accessibility: 'impact: accessibility'
+
+# Repo-specific labels.
+local:
+- name: 'platform: desktop'
+  color: 5319e7
+  description: Linux, macOS and Windows hosts
+- name: 'platform: wii'
+  color: 5319e7
+  description: Nintendo Wii
+- name: 'platform: wiiu'
+  color: 5319e7
+  description: Nintendo Wii U
+- name: 'platform: 3ds'
+  color: 5319e7
+  description: Nintendo 3DS
+- name: 'platform: macos9'
+  color: 5319e7
+  description: Classic Mac OS 9
