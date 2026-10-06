@@ -17,10 +17,12 @@
 #
 # How an update is made safe, in order:
 #   1. The release's SHA256SUMS is fetched over HTTPS from github.com only.
-#   2. If SIGNERS_FILE is set, SHA256SUMS.sig must verify against it
-#      (ssh-keygen -Y verify) or the update is refused. Without it only the
-#      SHA-256 is checked, which catches corruption and a swapped asset but not
-#      a compromised release; the script says so every time.
+#   2. SHA256SUMS.sig must verify (ssh-keygen -Y verify) against the release
+#      public key built into this script, or against SIGNERS_FILE if the
+#      operator set one, or the update is refused. An unsigned release is
+#      refused. Only ALLOW_UNSIGNED=1 in the config falls back to the SHA-256
+#      alone, which catches corruption and a swapped asset but not a
+#      compromised release; the script says so every time.
 #   3. The tarball's SHA-256 must match its line in SHA256SUMS.
 #   4. The archive is unpacked into a scratch directory and the new binary must
 #      report the release's version before anything is touched.
@@ -51,8 +53,13 @@ DATA_DIR="/var/lib/metalbear"
 BACKUP_DIR="/var/backups/metalbear"
 HEALTH_URL="http://127.0.0.1:2583/xrpc/_health"
 HEALTH_TIMEOUT=60
-SIGNERS_FILE=""                     # ssh allowed_signers file; empty = SHA-256 only
+# The release signing public key (the private half is only a GitHub Actions
+# secret, RELEASE_SIGNING_KEY). Releases before the one that introduced this
+# are unsigned and cannot be installed with this script unless ALLOW_UNSIGNED=1.
+RELEASE_SIGNER_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICvNnkY9ds73BobaJO7nyfkBeqmaEOdzeF/zevg9/4uB"
+SIGNERS_FILE=""                     # ssh allowed_signers file replacing the built-in key
 SIGNER_IDENTITY="metalbear-release"
+ALLOW_UNSIGNED=0                    # 1 = accept a release with no signature (SHA-256 only)
 STOP_CMD=""                         # default: systemctl stop $SERVICE
 START_CMD=""                        # default: systemctl start $SERVICE
 BASE_URL="https://github.com/${REPO}/releases"
@@ -134,16 +141,21 @@ cmd_check() {
 }
 
 verify_download() { # dir tarball-name
-	local dir="$1" asset="$2"
-	if [ -n "$SIGNERS_FILE" ]; then
-		need ssh-keygen
-		[ -f "$dir/SHA256SUMS.sig" ] || fail "SIGNERS_FILE is set but the release has no SHA256SUMS.sig; refusing"
-		ssh-keygen -Y verify -f "$SIGNERS_FILE" -I "$SIGNER_IDENTITY" -n file \
-			-s "$dir/SHA256SUMS.sig" <"$dir/SHA256SUMS" >/dev/null ||
-			fail "SHA256SUMS signature does not verify against $SIGNERS_FILE; refusing"
-		say "signature verified"
+	local dir="$1" asset="$2" signers
+	if [ "$ALLOW_UNSIGNED" = 1 ] && [ -z "$SIGNERS_FILE" ]; then
+		say "WARNING: ALLOW_UNSIGNED=1; checking SHA-256 only (no authenticity check)"
 	else
-		say "WARNING: SIGNERS_FILE not set; checking SHA-256 only (no authenticity check)"
+		need ssh-keygen
+		signers="$SIGNERS_FILE"
+		if [ -z "$signers" ]; then
+			signers="$dir/allowed_signers"
+			printf '%s %s\n' "$SIGNER_IDENTITY" "$RELEASE_SIGNER_KEY" >"$signers"
+		fi
+		[ -f "$dir/SHA256SUMS.sig" ] || fail "the release has no SHA256SUMS.sig and unsigned releases are refused (ALLOW_UNSIGNED=1 overrides)"
+		ssh-keygen -Y verify -f "$signers" -I "$SIGNER_IDENTITY" -n file \
+			-s "$dir/SHA256SUMS.sig" <"$dir/SHA256SUMS" >/dev/null ||
+			fail "SHA256SUMS signature does not verify; refusing"
+		say "signature verified"
 	fi
 	local want got
 	want="$(awk -v f="$asset" '$2 == f || $2 == "*" f {print $1}' "$dir/SHA256SUMS")"
@@ -209,7 +221,7 @@ cmd_apply() {
 	fetch "${BASE_URL}/download/${target}/${asset}" "$work/$asset"
 	fetch "${BASE_URL}/download/${target}/SHA256SUMS" "$work/SHA256SUMS"
 	# A missing signature is reported by verify_download, not as a bare 404.
-	[ -z "$SIGNERS_FILE" ] || curl -fsSL --proto "$CURL_PROTO" --tlsv1.2 --max-time 60 -o "$work/SHA256SUMS.sig" "${BASE_URL}/download/${target}/SHA256SUMS.sig" 2>/dev/null || true
+	[ "$ALLOW_UNSIGNED" = 1 ] && [ -z "$SIGNERS_FILE" ] || curl -fsSL --proto "$CURL_PROTO" --tlsv1.2 --max-time 60 -o "$work/SHA256SUMS.sig" "${BASE_URL}/download/${target}/SHA256SUMS.sig" 2>/dev/null || true
 	verify_download "$work" "$asset"
 
 	# Refuse archives that could write outside the scratch directory.
