@@ -5,23 +5,14 @@
 <p align="center">
   <a href="https://github.com/ewanc26/metalbear/actions/workflows/ci.yml"><img src="https://github.com/ewanc26/metalbear/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/ewanc26/metalbear/releases/latest"><img src="https://img.shields.io/github/v/release/ewanc26/metalbear?sort=semver" alt="Latest release"></a>
-  <a href="https://github.com/ewanc26/metalbear/pkgs/container/metalbear"><img src="https://img.shields.io/badge/ghcr.io-ewanc26%2Fmetalbear-blue?logo=docker&logoColor=white" alt="Container image"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/ewanc26/metalbear?label=licence" alt="Licence"></a>
   <a href="https://github.com/sponsors/ewanc26"><img src="https://img.shields.io/github/sponsors/ewanc26?logo=githubsponsors&logoColor=white&label=sponsors" alt="Sponsor"></a>
+  <a href="https://github.com/ewanc26/metalbear/pkgs/container/metalbear"><img src="https://img.shields.io/badge/ghcr.io-ewanc26%2Fmetalbear-blue?logo=docker&logoColor=white" alt="Container image"></a>
 </p>
 
 # MetalBear
 
-MetalBear is an AT Protocol Personal Data Server written in C23 and built on
-[Wolfram](https://github.com/ewanc26/wolfram). C is the default language;
-C++ is used for complex or sensitive components where C is insufficient —
-RAII-based resource management (e.g. sqlite3), performance-critical code,
-and third-party library integrations. The public boundary remains a C ABI via
-`extern "C"`; building MetalBear requires both C and C++ compilers, while the
-shipped Linux binary statically carries its C++ runtime support.
-It hosts multiple accounts, mints `did:plc` identities, serves the firehose,
-and federates: MetalBear instances are consumed by Bluesky's relays and their
-posts are indexed by the Bluesky AppView.
+MetalBear is an AT Protocol Personal Data Server written in C23 and built on [Wolfram](https://github.com/ewanc26/wolfram); it hosts multiple accounts and federates with Bluesky's relays and AppView.
 
 ## Core Features
 
@@ -64,188 +55,37 @@ posts are indexed by the Bluesky AppView.
   idempotent finish/abort, and the lexicon's 300,000,000-byte file limit. Older
   Wolfram checkouts remain source-compatible through a buffered adapter.
 
-## Admin Endpoints
+## Status
 
-Admin-gated `com.atproto.admin.*` procedures require HTTP Basic auth with the
-configured admin password:
+MetalBear federates. A running instance is consumed by Bluesky's relays and by
+several third-party ones, its commits verify against the key published in the
+PLC directory, and its posts, profile and media appear on the Bluesky AppView.
 
-- `com.atproto.admin.getAccountInfo` — resolve DID to handle/email/active state
-- `com.atproto.admin.sendEmail` — send templated email to an account
-- `com.atproto.admin.getInviteCodes` — list invite codes with account/use metadata
-- `com.atproto.admin.disableInviteCodes` — disable invite codes by exact code or
-  by account
-- `com.atproto.admin.deleteAccount` — permanently remove an account, its data
-  directory, and its registry entry
-- `com.atproto.admin.updateSubjectStatus` — apply takedown, deactivation, or
-  reactivation status to a repo, record, or blob subject
-- `com.atproto.admin.getSubjectStatus` — read the takedown and deactivation
-  status of a repo, record, or blob subject
-- `com.atproto.admin.updateAccountPassword` — reset an account password (admin)
-- `com.atproto.admin.enableAccountInvites` / `disableAccountInvites` — toggle
-  whether an account may create invite codes
+Per-route request accounting grows on demand up to a 4096-route cap — enough
+for the protocol surface and a host proxying the whole AppView surface — with
+requests beyond the cap still counted under `other` so the totals stay honest.
 
-## Moderation
+## Release stage
 
-`com.atproto.admin.updateSubjectStatus` takes down an **account**, a single
-**record**, or a single **blob**, and lifts the takedown again. A blob is named
-by the DID that holds it as well as by its CID: a CID names content, so two
-accounts uploading identical bytes share one, and a takedown keyed on the CID
-alone would remove the wrong copy.
+MetalBear reports where a given build sits on the [software release life
+cycle](https://en.wikipedia.org/wiki/Software_release_life_cycle) —
+`pre-alpha`, `alpha`, `beta`, `rc`, or `stable` — as a single source of truth
+set at build time, not inferred from the `0.x` version number. It's exposed
+publicly on `/operator.json` (`software.releaseStage`) and the SvelteKit
+frontend's landing page, and on the admin-gated `/_debug/health`
+(`build.releaseStage`), so an operator, a client deciding how much to trust
+an instance, or anyone reading a bug report can see it without guessing.
 
-```sh
-curl -sS -u "admin:$METALBEAR_ADMIN_PASSWORD" -X POST \
-  -H 'Content-Type: application/json' \
-  --data '{"subject":{"$type":"com.atproto.admin.defs#repoRef",
-                      "did":"did:plc:..."},
-           "takedown":{"applied":true,"ref":"report-123"}}' \
-  http://127.0.0.1:2583/xrpc/com.atproto.admin.updateSubjectStatus
-```
+The project's own current stage is set by `METALBEAR_RELEASE_STAGE` in
+`CMakeLists.txt` (default `beta`). Override it per build with
+`-DMETALBEAR_RELEASE_STAGE=<stage>`, or via `--build-arg
+METALBEAR_RELEASE_STAGE=<stage>` / docker-compose's `build.args` for a
+Docker build — useful for a self-hosted deployment that wants to declare a
+different stage than the upstream project's own.
 
-Taking an account down revokes every session it holds, refuses new logins with
-`AccountTakedown`, stops its handle resolving, and announces `takendown` on the
-firehose. Its repository answers `RepoTakendown` — deliberately distinct from
-`RepoDeactivated`, since one is this host refusing to serve and the other the
-account holder's own choice, and a relay decides whether to come back on that
-difference. A taken-down record or blob reads as absent, and the blob cannot be
-re-uploaded to undo the takedown. Nothing is erased: a record stays in the
-repository, because removing it would rewrite history and break the commit
-chain, and it is withheld at the point it would be served.
-
-A takedown outranks a deactivation, so an account that is both reports
-`takendown`. Applying a takedown and a reactivation in one call is refused
-rather than resolved arbitrarily.
-
-## OAuth Authorization Server
-
-Full OAuth 2.0 authorization server endpoints for AT Protocol OAuth flows:
-
-- `GET /.well-known/oauth-authorization-server` - RFC 8414 server metadata
-  with AT Protocol-specific extensions (DPoP, PKCE S256, PAR required)
-- `GET /.well-known/oauth-protected-resource` - RFC 9728 resource metadata
-- `GET /oauth/jwks` - ES256 public JSON Web Key Set
-- `POST /oauth/par` - Pushed Authorization Request (RFC 9126)
-- `GET /oauth/authorize` - Authorization endpoint with auto-approval
-- `POST /oauth/token` - Token endpoint (authorization code + refresh grants)
-- `POST /oauth/revoke` - Token revocation (RFC 7009)
-
-### OAuth Auth Scopes
-
-Granular permission enforcement for OAuth-issued tokens, following the
-AT Protocol OAuth scope specification:
-
-- **Static scopes**: `atproto` (full access), `transition:email`,
-  `transition:generic`, `transition:chat.bsky`
-- **Dynamic repo scopes**: `repo:<collection>?action=<action>` for
-  fine-grained control over record operations
-  - Actions: `create`, `update`, `delete` (default: all)
-  - Wildcard collection: `repo:*` matches any collection
-  - Examples:
-    - `repo:app.bsky.feed.post` - all actions on posts
-    - `repo:app.bsky.feed.post?action=create` - only create posts
-    - `repo:*?action=create&action=update` - create/update any collection
-
-Scope enforcement is applied at the authentication layer for
-`com.atproto.repo.createRecord`, `putRecord`, and `deleteRecord` endpoints.
-Tokens with the `atproto` static scope or a wildcard repo scope with all
-actions retain full access.
-
-## Account Management
-
-- `com.atproto.server.requestAccountDelete` - Request account deletion with
-  email confirmation (when SMTP configured)
-- `com.atproto.server.deleteAccount` - Delete account: revokes all sessions,
-  removes credentials, deactivates account, emits firehose deletion event
-- Account registry for multi-account hosting (database-backed)
-
-## Email Integration
-
-SMTP-based email delivery for account operations:
-
-- Account deletion confirmation emails
-- Password reset emails (when configured)
-- Email verification emails (when configured)
-- Configurable SMTP host, port, authentication, and STARTTLS
-
-## Backups
-
-Repository backup and restore tooling:
-
-- Create compressed backups of all SQLite databases and blob storage
-- Verify backup integrity with CRC32 checksums
-- Restore from backup to a new data directory
-- Automatic directory creation during restore
-
-## Firehose Retention
-
-Automatic pruning of old firehose events:
-
-- Configurable maximum event age (default: 30 days)
-- Minimum event count guarantee (default: 1000 events)
-- Retention applied on server startup
-
-## Key Rotation
-
-- Persistent signing key store with P-256 key generation
-- `metalbear_key_rotation_rotate()` for safe key rotation
-- Keys survive daemon restarts
-
-## Admin CLI
-
-The `pdsadmin/metalbear-admin.sh` script mirrors the reference PDS admin tooling:
-
-```sh
-./pdsadmin/metalbear-admin.sh account list
-./pdsadmin/metalbear-admin.sh account create alice@example.com alice.example.com
-./pdsadmin/metalbear-admin.sh account delete did:plc:...
-./pdsadmin/metalbear-admin.sh account takedown did:plc:...
-./pdsadmin/metalbear-admin.sh account untakedown did:plc:...
-./pdsadmin/metalbear-admin.sh account reset-password did:plc:...
-./pdsadmin/metalbear-admin.sh create-invite-code [useCount]
-./pdsadmin/metalbear-admin.sh request-crawl [RELAY HOST,...]
-```
-
-## Operational
-
-- Per-IP token-bucket rate limiting (100 requests/60 seconds default)
-- Configurable listen address and port
-- Optional email notifications for account operations
-- Automatic firehose event retention
-- Dynamic landing page at `/` listing hosted accounts and version
-
-### Metrics
-
-`GET /metrics` serves the Prometheus text format, behind the same HTTP Basic
-admin credential as the `com.atproto.admin` endpoints — an open endpoint would
-publish a private host's account count and write rate to anyone who asked.
-
-```yaml
-scrape_configs:
-  - job_name: metalbear
-    basic_auth: { username: admin, password: "..." }
-    static_configs:
-      - targets: ["127.0.0.1:2583"]
-```
-
-Counters cover requests and refusals, accounts created and deleted, sessions
-and login failures, commits sequenced, blobs stored, takedowns applied,
-firehose subscribes and disconnects, and DNS and `requestCrawl` failures.
-Gauges report account counts by status, uptime, and the current firehose
-sequence number.
-
-`metalbear_firehose_seq` is the one worth alerting on. A PDS whose sequence has
-stopped advancing while accounts are still writing is indistinguishable, from
-outside, from a PDS that is down.
-
-### Logging
-
-`METALBEAR_LOG_LEVEL` is `debug`, `info` (default), `warn` or `error`, and
-`METALBEAR_LOG_FILE` a path to append to instead of stderr.
-
-`METALBEAR_LOG_FORMAT=json` emits one JSON object per line — `time`, `level`,
-`service`, `message` — for a collector to parse. Anything else keeps the
-human-readable form, which is what a person watching a terminal wants. The
-daemon's own startup and shutdown messages go through the same path, so a JSON
-stream stays parseable even when the server refuses to start.
+The same `/operator.json` document advertises the running binary's multipart
+video capability and exact file/part limits. The landing page reads those
+values rather than carrying a second, potentially stale copy.
 
 ## Install
 
@@ -342,51 +182,6 @@ it: `pdsadmin/metalbear-update.sh check` reports, `apply` checks the SHA-256
 (and a signature, once one is configured), snapshots the databases, installs,
 and rolls back if the health check fails. How it works, and what has and has
 not been tested, is in [docs/updating.md](docs/updating.md).
-
-## Build and test
-
-Wolfram's server dependencies are required (`libmicrohttpd`, SQLite,
-libsecp256k1, OpenSSL, and libcurl).
-
-```sh
-cmake -S . -B build
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-Wolfram is fetched pinned to the released `v0.26.0` tag via CMake's
-FetchContent on the first configure, so no sibling checkout is needed.
-
-Two of its behaviours are worth knowing before writing code against it,
-because both differ from the `v0.22.0` pin this tree was last green against:
-
-- A rejected credential comes back as `WF_ERR_AUTH`, not `WF_ERR_HTTP` — a
-  401, or an `ExpiredToken`/`InvalidToken` error name, when no refresh fixed
-  it. Callers that only care that the call was refused have to accept either;
-  `response.status` is still what says which refusal it was.
-- Clients follow HTTP redirects by default, bounded to five hops. Anything
-  that needs the redirect rather than its destination has to say so: the
-  OAuth browser flow, where `/oauth/authorize` answers with a 302 and a
-  `Location`, calls `wf_xrpc_client_set_max_redirects(client, 0)` first.
-
-Or provision a host end to end — dependencies, build, secrets, a config file,
-and a running daemon:
-
-```sh
-scripts/setup.sh --hostname pds.example.com
-```
-
-Writes `config.yaml` by default; pass `--format toml` for `config.toml`
-instead, or `--config <path>` for a specific filename (e.g. `--config
-bear.yml`) — the dialect is still chosen by its extension.
-
-Re-running is safe: existing secrets are carried over, so a rebuild never
-changes the identity authority that signed DIDs already minted.
-
-Pass `--local` instead of `--hostname` for a local dev instance on
-`http://localhost:2583` — no TLS, DNS, or federation, and accounts mint
-`did:key` instead of `did:plc` so nothing reaches the live PLC directory.
-See [CONTRIBUTING.md](CONTRIBUTING.md#running-a-local-instance).
 
 ## Configuration
 
@@ -594,6 +389,189 @@ curl -sS -X POST -H 'Content-Type: application/json' \
   http://127.0.0.1:2583/xrpc/com.atproto.server.createSession
 ```
 
+## Admin Endpoints
+
+Admin-gated `com.atproto.admin.*` procedures require HTTP Basic auth with the
+configured admin password:
+
+- `com.atproto.admin.getAccountInfo` — resolve DID to handle/email/active state
+- `com.atproto.admin.sendEmail` — send templated email to an account
+- `com.atproto.admin.getInviteCodes` — list invite codes with account/use metadata
+- `com.atproto.admin.disableInviteCodes` — disable invite codes by exact code or
+  by account
+- `com.atproto.admin.deleteAccount` — permanently remove an account, its data
+  directory, and its registry entry
+- `com.atproto.admin.updateSubjectStatus` — apply takedown, deactivation, or
+  reactivation status to a repo, record, or blob subject
+- `com.atproto.admin.getSubjectStatus` — read the takedown and deactivation
+  status of a repo, record, or blob subject
+- `com.atproto.admin.updateAccountPassword` — reset an account password (admin)
+- `com.atproto.admin.enableAccountInvites` / `disableAccountInvites` — toggle
+  whether an account may create invite codes
+
+## Moderation
+
+`com.atproto.admin.updateSubjectStatus` takes down an **account**, a single
+**record**, or a single **blob**, and lifts the takedown again. A blob is named
+by the DID that holds it as well as by its CID: a CID names content, so two
+accounts uploading identical bytes share one, and a takedown keyed on the CID
+alone would remove the wrong copy.
+
+```sh
+curl -sS -u "admin:$METALBEAR_ADMIN_PASSWORD" -X POST \
+  -H 'Content-Type: application/json' \
+  --data '{"subject":{"$type":"com.atproto.admin.defs#repoRef",
+                      "did":"did:plc:..."},
+           "takedown":{"applied":true,"ref":"report-123"}}' \
+  http://127.0.0.1:2583/xrpc/com.atproto.admin.updateSubjectStatus
+```
+
+Taking an account down revokes every session it holds, refuses new logins with
+`AccountTakedown`, stops its handle resolving, and announces `takendown` on the
+firehose. Its repository answers `RepoTakendown` — deliberately distinct from
+`RepoDeactivated`, since one is this host refusing to serve and the other the
+account holder's own choice, and a relay decides whether to come back on that
+difference. A taken-down record or blob reads as absent, and the blob cannot be
+re-uploaded to undo the takedown. Nothing is erased: a record stays in the
+repository, because removing it would rewrite history and break the commit
+chain, and it is withheld at the point it would be served.
+
+A takedown outranks a deactivation, so an account that is both reports
+`takendown`. Applying a takedown and a reactivation in one call is refused
+rather than resolved arbitrarily.
+
+## OAuth Authorization Server
+
+Full OAuth 2.0 authorization server endpoints for AT Protocol OAuth flows:
+
+- `GET /.well-known/oauth-authorization-server` - RFC 8414 server metadata
+  with AT Protocol-specific extensions (DPoP, PKCE S256, PAR required)
+- `GET /.well-known/oauth-protected-resource` - RFC 9728 resource metadata
+- `GET /oauth/jwks` - ES256 public JSON Web Key Set
+- `POST /oauth/par` - Pushed Authorization Request (RFC 9126)
+- `GET /oauth/authorize` - Authorization endpoint with auto-approval
+- `POST /oauth/token` - Token endpoint (authorization code + refresh grants)
+- `POST /oauth/revoke` - Token revocation (RFC 7009)
+
+### OAuth Auth Scopes
+
+Granular permission enforcement for OAuth-issued tokens, following the
+AT Protocol OAuth scope specification:
+
+- **Static scopes**: `atproto` (full access), `transition:email`,
+  `transition:generic`, `transition:chat.bsky`
+- **Dynamic repo scopes**: `repo:<collection>?action=<action>` for
+  fine-grained control over record operations
+  - Actions: `create`, `update`, `delete` (default: all)
+  - Wildcard collection: `repo:*` matches any collection
+  - Examples:
+    - `repo:app.bsky.feed.post` - all actions on posts
+    - `repo:app.bsky.feed.post?action=create` - only create posts
+    - `repo:*?action=create&action=update` - create/update any collection
+
+Scope enforcement is applied at the authentication layer for
+`com.atproto.repo.createRecord`, `putRecord`, and `deleteRecord` endpoints.
+Tokens with the `atproto` static scope or a wildcard repo scope with all
+actions retain full access.
+
+## Account Management
+
+- `com.atproto.server.requestAccountDelete` - Request account deletion with
+  email confirmation (when SMTP configured)
+- `com.atproto.server.deleteAccount` - Delete account: revokes all sessions,
+  removes credentials, deactivates account, emits firehose deletion event
+- Account registry for multi-account hosting (database-backed)
+
+## Email Integration
+
+SMTP-based email delivery for account operations:
+
+- Account deletion confirmation emails
+- Password reset emails (when configured)
+- Email verification emails (when configured)
+- Configurable SMTP host, port, authentication, and STARTTLS
+
+## Backups
+
+Repository backup and restore tooling:
+
+- Create compressed backups of all SQLite databases and blob storage
+- Verify backup integrity with CRC32 checksums
+- Restore from backup to a new data directory
+- Automatic directory creation during restore
+
+## Firehose Retention
+
+Automatic pruning of old firehose events:
+
+- Configurable maximum event age (default: 30 days)
+- Minimum event count guarantee (default: 1000 events)
+- Retention applied on server startup
+
+## Key Rotation
+
+- Persistent signing key store with P-256 key generation
+- `metalbear_key_rotation_rotate()` for safe key rotation
+- Keys survive daemon restarts
+
+## Admin CLI
+
+The `pdsadmin/metalbear-admin.sh` script mirrors the reference PDS admin tooling:
+
+```sh
+./pdsadmin/metalbear-admin.sh account list
+./pdsadmin/metalbear-admin.sh account create alice@example.com alice.example.com
+./pdsadmin/metalbear-admin.sh account delete did:plc:...
+./pdsadmin/metalbear-admin.sh account takedown did:plc:...
+./pdsadmin/metalbear-admin.sh account untakedown did:plc:...
+./pdsadmin/metalbear-admin.sh account reset-password did:plc:...
+./pdsadmin/metalbear-admin.sh create-invite-code [useCount]
+./pdsadmin/metalbear-admin.sh request-crawl [RELAY HOST,...]
+```
+
+## Operational
+
+- Per-IP token-bucket rate limiting (100 requests/60 seconds default)
+- Configurable listen address and port
+- Optional email notifications for account operations
+- Automatic firehose event retention
+- Dynamic landing page at `/` listing hosted accounts and version
+
+### Metrics
+
+`GET /metrics` serves the Prometheus text format, behind the same HTTP Basic
+admin credential as the `com.atproto.admin` endpoints — an open endpoint would
+publish a private host's account count and write rate to anyone who asked.
+
+```yaml
+scrape_configs:
+  - job_name: metalbear
+    basic_auth: { username: admin, password: "..." }
+    static_configs:
+      - targets: ["127.0.0.1:2583"]
+```
+
+Counters cover requests and refusals, accounts created and deleted, sessions
+and login failures, commits sequenced, blobs stored, takedowns applied,
+firehose subscribes and disconnects, and DNS and `requestCrawl` failures.
+Gauges report account counts by status, uptime, and the current firehose
+sequence number.
+
+`metalbear_firehose_seq` is the one worth alerting on. A PDS whose sequence has
+stopped advancing while accounts are still writing is indistinguishable, from
+outside, from a PDS that is down.
+
+### Logging
+
+`METALBEAR_LOG_LEVEL` is `debug`, `info` (default), `warn` or `error`, and
+`METALBEAR_LOG_FILE` a path to append to instead of stderr.
+
+`METALBEAR_LOG_FORMAT=json` emits one JSON object per line — `time`, `level`,
+`service`, `message` — for a collector to parse. Anything else keeps the
+human-readable form, which is what a person watching a terminal wants. The
+daemon's own startup and shutdown messages go through the same path, so a JSON
+stream stays parseable even when the server refuses to start.
+
 ## Performance
 
 Measured on the development host (Apple M-series, 10 cores, Docker), one
@@ -625,44 +603,74 @@ Session JWTs match the upstream legacy PDS claim structure and are signed with
 a per-installation HS256 secret. MetalBear does not terminate TLS: bind it to
 loopback and put a reverse proxy in front.
 
-## Status
-
-MetalBear federates. A running instance is consumed by Bluesky's relays and by
-several third-party ones, its commits verify against the key published in the
-PLC directory, and its posts, profile and media appear on the Bluesky AppView.
-
-Per-route request accounting grows on demand up to a 4096-route cap — enough
-for the protocol surface and a host proxying the whole AppView surface — with
-requests beyond the cap still counted under `other` so the totals stay honest.
-
-## Release stage
-
-MetalBear reports where a given build sits on the [software release life
-cycle](https://en.wikipedia.org/wiki/Software_release_life_cycle) —
-`pre-alpha`, `alpha`, `beta`, `rc`, or `stable` — as a single source of truth
-set at build time, not inferred from the `0.x` version number. It's exposed
-publicly on `/operator.json` (`software.releaseStage`) and the SvelteKit
-frontend's landing page, and on the admin-gated `/_debug/health`
-(`build.releaseStage`), so an operator, a client deciding how much to trust
-an instance, or anyone reading a bug report can see it without guessing.
-
-The project's own current stage is set by `METALBEAR_RELEASE_STAGE` in
-`CMakeLists.txt` (default `beta`). Override it per build with
-`-DMETALBEAR_RELEASE_STAGE=<stage>`, or via `--build-arg
-METALBEAR_RELEASE_STAGE=<stage>` / docker-compose's `build.args` for a
-Docker build — useful for a self-hosted deployment that wants to declare a
-different stage than the upstream project's own.
-
-The same `/operator.json` document advertises the running binary's multipart
-video capability and exact file/part limits. The landing page reads those
-values rather than carrying a second, potentially stale copy.
-
 ## Frontend
 
 `frontend/` holds the browser-facing landing and account UI: SvelteKit,
 prerendered to static files alongside the C23 server and its isolated C++
 modules. It reads the server's own XRPC and operator endpoints in the browser,
 so it reports live state rather than build-time state.
+
+## Build and test
+
+C is the default language. C++ is used where C is not enough: RAII for
+resources such as sqlite3 handles, performance-critical code, and third-party
+library integrations. The public boundary stays a C ABI via `extern "C"`, so
+building MetalBear needs both a C and a C++ compiler, and the shipped Linux
+binary carries its C++ runtime support statically. The server mints `did:plc`
+identities and serves the firehose.
+
+Wolfram's server dependencies are required (`libmicrohttpd`, SQLite,
+libsecp256k1, OpenSSL, and libcurl).
+
+```sh
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Wolfram is fetched pinned to the released `v0.26.0` tag via CMake's
+FetchContent on the first configure, so no sibling checkout is needed.
+
+Two of its behaviours are worth knowing before writing code against it,
+because both differ from the `v0.22.0` pin this tree was last green against:
+
+- A rejected credential comes back as `WF_ERR_AUTH`, not `WF_ERR_HTTP` — a
+  401, or an `ExpiredToken`/`InvalidToken` error name, when no refresh fixed
+  it. Callers that only care that the call was refused have to accept either;
+  `response.status` is still what says which refusal it was.
+- Clients follow HTTP redirects by default, bounded to five hops. Anything
+  that needs the redirect rather than its destination has to say so: the
+  OAuth browser flow, where `/oauth/authorize` answers with a 302 and a
+  `Location`, calls `wf_xrpc_client_set_max_redirects(client, 0)` first.
+
+Or provision a host end to end — dependencies, build, secrets, a config file,
+and a running daemon:
+
+```sh
+scripts/setup.sh --hostname pds.example.com
+```
+
+Writes `config.yaml` by default; pass `--format toml` for `config.toml`
+instead, or `--config <path>` for a specific filename (e.g. `--config
+bear.yml`) — the dialect is still chosen by its extension.
+
+Re-running is safe: existing secrets are carried over, so a rebuild never
+changes the identity authority that signed DIDs already minted.
+
+Pass `--local` instead of `--hostname` for a local dev instance on
+`http://localhost:2583` — no TLS, DNS, or federation, and accounts mint
+`did:key` instead of `did:plc` so nothing reaches the live PLC directory.
+See [CONTRIBUTING.md](CONTRIBUTING.md#running-a-local-instance).
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=ewanc26%2Fmetalbear&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ewanc26/metalbear&type=date&theme=dark&legend=bottom-right" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ewanc26/metalbear&type=date&legend=bottom-right" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ewanc26/metalbear&type=date&legend=bottom-right" />
+ </picture>
+</a>
 
 ## Contributing
 
@@ -692,13 +700,3 @@ in lockstep, and most of the protocol work lands in Wolfram first.
 
 [GNU AGPL-3.0](LICENSE). Running a modified MetalBear as a public PDS obliges
 you to offer its users the corresponding source.
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=ewanc26%2Fmetalbear&type=date&legend=bottom-right">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ewanc26/metalbear&type=date&theme=dark&legend=bottom-right" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ewanc26/metalbear&type=date&legend=bottom-right" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ewanc26/metalbear&type=date&legend=bottom-right" />
- </picture>
-</a>
