@@ -1,0 +1,62 @@
+# Canonical in ewanc26/metalbear; drift-checked in every repo (tools/repo_sync.py forms check).
+name: Bug
+description: 'Something in the code is wrong: a crash, wrong output, a build failure, a protocol mismatch.'
+labels:
+- bug
+body:
+- type: markdown
+  attributes:
+    value: 'Write this in the first person, as the owner: "I''ve found...", "I want...", not "This issue tracks...". If Claude is writing it, the last line is exactly `_Written by Claude on my behalf._`.
+      Security problems never go here: use the private advisory link on the new-issue page.'
+- type: dropdown
+  id: area
+  attributes:
+    label: Area
+    description: Which `area:` label fits. Pick more than one if it spans areas.
+    multiple: true
+    options:
+      # areas:begin (generated from .github/labels.yml; per-repo)
+      - atproto
+      - auth
+      - build
+      - ci
+      - docs
+      - infra
+      - ui
+      - input
+      - storage
+      - network
+      - media
+      - update
+      # areas:end
+  validations:
+    required: true
+- type: textarea
+  id: what
+  attributes:
+    label: What I found
+    description: What happens, and what I expected instead.
+  validations:
+    required: true
+- type: textarea
+  id: repro
+  attributes:
+    label: How to reproduce it
+    description: Steps, inputs and the smallest code that shows it.
+  validations:
+    required: true
+- type: textarea
+  id: where
+  attributes:
+    label: Where it happens
+    description: 'Commit or version, platform (host, emulator, hardware: say which), build options.'
+  validations:
+    required: true
+- type: textarea
+  id: evidence
+  attributes:
+    label: Evidence
+    description: Logs, CI run links, output. Never paste tokens or keys.
+    render: text
+  validations:
+    required: false
