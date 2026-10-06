@@ -10,8 +10,11 @@ BACKUP_DIR="/var/backups/metalbear"           # pre-update snapshots; needs ~2x 
 HEALTH_URL="http://127.0.0.1:2583/xrpc/_health"
 HEALTH_TIMEOUT=60                             # seconds to wait before rolling back
 
-# Authenticity. Without this only the SHA-256 is checked, which catches
-# corruption but not a compromised release. Point it at an OpenSSH
-# allowed_signers file holding the release public key, one line:
+# Authenticity. Releases are signed, and the updater refuses one that is not
+# signed by the release key built into metalbear-update.sh. To trust a different
+# key instead, point this at an OpenSSH allowed_signers file, one line:
 #   metalbear-release ssh-ed25519 AAAA...
 # SIGNERS_FILE="/etc/metalbear/release-signers"
+# Releases before the first signed one have no signature. Set this to 1 to
+# install one anyway, checking the SHA-256 only (no authenticity check):
+# ALLOW_UNSIGNED=0
