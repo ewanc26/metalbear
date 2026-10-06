@@ -717,12 +717,18 @@ int main(void) {
         cJSON *capabilities =
             cJSON_GetObjectItemCaseSensitive(op, "capabilities");
         CHECK(cJSON_IsObject(capabilities));
+#ifdef METALBEAR_MODULE_VIDEO
         CHECK(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(
             capabilities, "multipartVideoUpload")));
         cJSON *max_video =
             cJSON_GetObjectItemCaseSensitive(capabilities, "maxVideoBytes");
         CHECK(cJSON_IsNumber(max_video) &&
               (uint64_t)max_video->valuedouble == METALBEAR_VIDEO_MAX_BYTES);
+#else
+        /* Without the video module the server must not advertise it. */
+        CHECK(!cJSON_GetObjectItemCaseSensitive(capabilities,
+                                                "multipartVideoUpload"));
+#endif
         cJSON_Delete(op);
         wf_response_free(&response);
     }
@@ -1770,6 +1776,7 @@ int main(void) {
           memcmp(response.body, blob_data, sizeof(blob_data)) == 0);
     wf_response_free(&response);
 
+#ifdef METALBEAR_MODULE_VIDEO
     /* app.bsky.video.uploadVideo: store the video as a blob and return an
      * immediately-completed jobStatus carrying the blob ref. */
     CHECK(METALBEAR_VIDEO_MAX_BYTES == UINT64_C(300000000));
@@ -1852,6 +1859,17 @@ int main(void) {
     wf_response_free(&response);
     free(video_job_id);
     free(video_cid);
+#else
+    /* Minimal profile: the video routes are not registered at all. */
+    {
+        const unsigned char video_data[] = {0x00, 0x00, 0x00, 0x18};
+        CHECK(wf_xrpc_upload_blob(client, "app.bsky.video.uploadVideo",
+                                  video_data, sizeof(video_data), "video/mp4",
+                                  &response) != WF_OK);
+        CHECK(response.status != 200);
+        wf_response_free(&response);
+    }
+#endif
 
     char create_body[512];
     snprintf(create_body, sizeof(create_body),
@@ -3069,12 +3087,20 @@ int main(void) {
         free(lmb_token);
         wf_xrpc_client_set_auth(client, NULL);
 
+#ifdef METALBEAR_MODULE_APPVIEW
         /* Registered app.bsky.* endpoints require auth; without a token the
          * auth callback returns 401 before the handler runs. */
         CHECK(wf_xrpc_query(client, "app.bsky.feed.getFeedSkeleton", NULL,
                             &response) == WF_ERR_HTTP);
         CHECK(response.status == 401);
         wf_response_free(&response);
+#else
+        /* Without the AppView module the route is not served at all. */
+        CHECK(wf_xrpc_query(client, "app.bsky.feed.getFeedSkeleton", NULL,
+                            &response) == WF_ERR_HTTP);
+        CHECK(response.status != 200);
+        wf_response_free(&response);
+#endif
 
         wf_xrpc_client_free(client);
         metalbear_server_free(server);
