@@ -1,0 +1,54 @@
+# Canonical in ewanc26/metalbear; drift-checked in every repo (tools/repo_sync.py forms check).
+name: Documentation
+description: Docs that are missing, wrong or unclear.
+labels:
+- documentation
+body:
+- type: markdown
+  attributes:
+    value: 'Write this in the first person, as the owner: "I''ve found...", "I want...", not "This issue tracks...". If Claude is writing it, the last line is exactly `_Written by Claude on my behalf._`.
+      Security problems never go here: use the private advisory link on the new-issue page.'
+- type: dropdown
+  id: area
+  attributes:
+    label: Area
+    description: Which `area:` label fits. Pick more than one if it spans areas.
+    multiple: true
+    options:
+      # areas:begin (generated from .github/labels.yml; per-repo)
+      - atproto
+      - auth
+      - build
+      - ci
+      - docs
+      - infra
+      - ui
+      - input
+      - storage
+      - network
+      - media
+      - update
+      # areas:end
+  validations:
+    required: true
+- type: textarea
+  id: where
+  attributes:
+    label: Where
+    description: The file or page, e.g. README.md or docs/oauth.md.
+  validations:
+    required: true
+- type: textarea
+  id: wrong
+  attributes:
+    label: What's wrong
+    description: What it says now, or what is missing.
+  validations:
+    required: true
+- type: textarea
+  id: should
+  attributes:
+    label: What it should say
+    description: 'And the source for it: code, spec or lexicon.'
+  validations:
+    required: true
