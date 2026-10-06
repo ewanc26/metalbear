@@ -173,6 +173,7 @@ set(METALBEAR_CORE_SOURCES
   cpp/metalbear/account_registry.cpp
   src/account/account_context.c
   src/account/account_cache.c
+  src/account/preferences_routes.c
   src/oauth/auth.c
   src/repo/backup.c
   src/repo/explicit_slurs.c
@@ -379,12 +380,14 @@ if(METALBEAR_BUILD_TESTS)
   target_link_libraries(test_metalbear_registry PRIVATE metalbear_core)
   add_test(NAME metalbear_registry COMMAND test_metalbear_registry)
 
-  add_executable(test_metalbear_video_upload test/test_video_upload.cpp)
-  target_link_libraries(test_metalbear_video_upload PRIVATE metalbear_core
-                                                            SQLite3::SQLite3)
-  target_include_directories(test_metalbear_video_upload
-                             PRIVATE "${METALBEAR_WOLFRAM_ROOT}/test")
-  add_test(NAME metalbear_video_upload COMMAND test_metalbear_video_upload)
+  if(METALBEAR_MODULE_VIDEO)
+    add_executable(test_metalbear_video_upload test/test_video_upload.cpp)
+    target_link_libraries(test_metalbear_video_upload PRIVATE metalbear_core
+                                                              SQLite3::SQLite3)
+    target_include_directories(test_metalbear_video_upload
+                               PRIVATE "${METALBEAR_WOLFRAM_ROOT}/test")
+    add_test(NAME metalbear_video_upload COMMAND test_metalbear_video_upload)
+  endif()
 
   add_executable(test_metalbear_account_cache test/test_account_cache.c)
   target_link_libraries(test_metalbear_account_cache PRIVATE metalbear_core)
@@ -407,34 +410,39 @@ if(METALBEAR_BUILD_TESTS)
           COMMAND test_metalbear_config_file_yaml
           WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
-  # Runs the publisher against a stand-in for the Cloudflare API, so the
-  # requests it would send to a live zone can be asserted on directly.
-  find_path(MICROHTTPD_INCLUDE_DIR NAMES microhttpd.h REQUIRED)
-  find_library(MICROHTTPD_LIBRARY NAMES microhttpd REQUIRED)
-  add_executable(test_metalbear_handle_dns test/test_handle_dns.c)
-  target_link_libraries(
-    test_metalbear_handle_dns PRIVATE metalbear_core ${MICROHTTPD_LIBRARY}
-                                      Threads::Threads)
-  target_include_directories(
-    test_metalbear_handle_dns PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
-                                      ${MICROHTTPD_INCLUDE_DIR})
-  add_test(NAME metalbear_handle_dns COMMAND test_metalbear_handle_dns)
+  # DNS publisher tests need the DNS module (off in the minimal profile).
+  if(METALBEAR_MODULE_DNS)
+    # Runs the publisher against a stand-in for the Cloudflare API, so the
+    # requests it would send to a live zone can be asserted on directly.
+    find_path(MICROHTTPD_INCLUDE_DIR NAMES microhttpd.h REQUIRED)
+    find_library(MICROHTTPD_LIBRARY NAMES microhttpd REQUIRED)
+    add_executable(test_metalbear_handle_dns test/test_handle_dns.c)
+    target_link_libraries(
+      test_metalbear_handle_dns PRIVATE metalbear_core ${MICROHTTPD_LIBRARY}
+                                        Threads::Threads)
+    target_include_directories(
+      test_metalbear_handle_dns PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
+                                        ${MICROHTTPD_INCLUDE_DIR})
+    add_test(NAME metalbear_handle_dns COMMAND test_metalbear_handle_dns)
 
-  add_executable(test_metalbear_handle_dns_rfc2136
-                 test/test_handle_dns_rfc2136.c)
-  target_link_libraries(test_metalbear_handle_dns_rfc2136
-                        PRIVATE metalbear_core Threads::Threads)
-  target_include_directories(test_metalbear_handle_dns_rfc2136
-                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
-  add_test(NAME metalbear_handle_dns_rfc2136
-           COMMAND test_metalbear_handle_dns_rfc2136)
+    add_executable(test_metalbear_handle_dns_rfc2136
+                   test/test_handle_dns_rfc2136.c)
+    target_link_libraries(test_metalbear_handle_dns_rfc2136
+                          PRIVATE metalbear_core Threads::Threads)
+    target_include_directories(test_metalbear_handle_dns_rfc2136
+                               PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_handle_dns_rfc2136
+             COMMAND test_metalbear_handle_dns_rfc2136)
+  endif()
 
-  add_executable(test_metalbear_backup test/test_backup.c)
-  target_link_libraries(test_metalbear_backup PRIVATE metalbear_core
-                                                      SQLite3::SQLite3)
-  target_include_directories(test_metalbear_backup
-                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
-  add_test(NAME metalbear_backup COMMAND test_metalbear_backup)
+  if(METALBEAR_MODULE_EMAIL)
+    add_executable(test_metalbear_backup test/test_backup.c)
+    target_link_libraries(test_metalbear_backup PRIVATE metalbear_core
+                                                        SQLite3::SQLite3)
+    target_include_directories(test_metalbear_backup
+                               PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_backup COMMAND test_metalbear_backup)
+  endif()
 
   add_executable(test_metalbear_multi_account test/test_multi_account.c)
   target_link_libraries(test_metalbear_multi_account PRIVATE metalbear_core
@@ -497,9 +505,11 @@ if(METALBEAR_BUILD_TESTS)
   add_test(NAME metalbear_account_email_tokens
           COMMAND test_metalbear_account_email_tokens)
 
-  add_executable(test_metalbear_email_internal test/test_email_internal.c)
-  target_link_libraries(test_metalbear_email_internal PRIVATE metalbear_core)
-  add_test(NAME metalbear_email_internal COMMAND test_metalbear_email_internal)
+  if(METALBEAR_MODULE_EMAIL)
+    add_executable(test_metalbear_email_internal test/test_email_internal.c)
+    target_link_libraries(test_metalbear_email_internal PRIVATE metalbear_core)
+    add_test(NAME metalbear_email_internal COMMAND test_metalbear_email_internal)
+  endif()
 
   add_executable(test_metalbear_account_email_send_failure
                  test/test_account_email_send_failure.c)
