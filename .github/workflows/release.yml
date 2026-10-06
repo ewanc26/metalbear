@@ -37,7 +37,7 @@ jobs:
     name: verify tag
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write   # to create the tag on a dispatch release
       checks: read
     outputs:
       latest: ${{ steps.latest.outputs.latest }}
