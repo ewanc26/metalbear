@@ -15,4 +15,4 @@ repo:
   description: "An AT Protocol Personal Data Server written primarily in C and C++."
   homepage: "https://bear1.croft.click"
   topics: [atproto, atproto-pds, atprotocol, bluesky, c, clang, pds]
-  enforce_live: false
+  enforce_live: true
