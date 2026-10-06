@@ -31,13 +31,70 @@ jobs:
       - uses: actions/checkout@v7
       - run: test/update/test_update.sh
 
+  # The Pi 1B/Zero configuration (#34): METALBEAR_PROFILE=minimal must build,
+  # start and answer _health, and the sources using 64-bit atomics must compile
+  # for ARMv6Z without needing libatomic. Host x86-64 and a compile-only ARMv6
+  # cross-check; neither proves anything about real Pi hardware.
+  minimal:
+    name: minimal profile + ARMv6 atomics
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config libsqlite3-dev libcurl4-openssl-dev \
+            libssl-dev libsecp256k1-dev libmicrohttpd-dev libzstd-dev zlib1g-dev \
+            libc-ares-dev libidn2-dev libpcre2-dev gcc-arm-linux-gnueabihf
+
+      - name: Configure and build (minimal profile)
+        run: |
+          cmake -S . -B build-min -DCMAKE_BUILD_TYPE=Debug -DMETALBEAR_PROFILE=minimal
+          cmake --build build-min -j"$(nproc)"
+
+      # The five runbook tests from docs/pi1-hardware-validation.md. They hold
+      # under the minimal profile; the full suite runs in the default job, and
+      # some other tests still assume full-profile modules (#61).
+      - name: Runbook tests (minimal profile)
+        run: |
+          ctest --test-dir build-min --output-on-failure --timeout 120 \
+            -R 'metalbear_(server|blob_store|audit_sync|metrics|repo_parallel)$'
+
+      - name: Smoke test the minimal binary
+        run: |
+          mkdir -p /tmp/smoke/data
+          cat > /tmp/smoke/config.toml <<EOF
+          [server]
+          listen      = "127.0.0.1"
+          port        = 2599
+          service_did = "did:web:smoke.example.com"
+          public_url  = "http://127.0.0.1:2599"
+          user_domain = ".smoke.example.com"
+          data        = "/tmp/smoke/data"
+          EOF
+          METALBEAR_CONFIG=/tmp/smoke/config.toml \
+          METALBEAR_LEXICON_DIR=build-min/_deps/wolfram-src/lexicons \
+            ./build-min/metalbear &
+          PID=$!
+          for _ in $(seq 1 30); do
+            sleep 1
+            curl -sf http://127.0.0.1:2599/xrpc/_health >/dev/null && break
+          done
+          curl -sf http://127.0.0.1:2599/xrpc/_health
+          kill $PID
+
+      - name: ARMv6Z atomics (compile-only)
+        run: tools/check-armv6-atomics.sh build-min
+
   # The one status check branch protection requires. It exists so that the
   # required-check list does not have to be edited whenever a job is added:
   # add the job to `needs` here (tools/check-drift.sh fails if you forget).
   gate:
     name: CI gate
     if: always()
-    needs: [default, format, drift, updater]
+    needs: [default, format, drift, updater, minimal]
     runs-on: ubuntu-latest
     steps:
       - name: Every required job must have succeeded
