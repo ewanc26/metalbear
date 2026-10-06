@@ -11,7 +11,8 @@
 # through a green pull request:
 #
 #   prepare  From an up-to-date main: bump VERSION in project() on a new
-#            release/vX.Y.Z branch, build and run ctest against it, commit
+#            release/vX.Y.Z branch, move CHANGELOG.md's Unreleased entries
+#            under the new version, build and run ctest against it, commit
 #            "chore(version): bump to X.Y.Z". You then push the branch and open
 #            a pull request for it as for any other change.
 #   tag      After that PR has merged, from an up-to-date main: confirm the
@@ -89,7 +90,7 @@ prepare)
 		exit 0
 	fi
 	git checkout -q -b "release/v$new"
-	trap 'git checkout -q -- CMakeLists.txt; git checkout -q main; git branch -q -D "release/v$new" 2>/dev/null || true' ERR
+	trap 'git checkout -q -- CMakeLists.txt CHANGELOG.md; git checkout -q main; git branch -q -D "release/v$new" 2>/dev/null || true' ERR
 	python3 - "$new" <<-'PY'
 	import re, sys
 	want = sys.argv[1]
@@ -110,7 +111,20 @@ prepare)
 	cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Debug >/dev/null
 	cmake --build build-release -j"$jobs"
 	ctest --test-dir build-release --output-on-failure -j"$jobs"
-	git add CMakeLists.txt
+	# CHANGELOG.md: the Unreleased section becomes this version's, and a fresh
+	# empty Unreleased goes on top. An empty Unreleased means there is nothing
+	# to release.
+	python3 - "$new" "$(date -u +%Y-%m-%d)" <<-'PY'
+	import re, sys
+	new, day = sys.argv[1], sys.argv[2]
+	text = open("CHANGELOG.md").read()
+	m = re.search(r"^## \[Unreleased\]\n(.*?)(?=^## \[|\Z)", text, re.S | re.M)
+	if not m or not re.search(r"^- ", m.group(1), re.M):
+	    sys.exit("CHANGELOG.md has no entries under [Unreleased]; nothing to release")
+	text = text[:m.start()] + f"## [Unreleased]\n\n## [{new}] - {day}\n" + m.group(1) + text[m.end():]
+	open("CHANGELOG.md", "w").write(text)
+	PY
+	git add CMakeLists.txt CHANGELOG.md
 	git commit -q -m "chore(version): bump to $new"
 	trap - ERR
 	echo ">> Committed on release/v$new. Next: push it, open a PR titled"

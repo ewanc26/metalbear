@@ -25,7 +25,9 @@ comments with new `fix(scope): ...` commits rather than merging `main` in.
 `tools/check-drift.sh` checks the facts the docs and code both state; the flow
 checks themselves are Wolfram's (`flow / conventions`).
 
-Releases go through `tools/release.sh`, never by hand-tagging.
+Releases go through `tools/release.sh`, never by hand-tagging. Anything a user
+or operator would notice gets a line in [CHANGELOG.md](CHANGELOG.md) under
+`[Unreleased]` in the same pull request.
 
 ## Recent direction
 
