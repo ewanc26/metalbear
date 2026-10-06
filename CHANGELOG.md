@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- Every database now records a schema version, and MetalBear refuses to open one written by a newer build instead of migrating it blindly. Existing databases are stamped as version 1 on first start. It only protects a rollback to a build that has this check, so it starts helping with the release after this one. ([#79](https://github.com/ewanc26/metalbear/pull/79))
+
 ## [0.43.0] - 2026-10-06
 
 ### Added

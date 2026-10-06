@@ -49,11 +49,13 @@ only. It refuses a downgrade and anything that is not a `vX.Y.Z` tag.
 ## Why a backup is mandatory
 
 Startup applies schema changes in place (`CREATE TABLE IF NOT EXISTS`, `ALTER
-TABLE ... ADD COLUMN`), and the databases carry no schema version. The script
-therefore cannot tell which releases change the schema, so it treats every
-update as one that might, and refuses to run without a snapshot to return to.
-Recording a schema version would let it say more; that is
-[#56](https://github.com/ewanc26/metalbear/issues/56).
+TABLE ... ADD COLUMN`). Every database now records a schema version in
+SQLite's `user_version`, and a build refuses to open a database written by a
+newer one rather than guess ([#56](https://github.com/ewanc26/metalbear/issues/56)).
+That protects a rollback to a build that has this check, and nothing older:
+binaries before 0.44 do not look. The updater also cannot yet tell which
+release raises the version, so it still treats every update as one that might
+change the schema and refuses to run without a snapshot to return to.
 
 ## Release signing
 

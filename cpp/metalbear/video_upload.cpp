@@ -1,3 +1,4 @@
+#include "metalbear/schema_version.h"
 #include "metalbear/video_upload.h"
 
 #include "wolfram/repo/cid.h"
@@ -326,6 +327,8 @@ wf_status metalbear_video_upload_store_open(
         fs::create_directories(store->parts_directory, error);
         if (error) return WF_ERR_INTERNAL;
         if (sqlite3_open(database_path, &store->db) != SQLITE_OK)
+            return WF_ERR_INTERNAL;
+        if (metalbear_schema_open(store->db, database_path) != WF_OK)
             return WF_ERR_INTERNAL;
         if (!execute(
                 store->db,

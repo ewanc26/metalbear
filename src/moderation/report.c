@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "metalbear/schema_version.h"
 #include "metalbear/moderation/report.h"
 
 #include <pthread.h>
@@ -28,6 +29,7 @@ wf_status metalbear_report_store_open(const char *path,
                         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
                             SQLITE_OPEN_FULLMUTEX,
                         NULL) != SQLITE_OK ||
+        metalbear_schema_open(store->db, path) != WF_OK ||
         sqlite3_exec(
             store->db,
             "PRAGMA journal_mode=WAL;"
