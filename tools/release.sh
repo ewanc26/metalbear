@@ -149,12 +149,14 @@ tag)
 	fi
 	git tag -a "$tag" -m "$tag" "$sha"
 	if ! git push origin "$tag"; then
-		# Some environments (the agents' sandbox) refuse `git push` of a tag but
-		# allow the REST API. Create the same annotated tag there; the push
-		# event it raises is what starts release.yml either way.
+		# Some environments refuse `git push` of a tag. Try the same annotated
+		# tag through the REST API; the push event it raises is what starts
+		# release.yml either way. (The agents' sandbox proxy refuses this too,
+		# in which case the owner pushes the tag: see the needs-owner issue.)
 		echo ">> git push of $tag refused; creating it through the REST API"
 		git tag -d "$tag" >/dev/null
-		slug="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+		# gh repo view uses GraphQL, which some sandboxes block; read the remote.
+		slug="$(git remote get-url origin | sed -E 's#^(git@[^:]+:|https?://[^/]+/)##; s#\.git$##')"
 		obj="$(gh api -X POST "repos/$slug/git/tags" -f tag="$tag" -f message="$tag" \
 			-f object="$sha" -f type=commit --jq .sha)"
 		gh api -X POST "repos/$slug/git/refs" -f ref="refs/tags/$tag" -f sha="$obj" >/dev/null
