@@ -14,7 +14,7 @@ into the next version's. Releases made before it existed are described only by t
 
 ### Changed
 
-- The admin app's icons were Expo's placeholder. They are the bear now, drawn from `docs/logo.svg` by `tools/gen_icons.py` in the house green, and the web favicon uses the same green. ([#65](https://github.com/ewanc26/metalbear/pull/65))
+- The admin app's icons were Expo's placeholder. They are the bear now, drawn from `docs/logo.svg` by `tools/gen_icons.py` in the house green, and the web favicon uses the same green. ([#65](https://github.com/ewanc26/metalbear/pull/67))
 - Container images are tagged with the exact version, the minor and, for the newest stable release only, `latest`. A published version tag is never moved, and each release's notes list the image digests and lead with its CHANGELOG section. The README says how to upgrade a container. ([#63](https://github.com/ewanc26/metalbear/pull/63))
 - Wolfram is pinned to v0.26.0. ([#49](https://github.com/ewanc26/metalbear/pull/49))
 - OAuth scopes are stricter: an `rpc:` method or a `repo:` collection has to be a real NSID now, checked by Wolfram's validator, so `rpc:foo.bar` no longer parses. AT-URIs given to the admin takedown routes are parsed by Wolfram too. ([#59](https://github.com/ewanc26/metalbear/pull/59))
