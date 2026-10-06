@@ -19,6 +19,11 @@ into the next version's. Releases before 0.42.3 are described only by their
 
 ### Changed
 
+- Container images are tagged with the exact version, the minor and, for the
+  newest stable release only, `latest`. A published version tag is never moved,
+  and each release's notes list the image digests and lead with its CHANGELOG
+  section. The README says how to upgrade a container.
+  ([#63](https://github.com/ewanc26/metalbear/pull/63))
 - Wolfram is pinned to v0.26.0. ([#49](https://github.com/ewanc26/metalbear/pull/49))
 - OAuth scopes are stricter: an `rpc:` method or a `repo:` collection has to be
   a real NSID now, checked by Wolfram's validator, so `rpc:foo.bar` no longer
