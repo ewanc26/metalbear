@@ -12,7 +12,8 @@ execute the output or establish its memory envelope.
 ## What CI already checks
 
 CI's `minimal profile + ARMv6 atomics` job builds `METALBEAR_PROFILE=minimal`
-on x86-64, runs the five tests from step 2 below, starts the binary and asks
+on x86-64, runs its whole test suite (tests of modules the profile leaves out
+are not built there), including the five from step 2 below, starts the binary and asks
 it for `_health`. It also compiles every source that uses C11 atomics with
 Debian's `arm-linux-gnueabihf-gcc` and `-marm -march=armv6zk -mfpu=vfp
 -mfloat-abi=hard` (`tools/check-armv6-atomics.sh`), and fails unless each
