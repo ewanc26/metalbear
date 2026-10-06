@@ -9,6 +9,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ### Changed
 
+- Wolfram is pinned to v0.28.0 (was v0.26.0). ([#82](https://github.com/ewanc26/metalbear/pull/82))
+
+### Changed
+
 - Releases are signed, and the updater refuses an unsigned one or one signed by any other key. The private key is only the `RELEASE_SIGNING_KEY` secret; the public half is in `pdsadmin/release-signers` and built into `metalbear-update.sh`. The release workflow now fails rather than publish unsigned, and checks its own signature first. Releases up to v0.43.0 are unsigned, so installing one needs `ALLOW_UNSIGNED=1`. ([#55](https://github.com/ewanc26/metalbear/issues/55))
 
 ### Added
