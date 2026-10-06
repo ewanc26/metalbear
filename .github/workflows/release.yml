@@ -1,17 +1,23 @@
 name: Release
 
 # Prebuilt binaries for Linux and macOS, and a multi-architecture container
-# image. Runs on a version tag, or manually for a dry run that builds and
-# uploads artifacts without publishing a release.
+# image. Three ways in:
+#   - push of a vX.Y.Z tag (tools/release.sh tag);
+#   - manually with `version` set, run from main: `verify` tags main's head
+#     itself with GITHUB_TOKEN, after the same checks, and the rest of this
+#     run builds and publishes. For when a tag cannot be pushed from where the
+#     release is being cut. It never moves or re-creates an existing tag;
+#   - manually with `version` empty: a dry run that builds and uploads
+#     artifacts without publishing anything.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: 'Build artifacts without creating a release'
-        type: boolean
-        default: true
+      version:
+        description: 'Release X.Y.Z from the head of main (empty: dry run)'
+        type: string
+        default: ''
 
 concurrency:
   group: release-${{ github.ref }}
@@ -35,24 +41,43 @@ jobs:
       checks: read
     outputs:
       latest: ${{ steps.latest.outputs.latest }}
+      tag: ${{ steps.which.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Tag matches the CMake version and is on main
-        if: startsWith(github.ref, 'refs/tags/')
+      # What is being released: the pushed tag, or the one this run will
+      # create from `version`. Empty on a dry run.
+      - name: Which tag
+        id: which
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
-          tag="${GITHUB_REF_NAME}"
-          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag '$tag' is not vX.Y.Z"; exit 1; }
+          tag=""
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ -n "$VERSION_INPUT" ]; then
+            [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::a release by dispatch must run from main, not $GITHUB_REF"; exit 1; }
+            tag="v${VERSION_INPUT#v}"
+          fi
+          echo "tag=$tag" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Tag matches the CMake version, has a changelog section, is on main
+        if: steps.which.outputs.tag != ''
+        env:
+          TAG: ${{ steps.which.outputs.tag }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag '$TAG' is not vX.Y.Z"; exit 1; }
           version="$(awk '/^project\(/,/\)[[:space:]]*$/' CMakeLists.txt \
             | sed -n 's/.*VERSION[[:space:]]\{1,\}\([0-9][0-9.]*\).*/\1/p' | head -1)"
-          [ "$tag" = "v$version" ] || { echo "::error::tag $tag but CMakeLists.txt VERSION is $version"; exit 1; }
+          [ "$TAG" = "v$version" ] || { echo "::error::tag $TAG but CMakeLists.txt VERSION is $version"; exit 1; }
+          grep -q "^## \[$version\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no section for $version"; exit 1; }
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
             || { echo "::error::$GITHUB_SHA is not on main"; exit 1; }
 
       - name: CI gate passed on the tagged commit
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.which.outputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -60,13 +85,30 @@ jobs:
             --jq '[.check_runs[] | select(.name == "CI gate")] | map(.conclusion) | .[0] // "missing"')"
           [ "$state" = success ] || { echo "::error::'CI gate' on $GITHUB_SHA is '$state'"; exit 1; }
 
+      # Dispatch only: create the annotated tag at this commit. Refuses if the
+      # tag already exists anywhere; a wrong release gets a new patch.
+      - name: Create the tag (dispatch only)
+        if: github.event_name == 'workflow_dispatch' && steps.which.outputs.tag != ''
+        env:
+          TAG: ${{ steps.which.outputs.tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::$TAG already exists; not re-tagging"; exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
       # `latest` moves only to the newest stable release. A patch cut for an
       # older minor gets its version and minor tags, never `latest`.
       - name: Is this the newest release?
         id: latest
+        env:
+          TAG: ${{ steps.which.outputs.tag }}
         run: |
           newest="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
-          if [ "${GITHUB_REF_NAME}" = "$newest" ]; then echo latest=true; else echo latest=false; fi | tee -a "$GITHUB_OUTPUT"
+          if [ -n "$TAG" ] && [ "$TAG" = "$newest" ]; then echo latest=true; else echo latest=false; fi | tee -a "$GITHUB_OUTPUT"
 
   binaries:
     name: ${{ matrix.name }}
@@ -257,10 +299,10 @@ jobs:
           # The exact version and the minor; `latest` only for the newest
           # stable release (see verify). Suffixes give -alpine and -dev.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ needs.verify.outputs.tag }},enable=${{ needs.verify.outputs.tag != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.verify.outputs.tag }},enable=${{ needs.verify.outputs.tag != '' }}
             type=raw,value=latest,enable=${{ needs.verify.outputs.latest == 'true' }}
-            type=sha,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
+            type=sha,enable=${{ needs.verify.outputs.tag == '' }}
           labels: |
             org.opencontainers.image.licenses=AGPL-3.0-only
             org.opencontainers.image.title=MetalBear${{ matrix.suffix }}
@@ -269,9 +311,11 @@ jobs:
       # A published version tag is never moved to a new digest. If one
       # exists the release is wrong somewhere; cut a new patch instead.
       - name: Refuse to overwrite a published version
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.verify.outputs.tag != ''
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
         run: |
-          ref="ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME#v}${{ matrix.suffix }}"
+          ref="ghcr.io/${{ github.repository }}:${TAG#v}${{ matrix.suffix }}"
           if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
             echo "::error::$ref already exists; not overwriting it"
             exit 1
@@ -327,7 +371,7 @@ jobs:
           file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           platforms: ${{ matrix.platforms }}
-          push: ${{ startsWith(github.ref, 'refs/tags/') }}
+          push: ${{ needs.verify.outputs.tag != '' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
@@ -336,7 +380,7 @@ jobs:
       # Pull what was actually pushed, by digest, and run it. This is the
       # published image, not the local smoke-test build above.
       - name: Pull the published image and check _health
-        if: startsWith(github.ref, 'refs/tags/') && matrix.target == 'runtime'
+        if: needs.verify.outputs.tag != '' && matrix.target == 'runtime'
         run: |
           ref="ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}"
           docker pull "$ref"
@@ -354,24 +398,26 @@ jobs:
           docker rm -f pulled
 
       - name: Record the digest
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.verify.outputs.tag != ''
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
         run: |
           mkdir -p digests
           printf '| `%s` | `%s` | %s |\n' \
-            "${GITHUB_REF_NAME#v}${{ matrix.suffix }}" \
+            "${TAG#v}${{ matrix.suffix }}" \
             "${{ steps.build.outputs.digest }}" \
             "${{ matrix.platforms }}" > "digests/${{ matrix.name }}.md"
 
       - uses: actions/upload-artifact@v7
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.verify.outputs.tag != ''
         with:
           name: digest-${{ matrix.name }}
           path: digests/${{ matrix.name }}.md
 
   release:
     name: publish release
-    needs: [binaries, image]
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [verify, binaries, image]
+    if: needs.verify.outputs.tag != ''
     runs-on: ubuntu-24.04
     steps:
       # docker/metadata-action's `type=semver,pattern={{version}}` tag (what
@@ -381,7 +427,9 @@ jobs:
       # pull would then fail to resolve.
       - name: Compute image tag
         id: tag
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       # Only the named binary artifacts. The image job's buildx runs upload
       # *.dockerbuild attestation artifacts that repeatedly fail to download
@@ -477,5 +525,6 @@ jobs:
             artifacts/*.sha256
             artifacts/SHA256SUMS
             artifacts/SHA256SUMS.sig
+          tag_name: ${{ needs.verify.outputs.tag }}
           body_path: notes.md
           generate_release_notes: true
