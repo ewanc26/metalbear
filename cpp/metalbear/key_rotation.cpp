@@ -1,3 +1,4 @@
+#include "metalbear/schema_version.h"
 #include "metalbear/repo/key_rotation.h"
 
 #include "wolfram/crypto.h"
@@ -42,6 +43,12 @@ wf_status metalbear_key_rotation_open(const char *path,
         return WF_ERR_INTERNAL;
     }
     store->db.reset(raw_db);
+    if (metalbear_schema_open(raw_db, path) != WF_OK) {
+        store->db.reset();
+        pthread_mutex_destroy(&store->mutex);
+        std::free(store);
+        return WF_ERR_INTERNAL;
+    }
     if (sqlite3_exec(store->db.get(),
                      "PRAGMA journal_mode=WAL;"
                      "CREATE TABLE IF NOT EXISTS signing_keys("

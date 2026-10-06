@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "metalbear/schema_version.h"
 #include "metalbear/oauth/auth.h"
 
 #include <cJSON.h>
@@ -377,6 +378,7 @@ wf_status metalbear_auth_store_open(const char *path, const char *service_did,
                         NULL) != SQLITE_OK)
         goto fail;
     chmod(path, 0600);
+    if (metalbear_schema_open(store->db, path) != WF_OK) goto fail;
     if (execute(store->db, "PRAGMA journal_mode=WAL;") != WF_OK ||
         execute(store->db, "PRAGMA foreign_keys=ON;") != WF_OK ||
         execute(

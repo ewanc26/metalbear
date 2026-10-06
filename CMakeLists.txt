@@ -173,6 +173,7 @@ set(METALBEAR_CORE_SOURCES
   cpp/metalbear/account_registry.cpp
   src/account/account_context.c
   src/account/account_cache.c
+  src/storage/schema_version.c
   src/account/preferences_routes.c
   src/oauth/auth.c
   src/repo/backup.c
@@ -662,6 +663,11 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_explicit_slurs
           COMMAND test_metalbear_explicit_slurs)
+
+  add_executable(test_metalbear_schema_version test/test_schema_version.c)
+  target_link_libraries(test_metalbear_schema_version
+                        PRIVATE metalbear_core SQLite3::SQLite3)
+  add_test(NAME metalbear_schema_version COMMAND test_metalbear_schema_version)
 
   add_executable(test_metalbear_metrics test/test_metrics.c)
   target_link_libraries(test_metalbear_metrics PRIVATE metalbear_core)
