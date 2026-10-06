@@ -15,6 +15,7 @@
 #include "oauth/oauth_credentials.h"
 #include "session/session_routes.h"
 #include "account/account_routes.h"
+#include "account/preferences_routes.h"
 #include "sync/sync_routes.h"
 #ifdef METALBEAR_MODULE_APPVIEW
 #include "appview/appview_routes.h"
@@ -2753,6 +2754,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                                           "app.bsky.video.uploadPart",
                                           video_upload_part, server) != WF_OK)
 #endif
+#else
+        /* Without the video module the chain above ends in `||`; close it. */
+        false)
 #endif /* METALBEAR_MODULE_VIDEO */
     {
         LOG_ERROR("cannot register email/invite/video routes");
