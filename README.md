@@ -6,7 +6,7 @@
   <a href="https://github.com/ewanc26/metalbear/actions/workflows/ci.yml"><img src="https://github.com/ewanc26/metalbear/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/ewanc26/metalbear/releases/latest"><img src="https://img.shields.io/github/v/release/ewanc26/metalbear?sort=semver" alt="Latest release"></a>
   <a href="https://github.com/ewanc26/metalbear/pkgs/container/metalbear"><img src="https://img.shields.io/badge/ghcr.io-ewanc26%2Fmetalbear-blue?logo=docker&logoColor=white" alt="Container image"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/ewanc26/metalbear" alt="AGPL-3.0"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/ewanc26/metalbear?label=licence" alt="Licence"></a>
   <a href="https://github.com/sponsors/ewanc26"><img src="https://img.shields.io/github/sponsors/ewanc26?logo=githubsponsors&logoColor=white&label=sponsors" alt="Sponsor"></a>
 </p>
 
@@ -22,8 +22,6 @@ shipped Linux binary statically carries its C++ runtime support.
 It hosts multiple accounts, mints `did:plc` identities, serves the firehose,
 and federates: MetalBear instances are consumed by Bluesky's relays and their
 posts are indexed by the Bluesky AppView.
-
-![version](https://img.shields.io/github/v/release/ewanc26/metalbear?label=version)
 
 ## Core Features
 
