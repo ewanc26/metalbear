@@ -17,6 +17,7 @@
  * restarts.
  */
 
+#include "metalbear/schema_version.h"
 #include "repo_store_internal.h"
 
 #include "metalbear/repo/blob_store.h"
@@ -772,6 +773,10 @@ wf_status metalbear_repo_store_open_with_key(const char *path, const char *did,
                         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
                             SQLITE_OPEN_FULLMUTEX,
                         NULL) != SQLITE_OK) {
+        free_store(s);
+        return WF_ERR_INTERNAL;
+    }
+    if (metalbear_schema_open(s->db, path) != WF_OK) {
         free_store(s);
         return WF_ERR_INTERNAL;
     }
