@@ -20,6 +20,9 @@
 #            push the annotated tag vX.Y.Z. release.yml does the rest and
 #            refuses a tag that disagrees with the CMake version or is not on
 #            main (its `verify` job).
+#            If a tag cannot be pushed from where you are, skip this step and
+#            run the Release workflow by dispatch from main with `version`
+#            set instead; it tags and releases after the same checks.
 #
 #   check-assets  After release.yml has finished: download SHA256SUMS and every
 #            archive it lists from the published release and verify them, the
