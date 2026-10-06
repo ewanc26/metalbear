@@ -28,10 +28,11 @@ you have picked a maintenance window, because applying restarts the server.
 ## What `apply` does
 
 1. Fetches `SHA256SUMS` for the release over HTTPS from github.com.
-2. If `SIGNERS_FILE` is set, verifies `SHA256SUMS.sig` with `ssh-keygen -Y
-   verify` and refuses on any failure, including a missing signature. If it is
-   not set, only the SHA-256 is checked and the script warns each time. That
-   catches corruption and a swapped asset, not a compromised release.
+2. Verifies `SHA256SUMS.sig` with `ssh-keygen -Y verify` against the release
+   key built into the script (or `SIGNERS_FILE`) and refuses on any failure,
+   including a missing signature. Only `ALLOW_UNSIGNED=1` falls back to the
+   SHA-256 alone, with a warning each time; that catches corruption and a
+   swapped asset, not a compromised release.
 3. Checks the tarball against its line in `SHA256SUMS`, rejects archives with
    absolute or `..` paths, and runs the new binary's `--version`, which must
    equal the release.
@@ -59,20 +60,35 @@ change the schema and refuses to run without a snapshot to return to.
 
 ## Release signing
 
-Releases are published with a `SHA256SUMS` file. `release.yml` signs it with
-an OpenSSH ed25519 key when the repository secret `RELEASE_SIGNING_KEY` exists.
-That key has to come from the owner and has not been created yet
-([#55](https://github.com/ewanc26/metalbear/issues/55)), so current
-releases are unsigned. When it exists, put the public half in an
-`allowed_signers` file (`metalbear-release ssh-ed25519 AAAA...`) and set
-`SIGNERS_FILE`. After a release, `tools/release.sh check-assets vX.Y.Z`
-downloads and verifies the published files.
+Releases are published with a `SHA256SUMS` file and a detached OpenSSH ed25519
+signature over it, `SHA256SUMS.sig`, made in `release.yml` with a private key
+that exists only as the repository secret `RELEASE_SIGNING_KEY`. The release
+workflow fails rather than publish without it, and checks its own signature
+against the committed public key before publishing.
+
+The public half is in [`pdsadmin/release-signers`](../pdsadmin/release-signers),
+as an `allowed_signers` line, and is built into `metalbear-update.sh`:
+
+```
+metalbear-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICvNnkY9ds73BobaJO7nyfkBeqmaEOdzeF/zevg9/4uB
+```
+
+The updater refuses a release whose signature does not verify against it, and
+refuses one with no signature. Releases up to and including v0.43.0 are
+unsigned, so `metalbear-update.sh` will not install them unless the operator sets
+`ALLOW_UNSIGNED=1` in `update.conf`, which checks the SHA-256 only and says so.
+To trust a different key, set `SIGNERS_FILE` to an `allowed_signers` file.
+
+If the key ever has to be replaced, the new public key goes into
+`pdsadmin/metalbear-update.sh` and `pdsadmin/release-signers`, and operators need
+the new script, because the updater only trusts the key it has. `tools/release.sh check-assets vX.Y.Z` downloads a release and
+verifies the published files.
 
 ## What has been tested
 
 On a Linux x86-64 host only, against a local release server and a stub binary:
 `test/update/test_update.sh`, run in CI as the `updater` job. It covers check,
-apply, rollback, a corrupt archive, a good, wrong-key and missing signature, a
+apply, rollback, a corrupt archive, a good, wrong-key and missing signature, and the strict default (an unsigned release and one signed by another key are refused), a
 failed health check, a bad tag, a downgrade, and a data directory with no
 SQLite files. It has not run against a real release, a real systemd unit, or
 any Raspberry Pi.

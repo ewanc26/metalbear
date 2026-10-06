@@ -94,7 +94,7 @@ CURL_PROTO="=http"
 REQUIRE_ROOT=0
 STOP_CMD="$T/svc.sh stop"
 START_CMD="$T/svc.sh start"
-${2:-}
+${2:-ALLOW_UNSIGNED=1}
 CONF
 	export METALBEAR_UPDATE_CONF="$T/update.conf" TMPDIR="$T"
 	"$T/svc.sh" stop; "$T/svc.sh" start; sleep 0.5
@@ -116,10 +116,10 @@ setup 0.2.0
 upd check | grep -q "up to date" || die "up-to-date"
 ok "check says up to date"
 
-# 3. successful apply, SHA-256 only (warns), keeps previous binary and a snapshot.
+# 3. successful apply, SHA-256 only (ALLOW_UNSIGNED=1, warns), keeps previous binary and a snapshot.
 setup 0.1.0
 out="$(upd apply 2>&1)" || die "apply failed: $out"
-grep -q "WARNING: SIGNERS_FILE not set" <<<"$out" || die "no sha-only warning"
+grep -q "WARNING: ALLOW_UNSIGNED=1" <<<"$out" || die "no sha-only warning"
 [ "$("$T/inst/metalbear" --version)" = 0.2.0 ] || die "binary not updated"
 [ "$("$T/inst/metalbear.prev" --version)" = 0.1.0 ] || die "previous binary not kept"
 [ "$(cat "$T/lex/x.json")" = lex-v0.2.0 ] || die "lexicons not updated"
@@ -181,5 +181,19 @@ set +e; out="$(upd apply 2>&1)"; rc=$?; set -e
 [ "$("$T/inst/metalbear" --version)" = 0.1.0 ] || die "binary changed without backup"
 curl -fsS -o /dev/null "http://127.0.0.1:$HPORT/xrpc/_health" || die "service left stopped after refused update"
 ok "no backup, no update; service restarted"
+
+# 10. the default is strict: with the built-in release key (no SIGNERS_FILE, no
+# ALLOW_UNSIGNED) a release signed by any other key is refused, and so is an
+# unsigned one. The private half of the built-in key is not available to this
+# test, so only refusals can be checked here.
+mkrelease v0.2.0 ok
+setup 0.1.0 "ALLOW_UNSIGNED=0"
+set +e; out="$(upd apply 2>&1)"; rc=$?; set -e
+[ "$rc" != 0 ] && grep -q "signature does not verify" <<<"$out" && [ "$("$T/inst/metalbear" --version)" = 0.1.0 ] || die "release signed by another key accepted by default: $out"
+rm "$T/rel/download/v0.2.0/SHA256SUMS.sig"
+setup 0.1.0 "ALLOW_UNSIGNED=0"
+set +e; out="$(upd apply 2>&1)"; rc=$?; set -e
+[ "$rc" != 0 ] && grep -q "unsigned releases are refused" <<<"$out" && [ "$("$T/inst/metalbear" --version)" = 0.1.0 ] || die "unsigned release accepted by default: $out"
+ok "default refuses an unsigned release and one signed by another key"
 
 echo "$pass checks passed"

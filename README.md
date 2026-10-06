@@ -179,7 +179,7 @@ serve and the host will never federate.
 
 A prebuilt install can update itself from these releases, only when you run
 it: `pdsadmin/metalbear-update.sh check` reports, `apply` checks the SHA-256
-(and a signature, once one is configured), snapshots the databases, installs,
+and the release signature, snapshots the databases, installs,
 and rolls back if the health check fails. How it works, and what has and has
 not been tested, is in [docs/updating.md](docs/updating.md).
 
