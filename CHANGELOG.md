@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.44.1] - 2026-10-06
+
 ### Fixed
 
 - v0.44.0 was tagged but never published: a mistake in my signing edit left the release workflow invalid, so it started no jobs. The workflow is repaired ([#85](https://github.com/ewanc26/metalbear/pull/85)) and everything in 0.44.0 ships as 0.44.1, the first signed release. The v0.44.0 tag stays where it is; there is no release for it.
