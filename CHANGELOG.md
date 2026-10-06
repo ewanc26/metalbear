@@ -30,5 +30,9 @@ into the next version's. Releases before 0.42.3 are described only by their
 
 ### Fixed
 
+- The minimal build profile, the one meant for a Raspberry Pi 1B or Zero, did
+  not compile. It does now, and CI builds it, runs the Pi checklist's tests
+  against it and checks that the 64-bit atomics compile for ARMv6Z without
+  libatomic. None of that has run on a Pi yet. ([#62](https://github.com/ewanc26/metalbear/pull/62))
 - The README said there were four DNS providers in one place and three in
   another. There are four. ([#50](https://github.com/ewanc26/metalbear/pull/50))
