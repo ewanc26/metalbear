@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-10-06
+
 ### Added
 
 - I can update a prebuilt install from these releases with `pdsadmin/metalbear-update.sh`: it checks the SHA-256 (and a signature, once I have a signing key), snapshots the databases, installs, and rolls back if the health check fails. It does nothing unless asked. See [docs/updating.md](docs/updating.md). ([#57](https://github.com/ewanc26/metalbear/pull/57))
