@@ -25,6 +25,10 @@ NM="${CC%gcc}nm"
 OBJDUMP="${CC%gcc}objdump"
 
 inc=(-Iinclude -Isrc -I"$build/_deps/wolfram-src/include" -I"$build/_deps/cjson-src")
+# Host headers (pcre2.h, sqlite3.h, ...) include arch-specific libc headers
+# from the host multiarch directory; search it last so the cross libc wins.
+host_multiarch="$(gcc -dumpmachine 2>/dev/null || true)"
+[ -d "/usr/include/$host_multiarch" ] && inc+=(-idirafter "/usr/include/$host_multiarch")
 flags=(-std=gnu2x -O2 -marm -march=armv6zk -mfpu=vfp -mfloat-abi=hard -mtune=arm1176jzf-s)
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
