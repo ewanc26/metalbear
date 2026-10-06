@@ -55,13 +55,11 @@ jobs:
           cmake -S . -B build-min -DCMAKE_BUILD_TYPE=Debug -DMETALBEAR_PROFILE=minimal
           cmake --build build-min -j"$(nproc)"
 
-      # The five runbook tests from docs/pi1-hardware-validation.md. They hold
-      # under the minimal profile; the full suite runs in the default job, and
-      # some other tests still assume full-profile modules (#61).
-      - name: Runbook tests (minimal profile)
-        run: |
-          ctest --test-dir build-min --output-on-failure --timeout 120 \
-            -R 'metalbear_(server|blob_store|audit_sync|metrics|repo_parallel)$'
+      # The whole suite, minus the tests of modules the minimal profile leaves
+      # out (those are not built there). The five tests in
+      # docs/pi1-hardware-validation.md are among them.
+      - name: Tests (minimal profile)
+        run: ctest --test-dir build-min --output-on-failure --timeout 120 -j"$(nproc)"
 
       - name: Smoke test the minimal binary
         run: |

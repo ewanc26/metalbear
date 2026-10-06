@@ -482,12 +482,14 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_audit_sync COMMAND test_metalbear_audit_sync)
 
-  add_executable(test_metalbear_audit_identity test/test_audit_identity.c)
-  target_link_libraries(test_metalbear_audit_identity
-                        PRIVATE metalbear_core SQLite3::SQLite3)
-  target_include_directories(test_metalbear_audit_identity
-                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
-  add_test(NAME metalbear_audit_identity COMMAND test_metalbear_audit_identity)
+  if(METALBEAR_MODULE_APPVIEW)
+    add_executable(test_metalbear_audit_identity test/test_audit_identity.c)
+    target_link_libraries(test_metalbear_audit_identity
+                          PRIVATE metalbear_core SQLite3::SQLite3)
+    target_include_directories(test_metalbear_audit_identity
+                               PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_audit_identity COMMAND test_metalbear_audit_identity)
+  endif()
 
   add_executable(test_metalbear_rate_limits test/test_rate_limits.c)
   target_link_libraries(test_metalbear_rate_limits PRIVATE metalbear_core
@@ -511,30 +513,36 @@ if(METALBEAR_BUILD_TESTS)
     add_test(NAME metalbear_email_internal COMMAND test_metalbear_email_internal)
   endif()
 
-  add_executable(test_metalbear_account_email_send_failure
-                 test/test_account_email_send_failure.c)
-  target_link_libraries(test_metalbear_account_email_send_failure
-                        PRIVATE metalbear_core)
-  target_include_directories(test_metalbear_account_email_send_failure
-                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
-  add_test(NAME metalbear_account_email_send_failure
-          COMMAND test_metalbear_account_email_send_failure)
+  if(METALBEAR_MODULE_EMAIL)
+    add_executable(test_metalbear_account_email_send_failure
+                   test/test_account_email_send_failure.c)
+    target_link_libraries(test_metalbear_account_email_send_failure
+                          PRIVATE metalbear_core)
+    target_include_directories(test_metalbear_account_email_send_failure
+                               PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_account_email_send_failure
+            COMMAND test_metalbear_account_email_send_failure)
+  endif()
 
-  add_executable(test_metalbear_proxy test/test_proxy.c)
-  target_link_libraries(test_metalbear_proxy PRIVATE metalbear_core
-                                                     Threads::Threads)
-  target_include_directories(test_metalbear_proxy
-                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
-  add_test(NAME metalbear_proxy COMMAND test_metalbear_proxy)
+  if(METALBEAR_MODULE_APPVIEW)
+    add_executable(test_metalbear_proxy test/test_proxy.c)
+    target_link_libraries(test_metalbear_proxy PRIVATE metalbear_core
+                                                       Threads::Threads)
+    target_include_directories(test_metalbear_proxy
+                               PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_proxy COMMAND test_metalbear_proxy)
+  endif()
 
-  add_executable(test_metalbear_appview_route_classification
-                 test/test_appview_route_classification.c)
-  target_link_libraries(test_metalbear_appview_route_classification
-                        PRIVATE metalbear_core Threads::Threads)
-  target_include_directories(test_metalbear_appview_route_classification
-                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
-  add_test(NAME metalbear_appview_route_classification
-          COMMAND test_metalbear_appview_route_classification)
+  if(METALBEAR_MODULE_APPVIEW)
+    add_executable(test_metalbear_appview_route_classification
+                   test/test_appview_route_classification.c)
+    target_link_libraries(test_metalbear_appview_route_classification
+                          PRIVATE metalbear_core Threads::Threads)
+    target_include_directories(test_metalbear_appview_route_classification
+                               PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_appview_route_classification
+            COMMAND test_metalbear_appview_route_classification)
+  endif()
 
   add_executable(test_metalbear_oauth_device_session
                  test/test_oauth_device_session.c)
@@ -545,12 +553,14 @@ if(METALBEAR_BUILD_TESTS)
   add_test(NAME metalbear_oauth_device_session
            COMMAND test_metalbear_oauth_device_session)
 
-  add_executable(test_metalbear_oauth_passkey test/test_oauth_passkey.c)
-  target_link_libraries(test_metalbear_oauth_passkey
-                        PRIVATE metalbear_core OpenSSL::Crypto)
-  target_include_directories(test_metalbear_oauth_passkey
-                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
-  add_test(NAME metalbear_oauth_passkey COMMAND test_metalbear_oauth_passkey)
+  if(METALBEAR_MODULE_WEBAUTHN)
+    add_executable(test_metalbear_oauth_passkey test/test_oauth_passkey.c)
+    target_link_libraries(test_metalbear_oauth_passkey
+                          PRIVATE metalbear_core OpenSSL::Crypto)
+    target_include_directories(test_metalbear_oauth_passkey
+                               PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_oauth_passkey COMMAND test_metalbear_oauth_passkey)
+  endif()
 
   add_executable(test_metalbear_oauth_multi_device_session
                  test/test_oauth_multi_device_session.c)
