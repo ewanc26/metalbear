@@ -261,13 +261,38 @@ docker run -d --name metalbear -p 2583:2583 -v metalbear-data:/data \
 Mount a config file (TOML or YAML) and set `METALBEAR_CONFIG` to configure it
 as a file instead; environment variables override whatever the file says.
 
-Three variants are published:
+Three variants are published, each under three kinds of tag: the exact
+version (`0.43.0`), the minor (`0.43`, which follows its latest patch), and
+`latest`, which only ever points at the newest stable release:
 
 | Tag | Base | Size | Platforms |
 | --- | --- | --- | --- |
-| `latest`, `0.7.0` | Debian bookworm-slim | ~168 MB | `amd64`, `arm64` |
-| `latest-alpine`, `0.7.0-alpine` | Alpine 3.21 (musl) | ~40 MB | `amd64`, `arm64`, `arm/v7` |
-| `latest-dev`, `0.7.0-dev` | Debian + toolchain | ~1.2 GB | `amd64`, `arm64` |
+| `latest`, `0.43`, `0.43.0` | Debian bookworm-slim | ~168 MB | `amd64`, `arm64` |
+| `latest-alpine`, `0.43-alpine`, `0.43.0-alpine` | Alpine 3.21 (musl) | ~40 MB | `amd64`, `arm64`, `arm/v7` |
+| `latest-dev`, `0.43-dev`, `0.43.0-dev` | Debian + toolchain | ~1.2 GB | `amd64`, `arm64` |
+
+A version tag is never moved once it is published, so pinning `0.43.0` gets
+you the same image every time; each release's notes list the digests. There
+is no ARMv6 image, so a Raspberry Pi 1B or Zero builds from source (see
+[docs/pi1-hardware-validation.md](docs/pi1-hardware-validation.md)). The
+`arm/v7` Alpine image is for 32-bit ARMv7 boards.
+
+To upgrade, pull the new tag and recreate the container with the same volume;
+the data lives in `/data`, not in the image:
+
+```sh
+docker pull ghcr.io/ewanc26/metalbear:0.43
+docker stop metalbear && docker rm metalbear
+docker run -d --name metalbear -p 2583:2583 -v metalbear-data:/data \
+  -e METALBEAR_SERVICE_DID=did:web:pds.example.com \
+  -e METALBEAR_USER_DOMAIN=.pds.example.com \
+  ghcr.io/ewanc26/metalbear:0.43
+```
+
+Snapshot the volume first if the release notes mention a storage change: the
+databases are migrated in place on startup, and an older image is not
+guaranteed to read them afterwards
+([#56](https://github.com/ewanc26/metalbear/issues/56)).
 
 The Alpine image is the same server built against musl. Use it to try
 MetalBear out or where image size matters; prefer the Debian one where you
