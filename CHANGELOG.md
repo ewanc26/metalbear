@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-06
+
 ### Changed
 
 - Wolfram is pinned to v0.28.0 (was v0.26.0). ([#82](https://github.com/ewanc26/metalbear/pull/82))
