@@ -9,6 +9,22 @@ Run it on a real Raspberry Pi 1B or Zero, not QEMU.  Cross-compilation proves
 that the linker accepted the target; it cannot prove that an ARMv6 CPU will
 execute the output or establish its memory envelope.
 
+## What CI already checks
+
+CI's `minimal profile + ARMv6 atomics` job builds `METALBEAR_PROFILE=minimal`
+on x86-64, runs the five tests from step 2 below, starts the binary and asks
+it for `_health`. It also compiles every source that uses C11 atomics with
+Debian's `arm-linux-gnueabihf-gcc` and `-marm -march=armv6zk -mfpu=vfp
+-mfloat-abi=hard` (`tools/check-armv6-atomics.sh`), and fails unless each
+object is tagged `v6KZ`/`VFPv2` and calls no `__atomic_*` helper. As a check
+on the check, the same files built for plain `-march=armv6` need
+`__atomic_fetch_add_8` and friends, which is why `armv6zk` matters.
+
+None of that runs on a Pi. It says the minimal profile compiles and the
+atomics are lowered inline; it says nothing about `SIGILL`, memory or speed on
+an ARM1176. Those are what the steps below are for. Until this job existed the
+minimal profile did not compile at all.
+
 ## Evidence to record
 
 Put the following in the #34 closing comment (or a dated attachment):
