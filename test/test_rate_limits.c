@@ -129,6 +129,7 @@ static int run_create_account_limit(wf_xrpc_client *client) {
     return failures == failures_before ? 0 : 1;
 }
 
+#ifdef METALBEAR_MODULE_WEBAUTHN
 /* passkey authenticate/verify's route-specific budget is 30/300s, IP-keyed
  * -- unlike createAccount/createSession this is a plain HTTP route
  * (registered via wf_xrpc_server_register_http_route, not an XRPC
@@ -172,6 +173,7 @@ static int run_passkey_authenticate_limit(wf_xrpc_client *client,
 
     return failures == failures_before ? 0 : 1;
 }
+#endif /* METALBEAR_MODULE_WEBAUTHN */
 
 /* createSession's tighter tier is 30/300s, keyed by "<identifier>-<ip>".
  * Wrong-password attempts for one identifier must not affect a different
@@ -470,12 +472,14 @@ int main(void) {
             printf("PASS: createAccount rate limit (100/300s, IP-keyed)\n");
         }
 
+#ifdef METALBEAR_MODULE_WEBAUTHN
         if (run_passkey_authenticate_limit(client, base) != 0) {
             fprintf(stderr, "passkey authenticate rate limit test failed\n");
         } else {
             printf("PASS: passkey authenticate rate limit (30/300s, "
                    "IP-keyed)\n");
         }
+#endif
 
         wf_xrpc_client_free(client);
     }
