@@ -14,6 +14,7 @@
 #   5. release.yml gates its build jobs on `verify`.
 #   6. The updater's platform names and SHA256SUMS exist in release.yml.
 #   7. No new local copies of Wolfram primitives.
+#   8. frontend/'s bear SVGs contain every rect of docs/logo.svg.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -100,6 +101,18 @@ dup '^(static )?[a-z_ ]*\bis_nsid_char\(' '' 'use wf_syntax_nsid_is_valid'
 # base64url: Wolfram's decoder is laxer than auth.c's strict one; tracked in
 # a Wolfram issue, so only auth.c may carry the copy.
 dup '^(static )?[a-z_ ]*\*?\bbase64url_(en|de)code\(' 'src/oauth/auth.c' 'use wf_crypto_base64url_encode/decode'
+
+# 8. One bear -----------------------------------------------------------------
+python3 - <<'PY' || fail=1
+import re, sys
+def rects(p):
+    return set(re.findall(r'<rect x="(-?\d+)" y="(-?\d+)" width="(\d+)" height="(\d+)"', open(p).read()))
+logo = rects("docs/logo.svg")
+for p in ("frontend/src/lib/assets/bear.svg", "frontend/src/lib/assets/favicon.svg"):
+    missing = logo - rects(p)
+    if missing:
+        sys.exit(f"drift: {p} is missing {len(missing)} rect(s) of docs/logo.svg; the frontend bear must match it")
+PY
 
 [ "$fail" -eq 0 ] || { echo "drift: FAILED" >&2; exit 1; }
 echo "drift: ok"

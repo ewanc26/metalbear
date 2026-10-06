@@ -19,6 +19,9 @@ into the next version's. Releases before 0.42.3 are described only by their
 
 ### Changed
 
+- The admin app's icons were Expo's placeholder. They are the bear now, drawn
+  from `docs/logo.svg` by `tools/gen_icons.py` in the house green, and the web
+  favicon uses the same green. ([#64](https://github.com/ewanc26/metalbear/pull/64))
 - Wolfram is pinned to v0.26.0. ([#49](https://github.com/ewanc26/metalbear/pull/49))
 - OAuth scopes are stricter: an `rpc:` method or a `repo:` collection has to be
   a real NSID now, checked by Wolfram's validator, so `rpc:foo.bar` no longer
