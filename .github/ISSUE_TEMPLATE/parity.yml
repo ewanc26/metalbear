@@ -1,0 +1,55 @@
+# Canonical in ewanc26/metalbear; drift-checked in every repo (tools/repo_sync.py forms check).
+name: Parity gap
+description: Something one client does that another doesn't, or does differently.
+labels:
+- enhancement
+- parity
+body:
+- type: markdown
+  attributes:
+    value: 'Write this in the first person, as the owner: "I''ve found...", "I want...", not "This issue tracks...". If Claude is writing it, the last line is exactly `_Written by Claude on my behalf._`.
+      Security problems never go here: use the private advisory link on the new-issue page.'
+- type: dropdown
+  id: area
+  attributes:
+    label: Area
+    description: Which `area:` label fits. Pick more than one if it spans areas.
+    multiple: true
+    options:
+      # areas:begin (generated from .github/labels.yml; per-repo)
+      - atproto
+      - auth
+      - build
+      - ci
+      - docs
+      - infra
+      - ui
+      - input
+      - storage
+      - network
+      - media
+      - update
+      # areas:end
+  validations:
+    required: true
+- type: textarea
+  id: gap
+  attributes:
+    label: The gap
+    description: What the other client does, and what this one does instead. Link the code in both.
+  validations:
+    required: true
+- type: textarea
+  id: want
+  attributes:
+    label: What I want
+    description: Match it, deliberately differ (and why), or move the shared part into Wolfram.
+  validations:
+    required: true
+- type: textarea
+  id: verified
+  attributes:
+    label: How it was compared
+    description: Host, emulator or hardware, and which versions.
+  validations:
+    required: true
