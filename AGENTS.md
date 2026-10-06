@@ -39,9 +39,11 @@ This block is byte-identical in every repo of the stack and is drift-checked by 
 - Never force-push, so a PR branch is never rebased locally, and never merge main into a PR branch (a merge commit breaks the rebase merge; the flow check fails it). If a PR is behind or conflicted and GitHub can still rebase-merge it cleanly, merge it once CI is green on the current head. Otherwise cut a fresh branch from main, cherry-pick the commits, open a new PR linking the old one, and close the old one with a comment.
 - Never merge red. Never force-push. Never skip, disable or delete a test to get green: read the job log, reproduce, fix the root cause, wait, repeat. A red main is fixed before anything else.
 - Update AGENTS.md, README and docs/ in the same PR as the change. AGENTS.md is imperative and exact; README and docs are user-facing prose.
+- Label every issue: exactly one kind (bug, enhancement, documentation, refactor, test, chore, question) and at least one `area: <x>`. The taxonomy is `.github/labels.yml` (canonical in wolfram, drift-checked as `flow / labels and metadata`); add a label there, never ad hoc. Repository description, homepage, topics and features are `.github/repo-metadata.yml`; the owner applies it with `tools/apply-repo-metadata.sh`, because agents cannot write repository metadata.
 - State exactly what was verified and where (host, emulator, hardware). Never claim hardware you did not use.
 - Releases go through the repo's own release script only, and only after every consumer in the stack has been verified against the change.
 - Anything only the owner can supply (credentials, hardware results, money, irreversible actions): file an issue labelled `needs-owner` and move on.
+- READMEs and logos follow `docs/house-style.md` (wolfram), checked by `flow / style`.
 - No secrets in the repo or its CI. No Vercel. No registry publishing.
 <!-- flow:end -->
 
