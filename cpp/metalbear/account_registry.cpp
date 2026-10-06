@@ -1,3 +1,4 @@
+#include "metalbear/schema_version.h"
 #include "metalbear/account/account_registry.h"
 
 #include <pthread.h>
@@ -68,6 +69,12 @@ wf_status metalbear_account_registry_open(const char *path,
         return WF_ERR_INTERNAL;
     }
     reg->db.reset(raw_db);
+    if (metalbear_schema_open(raw_db, path) != WF_OK) {
+        reg->db.reset();
+        pthread_mutex_destroy(&reg->mutex);
+        std::free(reg);
+        return WF_ERR_INTERNAL;
+    }
     if (sqlite3_exec(reg->db.get(),
                      "PRAGMA journal_mode=WAL;"
                      "CREATE TABLE IF NOT EXISTS accounts("

@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "metalbear/schema_version.h"
 #include "metalbear/sequencer.h"
 #include "metalbear/ops/metrics.h"
 
@@ -379,6 +380,7 @@ wf_status metalbear_sequencer_open(const char *path,
         return WF_ERR_INTERNAL;
     }
     if (sqlite3_open(path, &s->db) != SQLITE_OK ||
+        metalbear_schema_open(s->db, path) != WF_OK ||
         sqlite3_exec(
             s->db,
             "PRAGMA journal_mode=WAL;"
