@@ -33,6 +33,8 @@ jobs:
     permissions:
       contents: read
       checks: read
+    outputs:
+      latest: ${{ steps.latest.outputs.latest }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -57,6 +59,14 @@ jobs:
           state="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
             --jq '[.check_runs[] | select(.name == "CI gate")] | map(.conclusion) | .[0] // "missing"')"
           [ "$state" = success ] || { echo "::error::'CI gate' on $GITHUB_SHA is '$state'"; exit 1; }
+
+      # `latest` moves only to the newest stable release. A patch cut for an
+      # older minor gets its version and minor tags, never `latest`.
+      - name: Is this the newest release?
+        id: latest
+        run: |
+          newest="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          if [ "${GITHUB_REF_NAME}" = "$newest" ]; then echo latest=true; else echo latest=false; fi | tee -a "$GITHUB_OUTPUT"
 
   binaries:
     name: ${{ matrix.name }}
@@ -206,7 +216,6 @@ jobs:
             target: runtime
             platforms: linux/amd64,linux/arm64
             suffix: ''
-            flavor: 'latest=auto'
           # Alpine, musl. Roughly a quarter the size, at the cost of a
           # different resolver and smaller default stacks.
           - name: alpine
@@ -214,7 +223,6 @@ jobs:
             target: runtime
             platforms: linux/amd64,linux/arm64,linux/arm/v7
             suffix: '-alpine'
-            flavor: 'latest=false'
           # Toolchain, sources and the test suite, for poking at the server
           # without setting up a build host.
           - name: dev
@@ -222,7 +230,6 @@ jobs:
             target: dev
             platforms: linux/amd64,linux/arm64
             suffix: '-dev'
-            flavor: 'latest=false'
 
     steps:
       - uses: actions/checkout@v7
@@ -245,13 +252,31 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           flavor: |
-            ${{ matrix.flavor }}
+            latest=false
             suffix=${{ matrix.suffix }},onlatest=true
+          # The exact version and the minor; `latest` only for the newest
+          # stable release (see verify). Suffixes give -alpine and -dev.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ matrix.name == 'alpine' || matrix.name == 'dev' }}
+            type=raw,value=latest,enable=${{ needs.verify.outputs.latest == 'true' }}
             type=sha,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
+          labels: |
+            org.opencontainers.image.licenses=AGPL-3.0-only
+            org.opencontainers.image.title=MetalBear${{ matrix.suffix }}
+            org.opencontainers.image.description=AT Protocol Personal Data Server written in C, built on Wolfram
+
+      # A published version tag is never moved to a new digest. If one
+      # exists the release is wrong somewhere; cut a new patch instead.
+      - name: Refuse to overwrite a published version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          ref="ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME#v}${{ matrix.suffix }}"
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "::error::$ref already exists; not overwriting it"
+            exit 1
+          fi
+          echo "$ref is new"
 
       # The multi-platform build below only pushes; buildx cannot --load a
       # multi-arch manifest, so nothing before this ever actually ran the
@@ -291,6 +316,7 @@ jobs:
           docker rm -f smoke-${{ matrix.name }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           # The context is the parent directory holding the MetalBear checkout,
@@ -306,6 +332,41 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # Pull what was actually pushed, by digest, and run it. This is the
+      # published image, not the local smoke-test build above.
+      - name: Pull the published image and check _health
+        if: startsWith(github.ref, 'refs/tags/') && matrix.target == 'runtime'
+        run: |
+          ref="ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}"
+          docker pull "$ref"
+          docker inspect --format '{{ json .Config.Labels }}' "$ref"
+          docker run -d --name pulled -p 12584:2583 \
+            -e METALBEAR_SERVICE_DID=did:web:smoke.example.com \
+            -e METALBEAR_PUBLIC_URL=http://127.0.0.1:12584 \
+            -e METALBEAR_USER_DOMAIN=.smoke.example.com \
+            "$ref"
+          for _ in $(seq 1 30); do
+            sleep 1
+            curl -sf http://127.0.0.1:12584/xrpc/_health && break
+          done
+          curl -sf http://127.0.0.1:12584/xrpc/_health || { docker logs pulled; exit 1; }
+          docker rm -f pulled
+
+      - name: Record the digest
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          mkdir -p digests
+          printf '| `%s` | `%s` | %s |\n' \
+            "${GITHUB_REF_NAME#v}${{ matrix.suffix }}" \
+            "${{ steps.build.outputs.digest }}" \
+            "${{ matrix.platforms }}" > "digests/${{ matrix.name }}.md"
+
+      - uses: actions/upload-artifact@v7
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: digest-${{ matrix.name }}
+          path: digests/${{ matrix.name }}.md
 
   release:
     name: publish release
@@ -355,6 +416,59 @@ jobs:
             echo "::warning::RELEASE_SIGNING_KEY is not set; publishing SHA256SUMS unsigned"
           fi
 
+      - uses: actions/checkout@v7
+        with:
+          path: MetalBear
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: digests
+          pattern: digest-*
+          merge-multiple: true
+
+      # Notes: this version's CHANGELOG section (in my words), then the image
+      # digests and what each archive is for.
+      - name: Release notes
+        run: |
+          v="${{ steps.tag.outputs.version }}"
+          {
+            awk -v v="$v" '
+              $0 ~ "^## \\[" v "\\]" {on=1; next}
+              on && /^## \[/ {exit}
+              on {print}
+            ' MetalBear/CHANGELOG.md
+            cat <<EOF
+
+          ## Container image
+
+          \`\`\`sh
+          docker pull ghcr.io/${{ github.repository }}:$v
+          \`\`\`
+
+          | Tag | Digest | Platforms |
+          | --- | --- | --- |
+          EOF
+            cat digests/*.md
+            cat <<'EOF'
+
+          There is no image for the Raspberry Pi 1B or Zero (ARMv6): build from
+          source with the minimal profile, see docs/pi1-hardware-validation.md.
+          The Alpine image's `linux/arm/v7` covers 32-bit ARMv7 boards only.
+
+          ## Binaries
+
+          Prebuilt for Linux (x86_64, aarch64) and macOS (arm64). Each archive
+          holds the binary, the lexicon corpus records are validated against,
+          an example configuration, and a note on the runtime libraries it
+          expects. `SHA256SUMS` covers every archive and is what
+          `pdsadmin/metalbear-update.sh` checks. There is no Intel macOS build.
+
+          MetalBear does not terminate TLS: bind it to loopback and put a
+          reverse proxy in front, forwarding WebSocket upgrades.
+          EOF
+          } | sed 's/^          //' > notes.md
+          cat notes.md
+
       - name: Publish
         uses: softprops/action-gh-release@v3
         with:
@@ -363,25 +477,5 @@ jobs:
             artifacts/*.sha256
             artifacts/SHA256SUMS
             artifacts/SHA256SUMS.sig
+          body_path: notes.md
           generate_release_notes: true
-          body: |
-            ## Container image
-
-            ```sh
-            docker pull ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.version }}
-            ```
-
-            Built for `linux/amd64` and `linux/arm64`.
-
-            ## Binaries
-
-            Prebuilt for Linux (x86_64, aarch64) and macOS (arm64). Each
-            archive contains the binary, the lexicon corpus records are
-            validated against, an example configuration, and the runtime
-            libraries it expects. Verify with the accompanying `.sha256`.
-
-            There is no Intel macOS build: GitHub's last x86_64 macOS runner is
-            being retired. Build from source on an Intel Mac.
-
-            MetalBear does not terminate TLS: bind it to loopback and put a
-            reverse proxy in front, forwarding WebSocket upgrades.
