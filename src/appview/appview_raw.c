@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 /* ------------------------------------------------------------------ */
 /* Read-after-write                                                     */
 /* ------------------------------------------------------------------ */
@@ -28,7 +27,6 @@
  * body is not the shape we expect, or the rev looks like it belongs to another
  * repo, a stale view is always preferable to a wrong one.
  */
-
 
 /* Build the PostView the AppView would have produced for a local post.
  * Counts are zero because the post is, by construction, brand new. */
@@ -195,9 +193,9 @@ void append_profile_record_fields(cJSON *view, const cJSON *record) {
  * through untouched.
  */
 char *read_after_write_munge(metalbear_server *server,
-                                    const char *requester_did, const char *nsid,
-                                    const char *repo_rev, const char *body,
-                                    size_t body_len, wf_xrpc_response *resp) {
+                             const char *requester_did, const char *nsid,
+                             const char *repo_rev, const char *body,
+                             size_t body_len, wf_xrpc_response *resp) {
     static const char *const feed_methods[] = {
         "app.bsky.feed.getTimeline",
         "app.bsky.feed.getAuthorFeed",
