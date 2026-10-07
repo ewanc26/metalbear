@@ -25,56 +25,6 @@ static void stop_handler(int signal_number) {
     stopping = 1;
 }
 
-static char *encode_did_for_dir(const char *did) {
-    size_t need = 1;
-    for (const char *p = did; *p; p++) need += (*p == ':') ? 1 : 1;
-    char *enc = malloc(need);
-    if (!enc) return NULL;
-    size_t j = 0;
-    for (const char *p = did; *p; p++) enc[j++] = (*p == ':') ? '_' : *p;
-    enc[j] = '\0';
-    return enc;
-}
-
-static bool make_directory(const char *path) {
-    if (mkdir(path, 0700) == 0) return true;
-    struct stat st;
-    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-}
-
-/* Build the on-disk account directory path for `did` under the data root.
- * Heap-allocated; caller frees. */
-static char *account_dir_for_did(const metalbear_config *config,
-                                 const char *did) {
-    char *enc_did = encode_did_for_dir(did);
-    if (!enc_did) return NULL;
-    size_t root_len = strlen(config->data_directory);
-    size_t enc_len = strlen(enc_did);
-    bool root_slash =
-        root_len > 0 && config->data_directory[root_len - 1] == '/';
-    size_t n = root_len + (root_slash ? 0 : 1) + enc_len + 1;
-    char *dir = malloc(n);
-    if (dir)
-        snprintf(dir, n, "%s%s%s", config->data_directory,
-                 root_slash ? "" : "/", enc_did);
-    free(enc_did);
-    return dir;
-}
-
-/* Join a filename onto a directory. Heap-allocated; caller frees. */
-static char *path_join(const char *dir, const char *name) {
-    size_t n = strlen(dir) + 1 + strlen(name) + 1;
-    char *p = malloc(n);
-    if (p) snprintf(p, n, "%s/%s", dir, name);
-    return p;
-}
-
-static const char *required_env(const char *name) {
-    const char *value = getenv(name);
-    if (!value || !value[0]) LOG_ERROR("missing required %s", name);
-    return value;
-}
-
 /*
  * Validate an operator-supplied DID before it becomes an account identity.
  *
@@ -90,7 +40,7 @@ static const char *required_env(const char *name) {
  * rule. Returns 0 and logs when the value is unusable.
  */
 static int did_env_is_usable(const char *name, const char *value) {
-    if (!value || !value[0]) return 0; /* required_env already complained */
+    if (!value || !value[0]) return 0; /* the caller reports a missing value */
 
     if (!wf_syntax_did_is_valid(value)) {
         LOG_ERROR("%s is not a valid DID: %s", name, value);
