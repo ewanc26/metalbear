@@ -219,7 +219,9 @@ if(METALBEAR_MODULE_VIDEO)
     src/video/video_routes.c cpp/metalbear/video_upload.cpp)
 endif()
 if(METALBEAR_MODULE_APPVIEW)
-  list(APPEND METALBEAR_CORE_SOURCES src/appview/appview_routes.c)
+  list(APPEND METALBEAR_CORE_SOURCES src/appview/appview_routes.c
+       src/appview/appview_proxy_http.c src/appview/appview_resolve.c
+       src/appview/appview_raw.c)
 endif()
 if(METALBEAR_MODULE_WEBAUTHN)
   list(APPEND METALBEAR_CORE_SOURCES src/oauth/webauthn.c)
