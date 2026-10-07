@@ -190,6 +190,9 @@ set(METALBEAR_CORE_SOURCES
   src/repo/did_document.c
   src/sequencer.c
   src/server.c
+  src/server_auth.c
+  src/server_guards.c
+  src/server_identity.c
   src/admin/admin_routes.c
   src/identity/identity_routes.c
   src/session/session_routes.c
