@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Changed
+
+- MetalBear builds against Wolfram v0.34.0 (was v0.28.0). ([#92](https://github.com/ewanc26/metalbear/pull/92))
+
 ## [0.44.0] - 2026-10-06
 
 This is the first signed release. An earlier tag and release of this number, and a 0.44.1, were withdrawn: the release workflow had a mistake of mine that stopped it publishing, and the repaired one is what built this.
