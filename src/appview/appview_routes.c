@@ -53,7 +53,8 @@ static wf_status proxy_appview(metalbear_server *server,
     }
 
     appview_proxy_reply reply;
-    bool sent = appview_proxy_exchange(req, target, service_token, resp, &reply);
+    bool sent =
+        appview_proxy_exchange(req, target, service_token, resp, &reply);
     free(service_token);
     if (!sent) return WF_OK;
 
@@ -134,7 +135,8 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
     }
 
     appview_proxy_reply reply;
-    bool sent = appview_proxy_exchange(req, target, service_token, resp, &reply);
+    bool sent =
+        appview_proxy_exchange(req, target, service_token, resp, &reply);
     free(service_token);
     if (!sent) return WF_OK;
     appview_proxy_reply_send(resp, &reply, NULL);
