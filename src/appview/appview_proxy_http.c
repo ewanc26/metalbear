@@ -10,7 +10,7 @@
 #include <strings.h>
 
 size_t appview_proxy_write_cb(char *ptr, size_t size, size_t nmemb,
-                             void *userdata) {
+                              void *userdata) {
     proxy_buf_t *buf = (proxy_buf_t *)userdata;
     size_t total = size * nmemb;
     if (buf->len + total + 1 > buf->cap) {
@@ -67,7 +67,7 @@ void appview_proxy_headers_free(proxy_headers *h) {
  * labelers/retry-after) plus atproto-repo-rev (used internally for the
  * read-after-write munge and forwarded like the reference). */
 size_t appview_proxy_header_cb(char *ptr, size_t size, size_t nmemb,
-                              void *userdata) {
+                               void *userdata) {
     proxy_headers *out = (proxy_headers *)userdata;
     size_t total = size * nmemb;
     const char *val;
@@ -102,7 +102,7 @@ size_t appview_proxy_header_cb(char *ptr, size_t size, size_t nmemb,
  * labeler/retry signalling. Content-Type is owned by the response's own
  * content_type field; the rest ride the generic header list. */
 void appview_proxy_forward_response_headers(wf_xrpc_response *resp,
-                                           const proxy_headers *h) {
+                                            const proxy_headers *h) {
     if (!resp || !h) return;
     if (h->content_encoding)
         (void)wf_xrpc_response_add_header(resp, "Content-Encoding",
@@ -125,7 +125,7 @@ void appview_proxy_forward_response_headers(wf_xrpc_response *resp,
  * defaulting to identity, accept-language, atproto-accept-labelers, x-bsky-
  * topics, and every x-atproto-* header verbatim). Returns true on success. */
 bool appview_proxy_forward_request_headers(const wf_xrpc_request *req,
-                                          struct curl_slist **hdrs) {
+                                           struct curl_slist **hdrs) {
     const char *enc = (req->accept_encoding && req->accept_encoding[0])
                           ? req->accept_encoding
                           : "identity";

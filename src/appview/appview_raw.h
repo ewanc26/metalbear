@@ -22,10 +22,10 @@ void append_profile_record_fields(cJSON *view, const cJSON *record);
 /* Patch `body` with the requester's records newer than `repo_rev`. Returns a
  * heap-allocated replacement body, or NULL to send the upstream response
  * through untouched. */
-char *read_after_write_munge(metalbear_server *server, const char *requester_did,
-                             const char *nsid, const char *repo_rev,
-                             const char *body, size_t body_len,
-                             wf_xrpc_response *resp);
+char *read_after_write_munge(metalbear_server *server,
+                             const char *requester_did, const char *nsid,
+                             const char *repo_rev, const char *body,
+                             size_t body_len, wf_xrpc_response *resp);
 
 #ifdef __cplusplus
 }
