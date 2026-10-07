@@ -274,6 +274,24 @@ bool assert_repo_available(metalbear_server *server,
                            const wf_xrpc_request *request,
                            wf_xrpc_response *response);
 
+/* server_auth.c, server_guards.c and server_identity.c: what server.c wires in.
+ */
+void metalbear_account_cache_request_observer(void *ctx, const char *nsid,
+                                              const char *path,
+                                              const char *method,
+                                              unsigned int status);
+wf_status metalbear_authenticate(wf_xrpc_request *req, void *ctx);
+wf_status metalbear_repo_resolver(void *ctx, const wf_xrpc_request *req,
+                                  metalbear_repo_store **out_repo,
+                                  metalbear_blob_store **out_blobs);
+bool metalbear_repo_access_guard(void *ctx, const wf_xrpc_request *req,
+                                 const char *record_uri,
+                                 wf_xrpc_response *resp);
+wf_status metalbear_get_service_auth(void *ctx, const wf_xrpc_request *request,
+                                     wf_xrpc_response *response);
+char *metalbear_public_url_from_service_did(const char *did);
+wf_status metalbear_register_identity_documents(metalbear_server *server);
+
 #ifdef __cplusplus
 }
 #endif
