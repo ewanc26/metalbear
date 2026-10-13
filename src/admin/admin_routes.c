@@ -10,6 +10,7 @@
 
 #include "admin_routes.h"
 
+#include "../route_params.h"
 #include "../server_internal.h"
 
 #include "metalbear/account/account.h"
@@ -107,18 +108,6 @@ static cJSON *build_invite_code_json(metalbear_server *server,
                             entry->uses_remaining + (int)use_count);
     cJSON_AddItemToObject(obj, "uses", uses);
     return obj;
-}
-
-/* True when item is a non-empty string. Otherwise sets a 400 InvalidRequest
- * "<name> is required" on the response, which is what every required string
- * parameter reports. */
-static bool require_string(wf_xrpc_response *response, const cJSON *item,
-                           const char *name) {
-    if (cJSON_IsString(item) && item->valuestring[0]) return true;
-    char msg[128];
-    snprintf(msg, sizeof(msg), "%s is required", name);
-    wf_xrpc_response_set_error(response, 400, "InvalidRequest", msg);
-    return false;
 }
 
 /* ---- com.atproto.admin.getAccountInfo (query, admin-gated) ----
