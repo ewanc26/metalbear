@@ -54,9 +54,11 @@ TABLE ... ADD COLUMN`). Every database now records a schema version in
 SQLite's `user_version`, and a build refuses to open a database written by a
 newer one rather than guess ([#56](https://github.com/ewanc26/metalbear/issues/56)).
 That protects a rollback to a build that has this check, and nothing older:
-binaries before 0.44 do not look. The updater also cannot yet tell which
-release raises the version, so it still treats every update as one that might
-change the schema and refuses to run without a snapshot to return to.
+binaries before 0.44 do not look. `metalbear --version` prints the schema
+number on its second line (`schema N`), and `metalbear-update.sh apply` logs
+whether a release changes it. The snapshot is still taken for every update,
+because a rollback needs one; skipping it when the schema is unchanged is a
+separate decision, not yet made.
 
 ## Release signing
 

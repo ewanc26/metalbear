@@ -233,6 +233,17 @@ cmd_apply() {
 	[ -x "$work/new/metalbear" ] || fail "archive has no metalbear binary"
 	[ "$("$work/new/metalbear" --version | head -1)" = "${target#v}" ] ||
 		fail "new binary reports a different version than $target; refusing"
+	# Report whether this release changes the database schema. The snapshot is
+	# still taken either way: rollback needs it, and this line only says why.
+	new_schema="$("$work/new/metalbear" --version | sed -n 's/^schema //p')"
+	cur_schema="$("$BIN" --version 2>/dev/null | sed -n 's/^schema //p')"
+	if [ -z "$new_schema" ]; then
+		say "$target does not report a schema version (built before #56)"
+	elif [ "$new_schema" = "$cur_schema" ]; then
+		say "$target keeps database schema $new_schema"
+	else
+		say "$target changes database schema ${cur_schema:-unknown} -> $new_schema"
+	fi
 
 	mkdir -p "$BACKUP_DIR"
 	local stamp snap
