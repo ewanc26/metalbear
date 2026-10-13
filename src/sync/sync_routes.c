@@ -4,6 +4,7 @@
 #include "metalbear/log.h"
 #include "metalbear/ops/metrics.h"
 #include "wolfram/xrpc.h"
+#include "../route_params.h"
 
 #include <cJSON.h>
 #include <pthread.h>
@@ -362,21 +363,9 @@ wf_status get_record(void *ctx, const wf_xrpc_request *request,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "as")
             : NULL;
-    if (!cJSON_IsString(did) || !did->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "did is required");
-        return WF_OK;
-    }
-    if (!cJSON_IsString(collection) || !collection->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "collection is required");
-        return WF_OK;
-    }
-    if (!cJSON_IsString(rkey) || !rkey->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "rkey is required");
-        return WF_OK;
-    }
+    if (!require_string(response, did, "did")) return WF_OK;
+    if (!require_string(response, collection, "collection")) return WF_OK;
+    if (!require_string(response, rkey, "rkey")) return WF_OK;
     metalbear_account_context *acct = resolve_request_context(server, request);
     if (!assert_repo_available(server, acct, request, response)) return WF_OK;
     unsigned char *data = NULL;
@@ -531,11 +520,7 @@ wf_status request_crawl(void *ctx, const wf_xrpc_request *request,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "hostname")
             : NULL;
-    if (!cJSON_IsString(hostname) || !hostname->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "hostname is required");
-        return WF_OK;
-    }
+    if (!require_string(response, hostname, "hostname")) return WF_OK;
     /* Echo the exact body we received to each crawler so its own
      * validation/forwarding is authoritative. */
     char *body = request->body && request->body_len
@@ -763,11 +748,7 @@ wf_status list_repos_by_collection(void *ctx, const wf_xrpc_request *request,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "collection")
             : NULL;
-    if (!cJSON_IsString(coll) || !coll->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "collection is required");
-        return WF_OK;
-    }
+    if (!require_string(response, coll, "collection")) return WF_OK;
     int limit = query_param_int(request->params, "limit", 500, 1, 2000);
     const cJSON *cursor_param =
         request->params
