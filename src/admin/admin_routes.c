@@ -109,6 +109,18 @@ static cJSON *build_invite_code_json(metalbear_server *server,
     return obj;
 }
 
+/* True when item is a non-empty string. Otherwise sets a 400 InvalidRequest
+ * "<name> is required" on the response, which is what every required string
+ * parameter reports. */
+static bool require_string(wf_xrpc_response *response, const cJSON *item,
+                           const char *name) {
+    if (cJSON_IsString(item) && item->valuestring[0]) return true;
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s is required", name);
+    wf_xrpc_response_set_error(response, 400, "InvalidRequest", msg);
+    return false;
+}
+
 /* ---- com.atproto.admin.getAccountInfo (query, admin-gated) ----
  * Mirrors refpds `pdsadmin account list`: look the DID up in the
  * registry and return its did/handle/email/active. Unknown DID is
@@ -119,11 +131,7 @@ wf_status admin_get_account_info(void *ctx, const wf_xrpc_request *request,
     cJSON *did = request->params
                      ? cJSON_GetObjectItemCaseSensitive(request->params, "did")
                      : NULL;
-    if (!cJSON_IsString(did) || !did->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "did is required");
-        return WF_OK;
-    }
+    if (!require_string(response, did, "did")) return WF_OK;
     metalbear_account_entry *entry = NULL;
     if (metalbear_account_registry_find_by_did(
             server->registry, did->valuestring, &entry) != WF_OK ||
@@ -491,16 +499,8 @@ wf_status admin_send_email(void *ctx, const wf_xrpc_request *request,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "subject")
             : NULL;
-    if (!cJSON_IsString(recipient) || !recipient->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "recipientDid is required");
-        return WF_OK;
-    }
-    if (!cJSON_IsString(content) || !content->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "content is required");
-        return WF_OK;
-    }
+    if (!require_string(response, recipient, "recipientDid")) return WF_OK;
+    if (!require_string(response, content, "content")) return WF_OK;
     /* Look up the recipient's email. */
     metalbear_account_entry *entry = NULL;
     if (metalbear_account_registry_find_by_did(
@@ -668,16 +668,8 @@ wf_status admin_update_account_handle(void *ctx, const wf_xrpc_request *request,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "handle")
             : NULL;
-    if (!cJSON_IsString(did) || !did->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "did is required");
-        return WF_OK;
-    }
-    if (!cJSON_IsString(handle) || !handle->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "handle is required");
-        return WF_OK;
-    }
+    if (!require_string(response, did, "did")) return WF_OK;
+    if (!require_string(response, handle, "handle")) return WF_OK;
     /* Same syntax check the self-service update_handle route applies
      * (identity_routes.c) -- an admin override must not be able to set a
      * handle the account holder themselves could never set, matching the
@@ -796,11 +788,7 @@ wf_status admin_update_account_email(void *ctx, const wf_xrpc_request *request,
                                    "account (DID or handle) is required");
         return WF_OK;
     }
-    if (!cJSON_IsString(email) || !email->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "email is required");
-        return WF_OK;
-    }
+    if (!require_string(response, email, "email")) return WF_OK;
     /* Resolve to DID. */
     metalbear_account_entry *entry = NULL;
     wf_status lookup = metalbear_account_registry_find_by_did(
@@ -857,16 +845,8 @@ wf_status admin_update_account_password(void *ctx,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "password")
             : NULL;
-    if (!cJSON_IsString(did) || !did->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "did is required");
-        return WF_OK;
-    }
-    if (!cJSON_IsString(password) || !password->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "password is required");
-        return WF_OK;
-    }
+    if (!require_string(response, did, "did")) return WF_OK;
+    if (!require_string(response, password, "password")) return WF_OK;
     /* Match the reference's NEW_PASSWORD_MAX_LENGTH ceiling
      * (updateAccountPassword.ts:26-28, scrypt.ts:6). */
     if (strlen(password->valuestring) > 256) {
@@ -926,11 +906,7 @@ wf_status admin_enable_account_invites(void *ctx,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "account")
             : NULL;
-    if (!cJSON_IsString(account) || !account->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "account is required");
-        return WF_OK;
-    }
+    if (!require_string(response, account, "account")) return WF_OK;
     metalbear_account_context *acct =
         context_for_did(server, account->valuestring);
     if (!acct) {
@@ -957,11 +933,7 @@ wf_status admin_disable_account_invites(void *ctx,
         request->params
             ? cJSON_GetObjectItemCaseSensitive(request->params, "account")
             : NULL;
-    if (!cJSON_IsString(account) || !account->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "account is required");
-        return WF_OK;
-    }
+    if (!require_string(response, account, "account")) return WF_OK;
     metalbear_account_context *acct =
         context_for_did(server, account->valuestring);
     if (!acct) {
@@ -1172,11 +1144,7 @@ wf_status admin_delete_account(void *ctx, const wf_xrpc_request *request,
     cJSON *did = request->params
                      ? cJSON_GetObjectItemCaseSensitive(request->params, "did")
                      : NULL;
-    if (!cJSON_IsString(did) || !did->valuestring[0]) {
-        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
-                                   "did is required");
-        return WF_OK;
-    }
+    if (!require_string(response, did, "did")) return WF_OK;
     metalbear_account_entry *entry = NULL;
     if (metalbear_account_registry_find_by_did(
             server->registry, did->valuestring, &entry) != WF_OK ||
