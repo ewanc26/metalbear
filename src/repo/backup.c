@@ -152,114 +152,102 @@ wf_status metalbear_backup_create(const char *data_directory,
     return WF_OK;
 }
 
-wf_status metalbear_backup_restore(const char *input_path,
-                                   const char *data_directory) {
-    if (!input_path || !data_directory) return WF_ERR_INVALID_ARG;
-    FILE *backup_file = fopen(input_path, "rb");
-    if (!backup_file) return WF_ERR_NOT_FOUND;
+/* Walks the entries of an open backup: checks the header, then for each
+ * entry reads it and its data, checks the size cap and the CRC, and hands
+ * the verified entry to visit. Restore and verify differ only in what visit
+ * does with a verified entry. */
+typedef wf_status (*backup_visit_fn)(const backup_file_entry *entry,
+                                     const unsigned char *data, void *ctx);
+
+static wf_status backup_walk(FILE *backup_file, backup_visit_fn visit,
+                             void *ctx) {
     backup_header header = {0};
     if (fread(&header, sizeof(header), 1, backup_file) != 1 ||
         strcmp(header.magic, BACKUP_MAGIC) != 0) {
-        fclose(backup_file);
         return WF_ERR_INVALID_ARG;
     }
     for (uint32_t i = 0; i < header.file_count; i++) {
         backup_file_entry entry = {0};
         if (fread(&entry, sizeof(entry), 1, backup_file) != 1) {
-            fclose(backup_file);
             return WF_ERR_INTERNAL;
         }
         if (entry.size > 100 * 1024 * 1024) {
-            fclose(backup_file);
             return WF_ERR_INVALID_ARG;
         }
         unsigned char *data = malloc(entry.size);
         if (!data) {
-            fclose(backup_file);
             return WF_ERR_ALLOC;
         }
         if (fread(data, 1, entry.size, backup_file) != entry.size) {
             free(data);
-            fclose(backup_file);
             return WF_ERR_INTERNAL;
         }
         if (crc32_compute(data, entry.size) != entry.crc32) {
             free(data);
-            fclose(backup_file);
             return WF_ERR_INVALID_ARG;
         }
-        char full_path[MAX_PATH_LENGTH];
-        int path_len = snprintf(full_path, sizeof(full_path), "%s/%s",
-                                data_directory, entry.path);
-        if (path_len < 0 || (size_t)path_len >= sizeof(full_path)) {
-            free(data);
-            fclose(backup_file);
-            return WF_ERR_INTERNAL;
-        }
-        char dir_part[MAX_PATH_LENGTH];
-        strncpy(dir_part, full_path, sizeof(dir_part) - 1);
-        dir_part[sizeof(dir_part) - 1] = '\0';
-        char *last_slash = strrchr(dir_part, '/');
-        if (last_slash) {
-            *last_slash = '\0';
-            mkdir(dir_part, 0700);
-        }
-        FILE *out = fopen(full_path, "wb");
-        if (!out) {
-            free(data);
-            fclose(backup_file);
-            return WF_ERR_INTERNAL;
-        }
-        if (fwrite(data, 1, entry.size, out) != entry.size) {
-            free(data);
-            fclose(out);
-            fclose(backup_file);
-            return WF_ERR_INTERNAL;
-        }
-        fclose(out);
+        wf_status st = visit(&entry, data, ctx);
         free(data);
+        if (st != WF_OK) return st;
     }
-    fclose(backup_file);
     return WF_OK;
+}
+
+/* Writes one verified entry under data_directory, creating its directory. */
+static wf_status restore_entry(const backup_file_entry *entry,
+                               const unsigned char *data, void *ctx) {
+    const char *data_directory = ctx;
+    char full_path[MAX_PATH_LENGTH];
+    int path_len = snprintf(full_path, sizeof(full_path), "%s/%s",
+                            data_directory, entry->path);
+    if (path_len < 0 || (size_t)path_len >= sizeof(full_path)) {
+        return WF_ERR_INTERNAL;
+    }
+    char dir_part[MAX_PATH_LENGTH];
+    strncpy(dir_part, full_path, sizeof(dir_part) - 1);
+    dir_part[sizeof(dir_part) - 1] = '\0';
+    char *last_slash = strrchr(dir_part, '/');
+    if (last_slash) {
+        *last_slash = '\0';
+        mkdir(dir_part, 0700);
+    }
+    FILE *out = fopen(full_path, "wb");
+    if (!out) {
+        return WF_ERR_INTERNAL;
+    }
+    if (fwrite(data, 1, entry->size, out) != entry->size) {
+        fclose(out);
+        return WF_ERR_INTERNAL;
+    }
+    fclose(out);
+    return WF_OK;
+}
+
+/* Verification needs nothing beyond what the walk already checked. */
+static wf_status verify_entry(const backup_file_entry *entry,
+                              const unsigned char *data, void *ctx) {
+    (void)entry;
+    (void)data;
+    (void)ctx;
+    return WF_OK;
+}
+
+wf_status metalbear_backup_restore(const char *input_path,
+                                   const char *data_directory) {
+    if (!input_path || !data_directory) return WF_ERR_INVALID_ARG;
+    FILE *backup_file = fopen(input_path, "rb");
+    if (!backup_file) return WF_ERR_NOT_FOUND;
+    wf_status st =
+        backup_walk(backup_file, restore_entry, (void *)data_directory);
+    fclose(backup_file);
+    return st;
 }
 
 wf_status metalbear_backup_verify(const char *backup_path) {
     if (!backup_path) return WF_ERR_INVALID_ARG;
     FILE *backup_file = fopen(backup_path, "rb");
     if (!backup_file) return WF_ERR_NOT_FOUND;
-    backup_header header = {0};
-    if (fread(&header, sizeof(header), 1, backup_file) != 1 ||
-        strcmp(header.magic, BACKUP_MAGIC) != 0) {
-        fclose(backup_file);
-        return WF_ERR_INVALID_ARG;
-    }
-    for (uint32_t i = 0; i < header.file_count; i++) {
-        backup_file_entry entry = {0};
-        if (fread(&entry, sizeof(entry), 1, backup_file) != 1) {
-            fclose(backup_file);
-            return WF_ERR_INTERNAL;
-        }
-        if (entry.size > 100 * 1024 * 1024) {
-            fclose(backup_file);
-            return WF_ERR_INVALID_ARG;
-        }
-        unsigned char *data = malloc(entry.size);
-        if (!data) {
-            fclose(backup_file);
-            return WF_ERR_ALLOC;
-        }
-        if (fread(data, 1, entry.size, backup_file) != entry.size) {
-            free(data);
-            fclose(backup_file);
-            return WF_ERR_INTERNAL;
-        }
-        if (crc32_compute(data, entry.size) != entry.crc32) {
-            free(data);
-            fclose(backup_file);
-            return WF_ERR_INVALID_ARG;
-        }
-        free(data);
-    }
+    wf_status st = backup_walk(backup_file, verify_entry, NULL);
     fclose(backup_file);
-    return WF_OK;
+    return st;
 }
