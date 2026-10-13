@@ -17,6 +17,30 @@
 #include <string.h>
 #include <time.h>
 
+/* The upstream URL for a request: the resolved AppView host plus the request
+ * path and query. False when the target could not be built, with resp already
+ * set to the error to send. */
+static bool appview_prepare_target(metalbear_server *server,
+                                   const wf_xrpc_request *req,
+                                   wf_xrpc_response *resp,
+                                   const char **audience, char *audience_buf,
+                                   char *target, size_t target_len) {
+    char *upstream =
+        appview_resolve_upstream(server, req, resp, audience, audience_buf);
+    if (!upstream) return false;
+    return appview_target_url(target, target_len, upstream, req, resp);
+}
+
+/* Service-auth for the upstream, signed by the account's own repo key and
+ * valid for five minutes. Leaves *token NULL when the account has no repo. */
+static void mint_service_auth(metalbear_account_context *acct,
+                              const char *audience, const char *nsid,
+                              char **token) {
+    if (acct && acct->repo)
+        metalbear_repo_store_create_service_auth(
+            acct->repo, audience, (int64_t)time(NULL) + 300, nsid, token);
+}
+
 /* Proxy an app.bsky.* request to the AppView, minting service-auth from the
  * requester's own account (iss=requester DID, aud=AppView DID). Returns 502
  * on network failure, otherwise mirrors the upstream status/body. */
@@ -33,24 +57,15 @@ static wf_status proxy_appview(metalbear_server *server,
 
     const char *audience = NULL;
     char audience_buf[256];
-    char *upstream =
-        appview_resolve_upstream(server, req, resp, &audience, audience_buf);
-    if (!upstream) return WF_OK;
-
     char target[8192];
-    if (!appview_target_url(target, sizeof(target), upstream, req, resp))
+    if (!appview_prepare_target(server, req, resp, &audience, audience_buf,
+                                target, sizeof(target)))
         return WF_OK;
 
     char *service_token = NULL;
-    if (send_auth && requester_did && requester_did[0]) {
-        metalbear_account_context *acct =
-            context_for_did(server, requester_did);
-        if (acct && acct->repo) {
-            metalbear_repo_store_create_service_auth(acct->repo, audience,
-                                                     (int64_t)time(NULL) + 300,
-                                                     req->nsid, &service_token);
-        }
-    }
+    if (send_auth && requester_did && requester_did[0])
+        mint_service_auth(context_for_did(server, requester_did), audience,
+                          req->nsid, &service_token);
 
     appview_proxy_reply reply;
     bool sent =
@@ -100,12 +115,9 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
 
     const char *audience = NULL;
     char audience_buf[256];
-    char *upstream =
-        appview_resolve_upstream(server, req, resp, &audience, audience_buf);
-    if (!upstream) return WF_OK;
-
     char target[8192];
-    if (!appview_target_url(target, sizeof(target), upstream, req, resp))
+    if (!appview_prepare_target(server, req, resp, &audience, audience_buf,
+                                target, sizeof(target)))
         return WF_OK;
 
     /* A token was offered but has never been checked by anything at this
@@ -127,10 +139,7 @@ wf_status proxy_fallback(void *ctx, const wf_xrpc_request *req,
                                        "Token could not be verified");
             return WF_OK;
         }
-        if (acct->repo)
-            metalbear_repo_store_create_service_auth(acct->repo, audience,
-                                                     (int64_t)time(NULL) + 300,
-                                                     req->nsid, &service_token);
+        mint_service_auth(acct, audience, req->nsid, &service_token);
         free(sub);
     }
 
