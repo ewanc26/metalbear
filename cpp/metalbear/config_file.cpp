@@ -1,6 +1,7 @@
 #include "metalbear/config_file.h"
 
 #include <cctype>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -25,6 +26,18 @@ static const char *own(metalbear_config_file *o, std::string s) {
 void metalbear_config_file_free(metalbear_config_file *o) {
     if (!o) return;
     delete o;
+}
+
+/* Writes a formatted message to err when the caller asked for one. */
+static void set_error(char *err, size_t err_len, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+
+static void set_error(char *err, size_t err_len, const char *fmt, ...) {
+    if (!err || !err_len) return;
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(err, err_len, fmt, ap);
+    va_end(ap);
 }
 
 static std::string trim(std::string s) {
@@ -69,6 +82,28 @@ static bool parse_bool(const char *v, bool *out) {
         return true;
     }
     return false;
+}
+
+/* Double-quoted body: the text between the quotes, with \n, \t and \<other>
+ * escapes. The caller has checked the quotes. */
+static std::string unescape_basic(const std::string &v) {
+    size_t n = v.size();
+    std::string out;
+    out.reserve(n);
+    for (size_t i = 1; i + 1 < n; i++) {
+        if (v[i] == '\\' && i + 2 < n) {
+            i++;
+            if (v[i] == 'n')
+                out.push_back('\n');
+            else if (v[i] == 't')
+                out.push_back('\t');
+            else
+                out.push_back(v[i]);
+        } else {
+            out.push_back(v[i]);
+        }
+    }
+    return out;
 }
 
 /*
@@ -151,29 +186,14 @@ static bool parse_bool(const char *v, bool *out) {
 
 /* ---------------------------------------------------------------- TOML -- */
 
-static std::string toml_parse_string(const char *v) {
-    size_t n = std::strlen(v);
+static std::string toml_parse_string(const std::string &v) {
+    size_t n = v.size();
     if (n < 2 || v[0] != '"' || v[n - 1] != '"') return {};
-    std::string out;
-    out.reserve(n);
-    for (size_t i = 1; i + 1 < n; i++) {
-        if (v[i] == '\\' && i + 2 < n) {
-            i++;
-            if (v[i] == 'n')
-                out.push_back('\n');
-            else if (v[i] == 't')
-                out.push_back('\t');
-            else
-                out.push_back(v[i]);
-        } else {
-            out.push_back(v[i]);
-        }
-    }
-    return out;
+    return unescape_basic(v);
 }
 
-static std::string toml_parse_string_array(const char *v) {
-    size_t n = std::strlen(v);
+static std::string toml_parse_string_array(const std::string &v) {
+    size_t n = v.size();
     if (n < 2 || v[0] != '[' || v[n - 1] != ']') return {};
     std::string out;
     out.reserve(n);
@@ -195,181 +215,6 @@ static std::string toml_parse_string_array(const char *v) {
     return out;
 }
 
-static wf_status load_toml(const char *path, metalbear_config *config,
-                           metalbear_config_file **out_owner, char *err,
-                           size_t err_len) {
-    std::ifstream f(path);
-    if (!f) {
-        if (err && err_len)
-            std::snprintf(err, err_len, "%s: cannot open", path);
-        return WF_ERR_NOT_FOUND;
-    }
-
-    auto *owner = new metalbear_config_file();
-    std::string line;
-    std::string section;
-    int lineno = 0;
-    bool failed = false;
-
-    while (std::getline(f, line)) {
-        lineno++;
-        strip_comment(line);
-        std::string s = trim(line);
-        if (s.empty()) continue;
-
-        if (s[0] == '[') {
-            auto close = s.find(']');
-            if (close == std::string::npos) {
-                if (err && err_len)
-                    std::snprintf(err, err_len,
-                                  "%s:%d: unterminated section header", path,
-                                  lineno);
-                failed = true;
-                break;
-            }
-            section = trim(s.substr(1, close - 1));
-            continue;
-        }
-
-        auto eq = s.find('=');
-        if (eq == std::string::npos) {
-            if (err && err_len)
-                std::snprintf(err, err_len, "%s:%d: expected 'key = value'",
-                              path, lineno);
-            failed = true;
-            break;
-        }
-        std::string key = trim(s.substr(0, eq));
-        std::string val = trim(s.substr(eq + 1));
-        if (key.empty()) {
-            if (err && err_len)
-                std::snprintf(err, err_len, "%s:%d: empty key", path, lineno);
-            failed = true;
-            break;
-        }
-        if (val.empty()) {
-            if (err && err_len)
-                std::snprintf(err, err_len, "%s:%d: empty value for '%s'", path,
-                              lineno, key.c_str());
-            failed = true;
-            break;
-        }
-
-        std::string full = section;
-        if (!section.empty()) full.push_back('.');
-        full += key;
-
-        int64_t iv = 0;
-        bool bv = false;
-
-#define STR(name, field)                                                       \
-    if (full == name) {                                                        \
-        std::string copy = toml_parse_string(val.c_str());                     \
-        if (copy.empty()) {                                                    \
-            if (err && err_len)                                                \
-                std::snprintf(err, err_len,                                    \
-                              "%s:%d: '%s' expects a quoted string", path,     \
-                              lineno, key.c_str());                            \
-            failed = true;                                                     \
-            break;                                                             \
-        }                                                                      \
-        config->field = own(owner, std::move(copy));                           \
-        continue;                                                              \
-    }
-#define INT(name, field)                                                       \
-    if (full == name) {                                                        \
-        if (!parse_int(val.c_str(), &iv)) {                                    \
-            if (err && err_len)                                                \
-                std::snprintf(err, err_len, "%s:%d: '%s' expects an integer",  \
-                              path, lineno, key.c_str());                      \
-            failed = true;                                                     \
-            break;                                                             \
-        }                                                                      \
-        config->field = iv;                                                    \
-        continue;                                                              \
-    }
-#define U16(name, field)                                                       \
-    if (full == name) {                                                        \
-        if (!parse_int(val.c_str(), &iv) || iv < 0 || iv > 65535) {            \
-            if (err && err_len)                                                \
-                std::snprintf(err, err_len,                                    \
-                              "%s:%d: '%s' expects a port number", path,       \
-                              lineno, key.c_str());                            \
-            failed = true;                                                     \
-            break;                                                             \
-        }                                                                      \
-        config->field = static_cast<uint16_t>(iv);                             \
-        continue;                                                              \
-    }
-#define UINT(name, field)                                                      \
-    if (full == name) {                                                        \
-        if (!parse_int(val.c_str(), &iv) || iv <= 0) {                         \
-            if (err && err_len)                                                \
-                std::snprintf(err, err_len,                                    \
-                              "%s:%d: '%s' expects a positive integer", path,  \
-                              lineno, key.c_str());                            \
-            failed = true;                                                     \
-            break;                                                             \
-        }                                                                      \
-        config->field = static_cast<unsigned int>(iv);                         \
-        continue;                                                              \
-    }
-#define BOOL(name, field)                                                      \
-    if (full == name) {                                                        \
-        if (!parse_bool(val.c_str(), &bv)) {                                   \
-            if (err && err_len)                                                \
-                std::snprintf(err, err_len,                                    \
-                              "%s:%d: '%s' expects true or false", path,       \
-                              lineno, key.c_str());                            \
-            failed = true;                                                     \
-            break;                                                             \
-        }                                                                      \
-        config->field = bv;                                                    \
-        continue;                                                              \
-    }
-#define ARR(name, field)                                                       \
-    if (full == name) {                                                        \
-        std::string joined = toml_parse_string_array(val.c_str());             \
-        if (joined.empty()) {                                                  \
-            joined = toml_parse_string(val.c_str());                           \
-            if (joined.empty()) {                                              \
-                if (err && err_len)                                            \
-                    std::snprintf(err, err_len,                                \
-                                  "%s:%d: '%s' expects an array or string",    \
-                                  path, lineno, key.c_str());                  \
-                failed = true;                                                 \
-                break;                                                         \
-            }                                                                  \
-        }                                                                      \
-        config->field = own(owner, std::move(joined));                         \
-        continue;                                                              \
-    }
-
-        METALBEAR_CONFIG_FIELDS(STR, INT, U16, UINT, BOOL, ARR)
-
-#undef STR
-#undef INT
-#undef U16
-#undef UINT
-#undef BOOL
-#undef ARR
-
-        if (err && err_len)
-            std::snprintf(err, err_len, "%s:%d: unknown setting '%s'", path,
-                          lineno, full.c_str());
-        failed = true;
-        break;
-    }
-
-    if (failed) {
-        delete owner;
-        return WF_ERR_PARSE;
-    }
-
-    *out_owner = owner;
-    return WF_OK;
-}
-
 /* ---------------------------------------------------------------- YAML -- */
 
 /*
@@ -387,22 +232,7 @@ static wf_status load_toml(const char *path, metalbear_config *config,
 static std::string yaml_parse_string(const std::string &v) {
     size_t n = v.size();
     if (n >= 2 && v.front() == '"' && v.back() == '"') {
-        std::string out;
-        out.reserve(n);
-        for (size_t i = 1; i + 1 < n; i++) {
-            if (v[i] == '\\' && i + 2 < n) {
-                i++;
-                if (v[i] == 'n')
-                    out.push_back('\n');
-                else if (v[i] == 't')
-                    out.push_back('\t');
-                else
-                    out.push_back(v[i]);
-            } else {
-                out.push_back(v[i]);
-            }
-        }
-        return out;
+        return unescape_basic(v);
     }
     if (n >= 2 && v.front() == '\'' && v.back() == '\'') {
         std::string out;
@@ -473,13 +303,206 @@ static size_t leading_spaces(const std::string &s, bool *has_tab) {
     return n;
 }
 
+/* ------------------------------------------------------ shared settings -- */
+
+/* What differs between the two dialects when a value is read. */
+struct SettingParsers {
+    std::string (*parse_str)(const std::string &);
+    std::string (*parse_arr)(const std::string &);
+    const char *str_expects; /* the STR error wording for this dialect */
+};
+
+enum class Apply { NotFound, Applied, Failed };
+
+/* One setting line, as the loaders found it. */
+struct SettingSite {
+    const char *path;
+    int lineno;
+    const std::string &key;  /* as written, for messages */
+    const std::string &full; /* section.key, for matching */
+    const std::string &val;  /* trimmed raw value */
+    char *err;
+    size_t err_len;
+};
+
+/* Matches the setting against the field table and assigns it. Both loaders
+ * share this, so a setting added to the table is accepted by both dialects. */
+static Apply apply_setting(const SettingParsers &p, metalbear_config *config,
+                           metalbear_config_file *owner,
+                           const SettingSite &at) {
+    int64_t iv = 0;
+    bool bv = false;
+
+#define STR(name, field)                                                       \
+    if (at.full == name) {                                                     \
+        std::string copy = p.parse_str(at.val);                                \
+        if (copy.empty()) {                                                    \
+            set_error(at.err, at.err_len, "%s:%d: '%s' %s", at.path,           \
+                      at.lineno, at.key.c_str(), p.str_expects);               \
+            return Apply::Failed;                                              \
+        }                                                                      \
+        config->field = own(owner, std::move(copy));                           \
+        return Apply::Applied;                                                 \
+    }
+#define INT(name, field)                                                       \
+    if (at.full == name) {                                                     \
+        if (!parse_int(at.val.c_str(), &iv)) {                                 \
+            set_error(at.err, at.err_len, "%s:%d: '%s' expects an integer",    \
+                      at.path, at.lineno, at.key.c_str());                     \
+            return Apply::Failed;                                              \
+        }                                                                      \
+        config->field = iv;                                                    \
+        return Apply::Applied;                                                 \
+    }
+#define U16(name, field)                                                       \
+    if (at.full == name) {                                                     \
+        if (!parse_int(at.val.c_str(), &iv) || iv < 0 || iv > 65535) {         \
+            set_error(at.err, at.err_len, "%s:%d: '%s' expects a port number", \
+                      at.path, at.lineno, at.key.c_str());                     \
+            return Apply::Failed;                                              \
+        }                                                                      \
+        config->field = static_cast<uint16_t>(iv);                             \
+        return Apply::Applied;                                                 \
+    }
+#define UINT(name, field)                                                      \
+    if (at.full == name) {                                                     \
+        if (!parse_int(at.val.c_str(), &iv) || iv <= 0) {                      \
+            set_error(at.err, at.err_len,                                      \
+                      "%s:%d: '%s' expects a positive integer", at.path,       \
+                      at.lineno, at.key.c_str());                              \
+            return Apply::Failed;                                              \
+        }                                                                      \
+        config->field = static_cast<unsigned int>(iv);                         \
+        return Apply::Applied;                                                 \
+    }
+#define BOOL(name, field)                                                      \
+    if (at.full == name) {                                                     \
+        if (!parse_bool(at.val.c_str(), &bv)) {                                \
+            set_error(at.err, at.err_len, "%s:%d: '%s' expects true or false", \
+                      at.path, at.lineno, at.key.c_str());                     \
+            return Apply::Failed;                                              \
+        }                                                                      \
+        config->field = bv;                                                    \
+        return Apply::Applied;                                                 \
+    }
+#define ARR(name, field)                                                       \
+    if (at.full == name) {                                                     \
+        std::string joined = p.parse_arr(at.val);                              \
+        if (joined.empty()) {                                                  \
+            joined = p.parse_str(at.val);                                      \
+            if (joined.empty()) {                                              \
+                set_error(at.err, at.err_len,                                  \
+                          "%s:%d: '%s' expects an array or string", at.path,   \
+                          at.lineno, at.key.c_str());                          \
+                return Apply::Failed;                                          \
+            }                                                                  \
+        }                                                                      \
+        config->field = own(owner, std::move(joined));                         \
+        return Apply::Applied;                                                 \
+    }
+
+    METALBEAR_CONFIG_FIELDS(STR, INT, U16, UINT, BOOL, ARR)
+
+#undef STR
+#undef INT
+#undef U16
+#undef UINT
+#undef BOOL
+#undef ARR
+
+    return Apply::NotFound;
+}
+
+/* ---------------------------------------------------------------- loaders --
+ */
+
+static wf_status load_toml(const char *path, metalbear_config *config,
+                           metalbear_config_file **out_owner, char *err,
+                           size_t err_len) {
+    static const SettingParsers toml = {
+        toml_parse_string, toml_parse_string_array, "expects a quoted string"};
+    std::ifstream f(path);
+    if (!f) {
+        set_error(err, err_len, "%s: cannot open", path);
+        return WF_ERR_NOT_FOUND;
+    }
+
+    auto *owner = new metalbear_config_file();
+    std::string line;
+    std::string section;
+    int lineno = 0;
+    bool failed = false;
+
+    while (std::getline(f, line)) {
+        lineno++;
+        strip_comment(line);
+        std::string s = trim(line);
+        if (s.empty()) continue;
+
+        if (s[0] == '[') {
+            auto close = s.find(']');
+            if (close == std::string::npos) {
+                set_error(err, err_len, "%s:%d: unterminated section header",
+                          path, lineno);
+                failed = true;
+                break;
+            }
+            section = trim(s.substr(1, close - 1));
+            continue;
+        }
+
+        auto eq = s.find('=');
+        if (eq == std::string::npos) {
+            set_error(err, err_len, "%s:%d: expected 'key = value'", path,
+                      lineno);
+            failed = true;
+            break;
+        }
+        std::string key = trim(s.substr(0, eq));
+        std::string val = trim(s.substr(eq + 1));
+        if (key.empty()) {
+            set_error(err, err_len, "%s:%d: empty key", path, lineno);
+            failed = true;
+            break;
+        }
+        if (val.empty()) {
+            set_error(err, err_len, "%s:%d: empty value for '%s'", path, lineno,
+                      key.c_str());
+            failed = true;
+            break;
+        }
+
+        std::string full = section;
+        if (!section.empty()) full.push_back('.');
+        full += key;
+
+        Apply r = apply_setting(toml, config, owner,
+                                {path, lineno, key, full, val, err, err_len});
+        if (r == Apply::Applied) continue;
+        if (r == Apply::NotFound)
+            set_error(err, err_len, "%s:%d: unknown setting '%s'", path, lineno,
+                      full.c_str());
+        failed = true;
+        break;
+    }
+
+    if (failed) {
+        delete owner;
+        return WF_ERR_PARSE;
+    }
+
+    *out_owner = owner;
+    return WF_OK;
+}
+
 static wf_status load_yaml(const char *path, metalbear_config *config,
                            metalbear_config_file **out_owner, char *err,
                            size_t err_len) {
+    static const SettingParsers yaml = {
+        yaml_parse_string, yaml_parse_string_array, "expects a string"};
     std::ifstream f(path);
     if (!f) {
-        if (err && err_len)
-            std::snprintf(err, err_len, "%s: cannot open", path);
+        set_error(err, err_len, "%s: cannot open", path);
         return WF_ERR_NOT_FOUND;
     }
 
@@ -498,9 +521,8 @@ static wf_status load_yaml(const char *path, metalbear_config *config,
         bool has_tab = false;
         size_t indent = leading_spaces(line, &has_tab);
         if (has_tab) {
-            if (err && err_len)
-                std::snprintf(err, err_len, "%s:%d: tabs are not allowed", path,
-                              lineno);
+            set_error(err, err_len, "%s:%d: tabs are not allowed", path,
+                      lineno);
             failed = true;
             break;
         }
@@ -509,27 +531,23 @@ static wf_status load_yaml(const char *path, metalbear_config *config,
         if (indent == 0) {
             auto colon = content.find(':');
             if (colon == std::string::npos) {
-                if (err && err_len)
-                    std::snprintf(err, err_len, "%s:%d: expected 'section:'",
-                                  path, lineno);
+                set_error(err, err_len, "%s:%d: expected 'section:'", path,
+                          lineno);
                 failed = true;
                 break;
             }
             std::string key = trim(content.substr(0, colon));
             std::string rest = trim(content.substr(colon + 1));
             if (key.empty()) {
-                if (err && err_len)
-                    std::snprintf(err, err_len, "%s:%d: empty section name",
-                                  path, lineno);
+                set_error(err, err_len, "%s:%d: empty section name", path,
+                          lineno);
                 failed = true;
                 break;
             }
             if (!rest.empty()) {
-                if (err && err_len)
-                    std::snprintf(
-                        err, err_len,
-                        "%s:%d: '%s:' is a section header and takes no value",
-                        path, lineno, key.c_str());
+                set_error(err, err_len,
+                          "%s:%d: '%s:' is a section header and takes no value",
+                          path, lineno, key.c_str());
                 failed = true;
                 break;
             }
@@ -538,145 +556,47 @@ static wf_status load_yaml(const char *path, metalbear_config *config,
         }
 
         if (indent != 2) {
-            if (err && err_len)
-                std::snprintf(
-                    err, err_len,
-                    "%s:%d: expected 2-space indentation under a section", path,
-                    lineno);
+            set_error(err, err_len,
+                      "%s:%d: expected 2-space indentation under a section",
+                      path, lineno);
             failed = true;
             break;
         }
         if (section.empty()) {
-            if (err && err_len)
-                std::snprintf(err, err_len,
-                              "%s:%d: setting outside any section", path,
-                              lineno);
+            set_error(err, err_len, "%s:%d: setting outside any section", path,
+                      lineno);
             failed = true;
             break;
         }
 
         auto colon = content.find(':');
         if (colon == std::string::npos) {
-            if (err && err_len)
-                std::snprintf(err, err_len, "%s:%d: expected 'key: value'",
-                              path, lineno);
+            set_error(err, err_len, "%s:%d: expected 'key: value'", path,
+                      lineno);
             failed = true;
             break;
         }
         std::string key = trim(content.substr(0, colon));
         std::string val = trim(content.substr(colon + 1));
         if (key.empty()) {
-            if (err && err_len)
-                std::snprintf(err, err_len, "%s:%d: empty key", path, lineno);
+            set_error(err, err_len, "%s:%d: empty key", path, lineno);
             failed = true;
             break;
         }
         if (val.empty()) {
-            if (err && err_len)
-                std::snprintf(err, err_len, "%s:%d: empty value for '%s'", path,
-                              lineno, key.c_str());
+            set_error(err, err_len, "%s:%d: empty value for '%s'", path, lineno,
+                      key.c_str());
             failed = true;
             break;
         }
 
         std::string full = section + "." + key;
-        int64_t iv = 0;
-        bool bv = false;
-
-#define STR(name, field)                                                       \
-    if (full == name) {                                                        \
-        std::string copy = yaml_parse_string(val);                             \
-        if (copy.empty()) {                                                    \
-            if (err && err_len)                                                \
-                std::snprintf(err, err_len, "%s:%d: '%s' expects a string",    \
-                              path, lineno, key.c_str());                      \
-            failed = true;                                                     \
-            break;                                                             \
-        }                                                                      \
-        config->field = own(owner, std::move(copy));                           \
-        continue;                                                              \
-    }
-#define INT(name, field)                                                       \
-    if (full == name) {                                                        \
-        if (!parse_int(val.c_str(), &iv)) {                                    \
-            if (err && err_len)                                                \
-                std::snprintf(err, err_len, "%s:%d: '%s' expects an integer",  \
-                              path, lineno, key.c_str());                      \
-            failed = true;                                                     \
-            break;                                                             \
-        }                                                                      \
-        config->field = iv;                                                    \
-        continue;                                                              \
-    }
-#define U16(name, field)                                                       \
-    if (full == name) {                                                        \
-        if (!parse_int(val.c_str(), &iv) || iv < 0 || iv > 65535) {            \
-            if (err && err_len)                                                \
-                std::snprintf(err, err_len,                                    \
-                              "%s:%d: '%s' expects a port number", path,       \
-                              lineno, key.c_str());                            \
-            failed = true;                                                     \
-            break;                                                             \
-        }                                                                      \
-        config->field = static_cast<uint16_t>(iv);                             \
-        continue;                                                              \
-    }
-#define UINT(name, field)                                                      \
-    if (full == name) {                                                        \
-        if (!parse_int(val.c_str(), &iv) || iv <= 0) {                         \
-            if (err && err_len)                                                \
-                std::snprintf(err, err_len,                                    \
-                              "%s:%d: '%s' expects a positive integer", path,  \
-                              lineno, key.c_str());                            \
-            failed = true;                                                     \
-            break;                                                             \
-        }                                                                      \
-        config->field = static_cast<unsigned int>(iv);                         \
-        continue;                                                              \
-    }
-#define BOOL(name, field)                                                      \
-    if (full == name) {                                                        \
-        if (!parse_bool(val.c_str(), &bv)) {                                   \
-            if (err && err_len)                                                \
-                std::snprintf(err, err_len,                                    \
-                              "%s:%d: '%s' expects true or false", path,       \
-                              lineno, key.c_str());                            \
-            failed = true;                                                     \
-            break;                                                             \
-        }                                                                      \
-        config->field = bv;                                                    \
-        continue;                                                              \
-    }
-#define ARR(name, field)                                                       \
-    if (full == name) {                                                        \
-        std::string joined = yaml_parse_string_array(val);                     \
-        if (joined.empty()) {                                                  \
-            joined = yaml_parse_string(val);                                   \
-            if (joined.empty()) {                                              \
-                if (err && err_len)                                            \
-                    std::snprintf(err, err_len,                                \
-                                  "%s:%d: '%s' expects an array or string",    \
-                                  path, lineno, key.c_str());                  \
-                failed = true;                                                 \
-                break;                                                         \
-            }                                                                  \
-        }                                                                      \
-        config->field = own(owner, std::move(joined));                         \
-        continue;                                                              \
-    }
-
-        METALBEAR_CONFIG_FIELDS(STR, INT, U16, UINT, BOOL, ARR)
-
-#undef STR
-#undef INT
-#undef U16
-#undef UINT
-#undef BOOL
-#undef ARR
-
-        if (err && err_len)
-            std::snprintf(err, err_len, "%s:%d: unknown setting '%s'", path,
-                          lineno, full.c_str());
+        Apply r = apply_setting(yaml, config, owner,
+                                {path, lineno, key, full, val, err, err_len});
+        if (r == Apply::Applied) continue;
+        if (r == Apply::NotFound)
+            set_error(err, err_len, "%s:%d: unknown setting '%s'", path, lineno,
+                      full.c_str());
         failed = true;
         break;
     }
