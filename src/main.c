@@ -3,6 +3,7 @@
 #include "metalbear/config_file.h"
 #include "metalbear/server.h"
 #include "metalbear/log.h"
+#include "metalbear/schema_version.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -97,7 +98,11 @@ int main(int argc, char **argv) {
     const char *argv0 = (argc > 0 && argv[0]) ? argv[0] : "metalbear";
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
-            printf("%s\n", METALBEAR_VERSION);
+            /* line 1 is the release version, which the updater matches against
+             * the tag; line 2 is the database schema this build understands,
+             * which the updater reads to tell whether a release changes it */
+            printf("%s\nschema %d\n", METALBEAR_VERSION,
+                   METALBEAR_SCHEMA_VERSION);
             return 0;
         }
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
