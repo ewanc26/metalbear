@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- `metalbear --version` prints the database schema number on a second line (`schema N`), and `metalbear-update.sh apply` logs whether a release changes it. The snapshot is still taken for every update. ([#56](https://github.com/ewanc26/metalbear/issues/56))
+
 ### Changed
 
 - MetalBear builds against Wolfram v0.35.0 (was v0.34.0). ([#94](https://github.com/ewanc26/metalbear/pull/94))
