@@ -9,7 +9,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ### Changed
 
-- MetalBear builds against Wolfram v0.40.0 (was v0.36.2), which fixes reply gates (ewanc26/wolfram#203). ([#94](https://github.com/ewanc26/metalbear/pull/94))
+- MetalBear builds against Wolfram v0.40.0 (was v0.36.2), which fixes reply gates (ewanc26/wolfram#203). ([#103](https://github.com/ewanc26/metalbear/pull/103))
+- MetalBear builds against Wolfram v0.35.0 (was v0.34.0). ([#94](https://github.com/ewanc26/metalbear/pull/94))
 - MetalBear builds against Wolfram v0.34.0 (was v0.28.0). ([#92](https://github.com/ewanc26/metalbear/pull/92))
 
 ## [0.44.0] - 2026-10-06
