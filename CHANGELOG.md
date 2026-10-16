@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.44.2] - 2026-10-16
+
 ### Fixed
 
 - 0.44.1 did not publish. Its image step refused to overwrite the 0.44.1 images that an earlier, withdrawn 0.44.1 build left in the registry, so there is no release for it. The 0.44.1 entries below are carried by 0.44.2. ([#105](https://github.com/ewanc26/metalbear/pull/105))
