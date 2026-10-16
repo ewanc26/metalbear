@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(
   metalbear
-  VERSION 0.44.0
+  VERSION 0.44.2
   DESCRIPTION "A C23-first AT Protocol Personal Data Server with isolated C++ modules"
   LANGUAGES C CXX)
 
@@ -159,7 +159,7 @@ else()
   FetchContent_Declare(
     wolfram
     GIT_REPOSITORY https://github.com/ewanc26/wolfram.git
-    GIT_TAG v0.36.2
+    GIT_TAG v0.40.0
     GIT_SHALLOW TRUE)
   FetchContent_MakeAvailable(wolfram)
   set(METALBEAR_WOLFRAM_ROOT "${wolfram_SOURCE_DIR}")

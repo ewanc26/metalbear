@@ -11,8 +11,17 @@ into the next version's. Releases made before it existed are described only by t
 
 - `metalbear --version` prints the database schema number on a second line (`schema N`), and `metalbear-update.sh apply` logs whether a release changes it. The snapshot is still taken for every update. ([#56](https://github.com/ewanc26/metalbear/issues/56))
 
+## [0.44.2] - 2026-10-16
+
+### Fixed
+
+- 0.44.1 did not publish. Its image step refused to overwrite the 0.44.1 images that an earlier, withdrawn 0.44.1 build left in the registry, so there is no release for it. The 0.44.1 entries below are carried by 0.44.2. ([#105](https://github.com/ewanc26/metalbear/pull/105))
+
+## [0.44.1] - 2026-10-16
+
 ### Changed
 
+- MetalBear builds against Wolfram v0.40.0 (was v0.36.2), which fixes reply gates (ewanc26/wolfram#203). ([#103](https://github.com/ewanc26/metalbear/pull/103))
 - MetalBear builds against Wolfram v0.35.0 (was v0.34.0). ([#94](https://github.com/ewanc26/metalbear/pull/94))
 - MetalBear builds against Wolfram v0.34.0 (was v0.28.0). ([#92](https://github.com/ewanc26/metalbear/pull/92))
 
