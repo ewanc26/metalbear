@@ -14,6 +14,7 @@
 #include "identity/identity_routes.h"
 #include "oauth/oauth_credentials.h"
 #include "session/session_routes.h"
+#include "twofactor/totp_routes.h"
 #include "account/account_routes.h"
 #include "account/preferences_routes.h"
 #include "sync/sync_routes.h"
@@ -511,6 +512,16 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.server.revokeAppPassword",
             revoke_app_password, server) != WF_OK ||
+        /* Two-factor login, under project-scoped names (docs/totp.md). */
+        wf_xrpc_server_register_procedure(server->xrpc,
+                                          "uk.ewancroft.totp.enrol", totp_enrol,
+                                          server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+                                          "uk.ewancroft.totp.confirm",
+                                          totp_confirm, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(server->xrpc,
+                                          "uk.ewancroft.totp.disable",
+                                          totp_disable, server) != WF_OK ||
         /* Not part of the AT Protocol lexicon -- account-management
          * listings for OAuth state (connected apps, active devices),
          * registered under a project-scoped nsid the same way "_health"
@@ -982,6 +993,26 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     /* Apply initial retention */
     metalbear_sequencer_retain(server->sequencer, server->retention_max_age,
                                server->retention_min_events);
+
+    /* The two-factor server key. Its path comes from config, or defaults to
+     * totp.key in the data directory, which scheduled backups leave out. */
+    {
+        char *key_path = NULL;
+        if (config->totp_key_file && config->totp_key_file[0]) {
+            key_path = strdup(config->totp_key_file);
+        } else {
+            key_path = join_path(config->data_directory, "totp.key");
+        }
+        if (key_path && metalbear_twofactor_key_load_or_create(
+                            key_path, server->totp_key) == WF_OK) {
+            server->totp_key_ready = true;
+        } else {
+            LOG_ERROR("totp: the two-factor key at %s could not be loaded; "
+                      "two-factor login is off",
+                      key_path ? key_path : "(unset)");
+        }
+        free(key_path);
+    }
 
     /* Scheduled backups, off unless an interval is configured. The directory
      * has to be set explicitly: the default sits beside the data directory,

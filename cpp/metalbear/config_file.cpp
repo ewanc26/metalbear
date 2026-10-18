@@ -146,6 +146,7 @@ static std::string unescape_basic(const std::string &v) {
     INT("backup.interval_seconds", backup_interval_seconds)                    \
     INT("backup.retain", backup_retain)                                        \
     STR("backup.dir", backup_dir)                                              \
+    STR("totp.key_file", totp_key_file)                                        \
     INT("firehose.crawl_notify_seconds", crawl_notify_seconds)                 \
     INT("firehose.ping_seconds", firehose_ping_seconds)                        \
                                                                                \

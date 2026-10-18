@@ -28,6 +28,7 @@
 #include "metalbear/oauth/oauth.h"
 #include "metalbear/repo/key_rotation.h"
 #include "metalbear/repo/backup_schedule.h"
+#include "metalbear/twofactor/totp.h"
 #include "metalbear/repo/repo_store.h"
 #include "metalbear/sequencer.h"
 #include "metalbear/server.h"
@@ -135,6 +136,10 @@ struct metalbear_server {
     int64_t retention_min_events;
     /* Scheduled backup timer, or NULL when backups are off. */
     metalbear_backup_schedule *backup_schedule;
+    /* Server key for two-factor login (docs/totp.md). Not ready when the key
+     * file could not be loaded: enrolment and two-factor logins then fail. */
+    unsigned char totp_key[METALBEAR_TWOFACTOR_KEY_BYTES];
+    bool totp_key_ready;
     /* refpds-mirrored config (METALBEAR_*) */
     char *admin_password; /* may be NULL => admin endpoints 401 */
     char *crawlers;       /* comma-separated relay hosts, may be NULL */

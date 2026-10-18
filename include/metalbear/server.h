@@ -57,6 +57,10 @@ typedef struct metalbear_config {
     int64_t backup_interval_seconds;
     int64_t backup_retain;
     const char *backup_dir;
+    /* Server key file for two-factor login. Defaults to totp.key in the data
+     * directory. Keep it outside the data directory where you can: see
+     * docs/totp.md. */
+    const char *totp_key_file;
     /* Admin password (refpds PDS_ADMIN_PASSWORD). When set, admin
      * endpoints require HTTP Basic `admin:<password>` auth. When unset,
      * admin endpoints return 401 honestly. */
