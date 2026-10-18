@@ -26,8 +26,12 @@ typedef struct backup_file_entry {
     uint32_t crc32;
 } backup_file_entry;
 
-static uint32_t crc32_compute(const unsigned char *data, size_t length) {
-    uint32_t crc = 0xFFFFFFFF;
+/* CRC-32 of the data appended to a running CRC. A running value starts at 0,
+ * and the result of crc32_update over a whole buffer equals the CRC of that
+ * buffer. */
+static uint32_t crc32_update(uint32_t running, const unsigned char *data,
+                             size_t length) {
+    uint32_t crc = ~running;
     for (size_t i = 0; i < length; i++) {
         crc ^= data[i];
         for (int j = 0; j < 8; j++)
@@ -36,10 +40,17 @@ static uint32_t crc32_compute(const unsigned char *data, size_t length) {
     return ~crc;
 }
 
+static uint32_t crc32_compute(const unsigned char *data, size_t length) {
+    return crc32_update(0, data, length);
+}
+
 static wf_status write_file_entry(FILE *backup_file, const char *path,
                                   const char *base_dir) {
     struct stat st;
     if (stat(path, &st) != 0) return WF_ERR_NOT_FOUND;
+    /* The header stores the size as 32 bits. A larger file would be written
+     * with a truncated size, so refuse it instead. */
+    if ((uintmax_t)st.st_size > UINT32_MAX) return WF_ERR_INVALID_ARG;
     const char *rel = path;
     size_t base_len = strlen(base_dir);
     if (strncmp(path, base_dir, base_len) == 0) rel = path + base_len;
@@ -47,27 +58,40 @@ static wf_status write_file_entry(FILE *backup_file, const char *path,
     strncpy(entry.path, rel, MAX_PATH_LENGTH - 1);
     entry.path[MAX_PATH_LENGTH - 1] = '\0';
     entry.size = (uint32_t)st.st_size;
+
+    /* Two streamed passes, so a large file never has to fit in memory: the
+     * header carries the CRC, which is known only after reading the data. */
     FILE *in = fopen(path, "rb");
     if (!in) return WF_ERR_NOT_FOUND;
-    unsigned char *data = malloc(st.st_size);
-    if (!data) {
+    unsigned char buffer[64 * 1024];
+    uint32_t crc = 0;
+    size_t total = 0;
+    size_t got;
+    while ((got = fread(buffer, 1, sizeof(buffer), in)) > 0) {
+        crc = crc32_update(crc, buffer, got);
+        total += got;
+    }
+    if (ferror(in) || total != (size_t)st.st_size) {
         fclose(in);
-        return WF_ERR_ALLOC;
+        return WF_ERR_INTERNAL;
     }
-    size_t nread = fread(data, 1, st.st_size, in);
+    rewind(in);
+    entry.crc32 = crc;
+    if (fwrite(&entry, sizeof(entry), 1, backup_file) != 1) {
+        fclose(in);
+        return WF_ERR_INTERNAL;
+    }
+    total = 0;
+    while ((got = fread(buffer, 1, sizeof(buffer), in)) > 0) {
+        if (fwrite(buffer, 1, got, backup_file) != got) {
+            fclose(in);
+            return WF_ERR_INTERNAL;
+        }
+        total += got;
+    }
+    int failed = ferror(in) || total != (size_t)st.st_size;
     fclose(in);
-    if ((off_t)nread != st.st_size) {
-        free(data);
-        return WF_ERR_INTERNAL;
-    }
-    entry.crc32 = crc32_compute(data, nread);
-    if (fwrite(&entry, sizeof(entry), 1, backup_file) != 1 ||
-        fwrite(data, 1, nread, backup_file) != nread) {
-        free(data);
-        return WF_ERR_INTERNAL;
-    }
-    free(data);
-    return WF_OK;
+    return failed ? WF_ERR_INTERNAL : WF_OK;
 }
 
 static wf_status collect_files(const char *directory, const char *base_dir,
