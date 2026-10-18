@@ -146,6 +146,11 @@ scripts/container-update.sh upgrade ghcr.io/ewanc26/metalbear:0.43
 scripts/container-update.sh rollback   # back to the image before the last upgrade
 ```
 
+A rollback replaces `/data` with the snapshot taken before the upgrade, so it
+discards every write made since then. The script asks first, unless you pass
+`--yes`, and it keeps the discarded data as an archive in `BACKUP_DIR` before it
+restores. See [docs/updating.md](docs/updating.md#container-installs).
+
 Set `CONTAINER`, `VOLUME` and `RUN_OPTS` (the ports and environment you pass to
 `docker run`) if yours differ from the defaults. The script refuses a rollback
 to an image that cannot read the snapshot's schema. Its docs are in

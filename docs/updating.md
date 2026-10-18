@@ -74,11 +74,20 @@ It runs one container, `metalbear` by default, on one named volume, which holds
   schema, starts `IMAGE`, and waits up to `HEALTH_TIMEOUT` seconds for
   `HEALTH_URL` (`/xrpc/_health`). If the check fails, it empties the volume,
   restores the snapshot, starts the previous image, and checks it again.
-- **`rollback [IMAGE]`** restores the snapshot taken by the last upgrade and
-  starts the previous image, or `IMAGE` if given. It refuses when `IMAGE`
+- **`rollback [--yes] [IMAGE]`** restores the snapshot taken by the last upgrade
+  and starts the previous image, or `IMAGE` if given. **This discards every
+  write made since the upgrade.** It asks for confirmation unless `--yes` is
+  given, and refuses without `--yes` when there is no terminal to ask on. Before
+  it replaces `/data`, it archives the current data as
+  `BACKUP_DIR/pre-rollback-<time>.tar` and prints the path, so a rollback that
+  was a mistake can be undone by restoring that archive. It refuses when `IMAGE`
   writes an older schema than the snapshot holds, because that build cannot
   read the data.
 - **`status`** shows the container's state and the last recorded upgrade.
+
+The script records the previous image by its image ID, not its tag. A tag such
+as `:latest` can move when you pull, so a tag cannot say which build the
+previous image was. The tag is recorded for display only.
 
 It reads the schema from `metalbear --version` (its second line,
 `schema N`), so it needs no database access on the host. It does not stop
