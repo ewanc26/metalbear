@@ -177,6 +177,7 @@ set(METALBEAR_CORE_SOURCES
   src/account/preferences_routes.c
   src/oauth/auth.c
   src/repo/backup.c
+  src/repo/backup_schedule.c
   src/repo/explicit_slurs.c
   src/repo/explicit_slurs_patterns.c
   src/oauth/oauth.c
@@ -465,6 +466,13 @@ if(METALBEAR_BUILD_TESTS)
                                PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
     add_test(NAME metalbear_backup COMMAND test_metalbear_backup)
   endif()
+
+  add_executable(test_metalbear_backup_schedule test/test_backup_schedule.c)
+  target_link_libraries(test_metalbear_backup_schedule PRIVATE metalbear_core
+                                                               SQLite3::SQLite3)
+  target_include_directories(test_metalbear_backup_schedule
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_backup_schedule COMMAND test_metalbear_backup_schedule)
 
   add_executable(test_metalbear_multi_account test/test_multi_account.c)
   target_link_libraries(test_metalbear_multi_account PRIVATE metalbear_core
