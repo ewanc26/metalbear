@@ -9,11 +9,14 @@ archives. It is off until you set an interval.
 |---|---|---|---|
 | Interval in seconds (off when unset or 0) | `METALBEAR_BACKUP_INTERVAL_SECONDS` | `backup.interval_seconds` | off |
 | Archives to keep | `METALBEAR_BACKUP_RETAIN` | `backup.retain` | 7 |
-| Directory for archives | `METALBEAR_BACKUP_DIR` | `backup.dir` | the data directory with `-backups` appended |
+| Directory for archives | `METALBEAR_BACKUP_DIR` | `backup.dir` | none: required when the interval is set |
 
-The backup directory must not be inside the data directory. The server refuses
-to start a backup into it, because each archive would then contain the previous
-ones.
+The backup directory is required when backups are on, and it must not be inside
+the data directory. The server refuses to run a backup into the data directory,
+because each archive would then contain the previous ones. There is no default
+location: a default beside the data directory is outside the volume in a
+container, and it disappears when the container is recreated. Put the directory
+on storage that outlives the container.
 
 ## What a run does
 
@@ -37,3 +40,7 @@ directory. Stop the server before restoring over a running data directory.
 - Archives are not encrypted, and they are not copied off the host. Keep a copy
   somewhere else if the host can be lost.
 - The first run happens one interval after the server starts, not at start-up.
+- Writing an archive streams each file, so a large file costs no more memory
+  than one buffer. Restoring reads each entry into memory, so restoring a very
+  large file needs that much free memory.
+- A file over 4 GiB is refused, because the archive stores sizes as 32 bits.

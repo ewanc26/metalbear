@@ -101,8 +101,8 @@ firehose:
 
 # Scheduled backups of the data directory. Off unless interval_seconds is set.
 # Each run takes a consistent copy of every database and keeps the newest
-# `retain` archives. dir must not be inside the data directory; it defaults to
-# the data directory with "-backups" appended.
+# `retain` archives. dir is required when interval_seconds is set, must not be
+# inside the data directory, and must be on storage that outlives the container.
 # backup:
 #   interval_seconds: 86400
 #   retain: 7
