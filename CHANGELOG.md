@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Changed
+
+- The container images serve the built SvelteKit frontend at `/`, so `docker run` gives a working landing page with no host-side build. The C landing page moves to `/landing` in those images. Set `METALBEAR_FRONTEND_DIR` to an empty value to keep the C landing page at `/`. Native builds are unchanged unless `METALBEAR_FRONTEND_DIR` is set. ([#115](https://github.com/ewanc26/metalbear/issues/115))
+
 ### Added
 
 - `metalbear --version` prints the database schema number on a second line (`schema N`), and `metalbear-update.sh apply` logs whether a release changes it. The snapshot is still taken for every update. ([#56](https://github.com/ewanc26/metalbear/issues/56))

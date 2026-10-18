@@ -227,6 +227,10 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         LOG_ERROR("cannot initialise server");
         goto fail;
     }
+    /* Read before the XRPC routes are registered: the identity registration
+     * below picks the landing path and the frontend from it. */
+    if (config->frontend_dir && config->frontend_dir[0])
+        server->frontend_dir = strdup(config->frontend_dir);
 
     /* Derive the public URL before anything needs it: the OAuth store below
      * uses it as its token issuer, and it was previously computed late, during
@@ -1022,6 +1026,7 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->data_directory);
     free(server->account_email);
     free(server->operator_email);
+    free(server->frontend_dir);
     free(server->admin_password);
     free(server->crawlers);
     free(server->plc_url);

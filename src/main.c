@@ -216,6 +216,7 @@ int main(int argc, char **argv) {
     ENV_STR("METALBEAR_LEXICON_DIR", lexicon_dir);
     ENV_STR("METALBEAR_ACCOUNT_EMAIL", account_email);
     ENV_STR("METALBEAR_OPERATOR_EMAIL", operator_email);
+    ENV_STR("METALBEAR_FRONTEND_DIR", frontend_dir);
     ENV_STR("METALBEAR_OPERATOR_NAME", operator_name);
     ENV_STR("METALBEAR_OPERATOR_URL", operator_url);
     ENV_STR("METALBEAR_SUPPORT_URL", support_url);
