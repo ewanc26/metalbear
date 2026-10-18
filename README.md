@@ -101,6 +101,10 @@ docker run -d --name metalbear -p 2583:2583 -v metalbear-data:/data \
 Mount a config file (TOML or YAML) and set `METALBEAR_CONFIG` to configure it
 as a file instead; environment variables override whatever the file says.
 
+The image serves the built frontend at `/`, with the C landing page at
+`/landing`, so the run command above gives a working site with no host-side
+build. The frontend is described under [Frontend](#frontend).
+
 Three variants are published, each under three kinds of tag: the exact
 version (`0.43.0`), the minor (`0.43`, which follows its latest patch), and
 `latest`, which only ever points at the newest stable release:
@@ -535,7 +539,7 @@ The `pdsadmin/metalbear-admin.sh` script mirrors the reference PDS admin tooling
 - Configurable listen address and port
 - Optional email notifications for account operations
 - Automatic firehose event retention
-- Dynamic landing page at `/` listing hosted accounts and version
+- Dynamic landing page listing hosted accounts and version: at `/`, or at `/landing` when the built frontend is served at `/` (see [Frontend](#frontend))
 
 ### Metrics
 
@@ -609,6 +613,14 @@ loopback and put a reverse proxy in front.
 prerendered to static files alongside the C23 server and its isolated C++
 modules. It reads the server's own XRPC and operator endpoints in the browser,
 so it reports live state rather than build-time state.
+
+The server serves a built frontend when `METALBEAR_FRONTEND_DIR` points at one:
+each file is served at its path, `index.html` at `/`, and an `.html` page also
+at its path without the extension. The container images build the frontend and
+set that variable to `/usr/local/share/metalbear/frontend`, so the frontend is
+at `/` and the C landing page is at `/landing`. Without the variable, the C
+landing page stays at `/` and no frontend is served. A directory that does not
+exist stops startup.
 
 ## Build and test
 
