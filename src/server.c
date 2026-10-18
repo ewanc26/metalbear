@@ -983,31 +983,26 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     metalbear_sequencer_retain(server->sequencer, server->retention_max_age,
                                server->retention_min_events);
 
-    /* Scheduled backups, off unless an interval is configured. */
+    /* Scheduled backups, off unless an interval is configured. The directory
+     * has to be set explicitly: the default sits beside the data directory,
+     * which in a container is outside the volume and disappears with the
+     * container. */
     if (config->backup_interval_seconds > 0) {
-        char *backup_dir = NULL;
-        if (config->backup_dir && config->backup_dir[0]) {
-            backup_dir = strdup(config->backup_dir);
-        } else {
-            size_t n = strlen(config->data_directory);
-            backup_dir = malloc(n + sizeof("-backups"));
-            if (backup_dir)
-                snprintf(backup_dir, n + sizeof("-backups"), "%s-backups",
-                         config->data_directory);
-        }
         int retain = config->backup_retain > 0 ? (int)config->backup_retain : 7;
-        server->backup_schedule =
-            backup_dir ? metalbear_backup_schedule_start(
-                             config->data_directory, backup_dir, retain,
-                             (long)config->backup_interval_seconds)
-                       : NULL;
-        if (!server->backup_schedule)
-            LOG_WARN("backup: scheduled backups are not running");
-        else
-            LOG_INFO("backup: every %lld seconds into %s, keeping %d",
-                     (long long)config->backup_interval_seconds, backup_dir,
-                     retain);
-        free(backup_dir);
+        if (!config->backup_dir || !config->backup_dir[0]) {
+            LOG_ERROR("backup: backup.dir (METALBEAR_BACKUP_DIR) must be set "
+                      "when scheduled backups are on; they are not running");
+        } else {
+            server->backup_schedule = metalbear_backup_schedule_start(
+                config->data_directory, config->backup_dir, retain,
+                (long)config->backup_interval_seconds);
+            if (!server->backup_schedule)
+                LOG_WARN("backup: scheduled backups are not running");
+            else
+                LOG_INFO("backup: every %lld seconds into %s, keeping %d",
+                         (long long)config->backup_interval_seconds,
+                         config->backup_dir, retain);
+        }
     }
 
     return server;
