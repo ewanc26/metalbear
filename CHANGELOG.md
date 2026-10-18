@@ -7,8 +7,14 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Fixed
+
+- `scripts/container-update.sh` records the running image by its ID. Before, it used the tag, so a tag moved by a pull (such as `:latest`) could make a failed upgrade restore the new build instead of the previous one.
+
 ### Changed
 
+- `scripts/container-update.sh rollback` now asks before it replaces `/data`, and refuses without a terminal unless `--yes` is given. It archives the current data first, as `pre-rollback-<time>.tar` in the backup directory. ([#116](https://github.com/ewanc26/metalbear/issues/116))
+- The container images serve the built SvelteKit frontend at `/`, so `docker run` gives a working landing page with no host-side build. The C landing page moves to `/landing` in those images. Set `METALBEAR_FRONTEND_DIR` to an empty value to keep the C landing page at `/`. Native builds are unchanged unless `METALBEAR_FRONTEND_DIR` is set. ([#115](https://github.com/ewanc26/metalbear/issues/115))
 - The container images serve the built SvelteKit frontend at `/`, so `docker run` gives a working landing page with no host-side build. The C landing page moves to `/landing` in those images. Set `METALBEAR_FRONTEND_DIR` to an empty value to keep the C landing page at `/`. Native builds are unchanged unless `METALBEAR_FRONTEND_DIR` is set. ([#115](https://github.com/ewanc26/metalbear/issues/115))
 
 ### Added
