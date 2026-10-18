@@ -392,7 +392,13 @@ wf_status metalbear_auth_store_open(const char *path, const char *service_did,
             "DEFAULT 0,"
             "access_scope INTEGER NOT NULL DEFAULT 0,app_password_name TEXT);"
             "CREATE INDEX IF NOT EXISTS refresh_expiry_idx ON "
-            "refresh_token(expires_at);") != WF_OK ||
+            "refresh_token(expires_at);"
+            "CREATE TABLE IF NOT EXISTS totp_secret("
+            "id INTEGER PRIMARY KEY CHECK(id = 1),secret BLOB NOT NULL,"
+            "active INTEGER NOT NULL DEFAULT 0,last_step INTEGER NOT NULL "
+            "DEFAULT -1);"
+            "CREATE TABLE IF NOT EXISTS totp_backup("
+            "code_hash BLOB PRIMARY KEY);") != WF_OK ||
         load_or_create_key(store) != WF_OK)
         goto fail;
     sqlite3_exec(store->db,
@@ -711,4 +717,160 @@ wf_status metalbear_auth_delete_all(metalbear_auth_store *store) {
     if (!store) return WF_ERR_INVALID_ARG;
     return execute(store->db, "DELETE FROM refresh_token;"
                               "DELETE FROM auth_meta;");
+}
+
+/* ---- two-factor login (docs/totp.md) ---- */
+
+void metalbear_auth_totp_free(metalbear_auth_totp *record) {
+    if (!record) return;
+    free(record->secret);
+    record->secret = NULL;
+    record->secret_len = 0;
+}
+
+wf_status metalbear_auth_totp_put_pending(metalbear_auth_store *store,
+                                          const unsigned char *sealed,
+                                          size_t sealed_len) {
+    if (!store || !sealed || sealed_len == 0) return WF_ERR_INVALID_ARG;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(
+            store->db,
+            "INSERT INTO totp_secret(id,secret,active,last_step) "
+            "VALUES(1,?,0,-1) ON CONFLICT(id) DO UPDATE SET "
+            "secret=excluded.secret,active=0,last_step=-1 "
+            "WHERE totp_secret.active=0;",
+            -1, &stmt, NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    sqlite3_bind_blob(stmt, 1, sealed, (int)sealed_len, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(stmt);
+    int changed = sqlite3_changes(store->db);
+    sqlite3_finalize(stmt);
+    /* An active secret is not replaced here: the caller must disable first. */
+    if (rc != SQLITE_DONE) return WF_ERR_INTERNAL;
+    return changed == 1 ? WF_OK : WF_ERR_CONFLICT;
+}
+
+wf_status metalbear_auth_totp_get(metalbear_auth_store *store,
+                                  metalbear_auth_totp *out) {
+    if (!store || !out) return WF_ERR_INVALID_ARG;
+    memset(out, 0, sizeof(*out));
+    out->last_step = -1;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+                           "SELECT secret,active,last_step FROM totp_secret "
+                           "WHERE id=1;",
+                           -1, &stmt, NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    wf_status st = WF_OK;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        int n = sqlite3_column_bytes(stmt, 0);
+        const void *blob = sqlite3_column_blob(stmt, 0);
+        if (n > 0 && blob) {
+            out->secret = malloc((size_t)n);
+            if (!out->secret) {
+                st = WF_ERR_ALLOC;
+            } else {
+                memcpy(out->secret, blob, (size_t)n);
+                out->secret_len = (size_t)n;
+            }
+        }
+        out->active = sqlite3_column_int(stmt, 1) != 0;
+        out->last_step = sqlite3_column_int64(stmt, 2);
+        out->found = true;
+    }
+    sqlite3_finalize(stmt);
+    if (st != WF_OK) metalbear_auth_totp_free(out);
+    return st;
+}
+
+wf_status metalbear_auth_totp_activate(metalbear_auth_store *store,
+                                       const unsigned char (*hashes)[32],
+                                       size_t hash_count, int64_t step) {
+    if (!store || (hash_count && !hashes)) return WF_ERR_INVALID_ARG;
+    if (sqlite3_exec(store->db, "BEGIN IMMEDIATE;", NULL, NULL, NULL) !=
+        SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    wf_status st = WF_OK;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+                           "UPDATE totp_secret SET active=1,last_step=? "
+                           "WHERE id=1 AND active=0;",
+                           -1, &stmt, NULL) != SQLITE_OK) {
+        st = WF_ERR_INTERNAL;
+    } else {
+        sqlite3_bind_int64(stmt, 1, step);
+        if (sqlite3_step(stmt) != SQLITE_DONE)
+            st = WF_ERR_INTERNAL;
+        else if (sqlite3_changes(store->db) != 1)
+            st = WF_ERR_CONFLICT;
+    }
+    sqlite3_finalize(stmt);
+    if (st == WF_OK && sqlite3_exec(store->db, "DELETE FROM totp_backup;", NULL,
+                                    NULL, NULL) != SQLITE_OK)
+        st = WF_ERR_INTERNAL;
+    if (st == WF_OK) {
+        if (sqlite3_prepare_v2(store->db,
+                               "INSERT INTO totp_backup(code_hash) VALUES(?);",
+                               -1, &stmt, NULL) != SQLITE_OK) {
+            st = WF_ERR_INTERNAL;
+        } else {
+            for (size_t i = 0; i < hash_count && st == WF_OK; i++) {
+                sqlite3_reset(stmt);
+                sqlite3_bind_blob(stmt, 1, hashes[i], 32, SQLITE_TRANSIENT);
+                if (sqlite3_step(stmt) != SQLITE_DONE) st = WF_ERR_INTERNAL;
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+    if (st == WF_OK) {
+        if (sqlite3_exec(store->db, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK)
+            st = WF_ERR_INTERNAL;
+    }
+    if (st != WF_OK) sqlite3_exec(store->db, "ROLLBACK;", NULL, NULL, NULL);
+    return st;
+}
+
+wf_status metalbear_auth_totp_use_step(metalbear_auth_store *store,
+                                       int64_t step, bool *recorded) {
+    if (!store || !recorded) return WF_ERR_INVALID_ARG;
+    *recorded = false;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+                           "UPDATE totp_secret SET last_step=? WHERE id=1 AND "
+                           "active=1 AND last_step<?;",
+                           -1, &stmt, NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    sqlite3_bind_int64(stmt, 1, step);
+    sqlite3_bind_int64(stmt, 2, step);
+    int rc = sqlite3_step(stmt);
+    int changed = sqlite3_changes(store->db);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) return WF_ERR_INTERNAL;
+    *recorded = changed == 1;
+    return WF_OK;
+}
+
+wf_status metalbear_auth_totp_consume_backup(metalbear_auth_store *store,
+                                             const unsigned char hash[32],
+                                             bool *consumed) {
+    if (!store || !hash || !consumed) return WF_ERR_INVALID_ARG;
+    *consumed = false;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+                           "DELETE FROM totp_backup WHERE code_hash=?;", -1,
+                           &stmt, NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    sqlite3_bind_blob(stmt, 1, hash, 32, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(stmt);
+    int changed = sqlite3_changes(store->db);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) return WF_ERR_INTERNAL;
+    *consumed = changed == 1;
+    return WF_OK;
+}
+
+wf_status metalbear_auth_totp_disable(metalbear_auth_store *store) {
+    if (!store) return WF_ERR_INVALID_ARG;
+    return execute(store->db,
+                   "DELETE FROM totp_backup; DELETE FROM totp_secret;");
 }
