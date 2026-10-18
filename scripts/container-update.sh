@@ -10,7 +10,11 @@
 #
 #   container-update.sh snapshot
 #   container-update.sh upgrade IMAGE          e.g. ghcr.io/ewanc26/metalbear:0.44
-#   container-update.sh rollback [IMAGE]       default: the image before the last upgrade
+#   container-update.sh rollback [--yes] [IMAGE]
+#                                              default: the image before the last upgrade.
+#                                              Replaces /data with the snapshot, discarding
+#                                              every write since the upgrade. Asks first unless
+#                                              --yes is given; keeps the current data as an archive.
 #   container-update.sh status
 #
 # Configuration comes from the environment, with these defaults:
@@ -58,7 +62,15 @@ image_schema() {
     echo "$schema"
 }
 
+# The image ID of the running container, which is what every operation below
+# uses. A tag such as ":latest" can be moved by the next pull, so a tag can no
+# longer say which build "the previous image" was.
 current_image() {
+    docker inspect -f '{{.Image}}' "$CONTAINER" 2>/dev/null || true
+}
+
+# The tag the container was started from, for display only.
+current_tag() {
     docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null || true
 }
 
@@ -66,16 +78,17 @@ current_image() {
 # image's own tar. The archive is read back before it is trusted.
 take_snapshot() {
     image="$1"
+    prefix="${2:-data}"
     mkdir -p "$BACKUP_DIR"
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    archive="$BACKUP_DIR/data-$stamp.tar"
+    archive="$BACKUP_DIR/$prefix-$stamp.tar"
     if docker inspect "$CONTAINER" >/dev/null 2>&1; then
         docker stop "$CONTAINER" >/dev/null
     fi
     log "snapshotting volume $VOLUME to $archive"
     docker run --rm --entrypoint /bin/tar \
         -v "$VOLUME:/data:ro" -v "$BACKUP_DIR:/backup" "$image" \
-        -C /data -cf "/backup/data-$stamp.tar" . || die "snapshot failed"
+        -C /data -cf "/backup/$prefix-$stamp.tar" . || die "snapshot failed"
     entries="$(tar -tf "$archive" 2>/dev/null | wc -l | tr -d ' ')"
     [ "$entries" -gt 0 ] || die "snapshot $archive is empty or unreadable; nothing changed"
     echo "$archive"
@@ -119,6 +132,7 @@ write_state() {
         echo "PREVIOUS_IMAGE=$1"
         echo "SNAPSHOT=$2"
         echo "SNAPSHOT_SCHEMA=$3"
+        echo "PREVIOUS_TAG=$4"
     } >"$STATE"
 }
 
@@ -137,6 +151,7 @@ cmd_upgrade() {
     require_docker
     old="$(current_image)"
     [ -n "$old" ] || die "no container named $CONTAINER to upgrade"
+    old_tag="$(current_tag)"
 
     if [ "${PULL:-1}" = 1 ]; then
         log "pulling $new"
@@ -144,10 +159,10 @@ cmd_upgrade() {
     fi
     new_schema="$(image_schema "$new")"
     old_schema="$(image_schema "$old")"
-    log "schema: $old_schema (current) -> $new_schema (new)"
+    log "schema: $old_schema (current, $old_tag) -> $new_schema (new, $new)"
 
     archive="$(take_snapshot "$old")"
-    write_state "$old" "$archive" "$old_schema"
+    write_state "$old" "$archive" "$old_schema" "$old_tag"
 
     log "starting $new"
     start_container "$new"
@@ -156,17 +171,22 @@ cmd_upgrade() {
         return 0
     fi
 
-    log "health check failed for $new; restoring $old and the snapshot"
+    log "health check failed for $new; restoring $old_tag (image $old) and the snapshot"
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
     restore_snapshot "$archive" "$old"
     start_container "$old"
     if wait_healthy; then
-        die "upgrade to $new failed its health check; $old is running on the snapshot"
+        die "upgrade to $new failed its health check; $old_tag is running on the snapshot"
     fi
-    die "upgrade to $new failed and $old did not come back healthy; investigate before retrying"
+    die "upgrade to $new failed and $old_tag did not come back healthy; investigate before retrying"
 }
 
 cmd_rollback() {
+    yes=0
+    if [ "${1:-}" = "--yes" ]; then
+        yes=1
+        shift
+    fi
     [ -f "$STATE" ] || die "no upgrade recorded in $STATE; nothing to roll back"
     # shellcheck disable=SC1090
     . "$STATE"
@@ -178,6 +198,26 @@ cmd_rollback() {
         die "refusing rollback: $target writes schema $target_schema but the snapshot is schema $SNAPSHOT_SCHEMA, and that build cannot read it"
     fi
     [ -f "$SNAPSHOT" ] || die "snapshot $SNAPSHOT is missing; refusing to roll back without it"
+
+    # A rollback replaces /data with the snapshot, so every write made since the
+    # upgrade is discarded. Ask first, unless --yes says the operator already did.
+    if [ "$yes" != 1 ]; then
+        [ -t 0 ] || die "refusing rollback without --yes: it replaces /data with $SNAPSHOT, discarding every write since the upgrade"
+        printf 'Roll back to %s? This discards every write since the upgrade. [y/N] ' "$target" >&2
+        read -r answer || answer=""
+        case "$answer" in
+            y|Y|yes|YES) ;;
+            *) die "rollback cancelled" ;;
+        esac
+    fi
+
+    # Keep the current data before replacing it, so a rollback that was a
+    # mistake can be undone by restoring this archive.
+    current="$(current_image)"
+    if [ -n "$current" ]; then
+        pre="$(take_snapshot "$current" pre-rollback)"
+        log "current data kept at $pre; restore it with the same method if this rollback was a mistake"
+    fi
 
     log "rolling back to $target from $SNAPSHOT"
     docker stop "$CONTAINER" >/dev/null 2>&1 || true
@@ -194,11 +234,11 @@ cmd_status() {
     require_docker
     state="$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null)" || state=absent
     echo "container: $CONTAINER ($state)"
-    echo "image:     $(current_image)"
+    echo "image:     $(current_tag) ($(current_image))"
     if [ -f "$STATE" ]; then
         # shellcheck disable=SC1090
         . "$STATE"
-        echo "last upgrade: previous image $PREVIOUS_IMAGE, snapshot $SNAPSHOT (schema $SNAPSHOT_SCHEMA)"
+        echo "last upgrade: previous image $PREVIOUS_TAG ($PREVIOUS_IMAGE), snapshot $SNAPSHOT (schema $SNAPSHOT_SCHEMA)"
     else
         echo "last upgrade: none recorded"
     fi
