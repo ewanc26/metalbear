@@ -2066,10 +2066,9 @@ wf_status metalbear_repo_store_verify_head(metalbear_repo_store *s,
 
 /* ── listRecords (com.atproto.repo.listRecords) ──────────────────────── */
 
-wf_status metalbear_repo_store_list_records(metalbear_repo_store *s,
-                                            const char *collection,
-                                            const char *cursor, bool reverse,
-                                            int limit, char **out_json) {
+static wf_status list_records_locked(metalbear_repo_store *s,
+                                     const char *collection, const char *cursor,
+                                     bool reverse, int limit, char **out_json) {
     if (!s || !collection || !*collection || !out_json)
         return WF_ERR_INVALID_ARG;
     *out_json = NULL;
@@ -2160,9 +2159,21 @@ wf_status metalbear_repo_store_list_records(metalbear_repo_store *s,
     return WF_OK;
 }
 
-wf_status metalbear_repo_store_records_since_rev(metalbear_repo_store *s,
-                                                 const char *rev, int limit,
-                                                 char **out_json) {
+wf_status metalbear_repo_store_list_records(metalbear_repo_store *s,
+                                            const char *collection,
+                                            const char *cursor, bool reverse,
+                                            int limit, char **out_json) {
+    if (!s) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&s->mutex);
+    wf_status st =
+        list_records_locked(s, collection, cursor, reverse, limit, out_json);
+    pthread_mutex_unlock(&s->mutex);
+    return st;
+}
+
+static wf_status records_since_rev_locked(metalbear_repo_store *s,
+                                          const char *rev, int limit,
+                                          char **out_json) {
     if (!s || !rev || !*rev || !out_json) return WF_ERR_INVALID_ARG;
     *out_json = NULL;
     if (limit <= 0 || limit > 100) limit = 10;
@@ -2234,9 +2245,19 @@ wf_status metalbear_repo_store_records_since_rev(metalbear_repo_store *s,
     return WF_OK;
 }
 
+wf_status metalbear_repo_store_records_since_rev(metalbear_repo_store *s,
+                                                 const char *rev, int limit,
+                                                 char **out_json) {
+    if (!s) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&s->mutex);
+    wf_status st = records_since_rev_locked(s, rev, limit, out_json);
+    pthread_mutex_unlock(&s->mutex);
+    return st;
+}
+
 /* ── record streaming (com.atproto.repo.listMissingBlobs support) ────── */
 
-wf_status metalbear_repo_store_foreach_record(
+static wf_status foreach_record_locked(
     metalbear_repo_store *s,
     wf_status (*visit)(const char *collection, const char *rkey,
                        const char *value_json, void *ctx),
@@ -2258,6 +2279,18 @@ wf_status metalbear_repo_store_foreach_record(
     }
     sqlite3_finalize(stmt);
     return status;
+}
+
+wf_status metalbear_repo_store_foreach_record(
+    metalbear_repo_store *s,
+    wf_status (*visit)(const char *collection, const char *rkey,
+                       const char *value_json, void *ctx),
+    void *ctx) {
+    if (!s) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&s->mutex);
+    wf_status st = foreach_record_locked(s, visit, ctx);
+    pthread_mutex_unlock(&s->mutex);
+    return st;
 }
 
 /* ── getLatestCommit (com.atproto.sync.getLatestCommit) ───────────────── */

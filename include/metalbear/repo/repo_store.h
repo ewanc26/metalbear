@@ -25,10 +25,16 @@
  * This module is built only when wolfram is configured with
  * -DWOLFRAM_BUILD_SERVER=ON (it links SQLite for durable storage).
  *
- * Thread-safety: a single metalbear_repo_store is NOT safe for concurrent
- * writers. The current PDS slice serialises all writes through the
- * route handlers (a single worker thread per request, one in flight);
- * cross-request concurrency is a documented limitation.
+ * Thread-safety: every function that reads or writes the repo (the records,
+ * the head, the blocks, the sequencer hooks) takes the store's own mutex, so
+ * one metalbear_repo_store may be shared between threads without the route
+ * layer serialising it. Writes are applied one batch at a time, and readers
+ * see either the state before a batch or the state after it, never part of
+ * one. Three accessors do not take the mutex: metalbear_repo_store_did
+ * (immutable), metalbear_repo_store_handle (valid only until the next
+ * metalbear_repo_store_set_handle), and
+ * metalbear_repo_store_create_service_auth (reads only the immutable DID and
+ * signing key).
  */
 
 #ifndef METALBEAR_REPO_STORE_H
