@@ -58,7 +58,7 @@ RUN cmake -S MetalBear -B build \
 
 # The browser frontend the server serves at / from METALBEAR_FRONTEND_DIR. Built
 # here so Node never reaches the runtime image; see the Debian Dockerfile.
-FROM node:22-alpine AS web
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /src/frontend
 COPY MetalBear/frontend/ ./
 RUN rm -rf node_modules && npm ci && npm run build
