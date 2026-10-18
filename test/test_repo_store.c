@@ -942,7 +942,8 @@ static int run_unit(void) {
      * the commit's `prev` link, but v3 commits carry a null prev by
      * specification, so that evidence no longer exists on the wire. The
      * property is now asserted where it is actually observable — one #commit
-     * event carrying all the ops — in test_server's applyWrites case.
+     * event carrying all the ops — in run_batch_one_commit below, and over
+     * HTTP in test_multi_account's applyWrites case.
      */
     WF_CHECK(post_verified == 1);
     WF_CHECK(!(post_commit.cid.len == head_before.len &&
@@ -1278,8 +1279,116 @@ static int run_server(void) {
     return failures;
 }
 
+/*
+ * Counts the store's commit events. The callback runs synchronously inside
+ * the write call, so the counts are read straight after it returns. `ops` and
+ * `blocks` are borrowed, so only the op count is kept.
+ */
+typedef struct batch_event_probe {
+    int commits;
+    size_t last_ops_count;
+} batch_event_probe;
+
+static void probe_store_event(const metalbear_repo_store_event *event,
+                              void *context) {
+    batch_event_probe *probe = context;
+    if (event->kind != METALBEAR_REPO_STORE_EVENT_COMMIT) return;
+    probe->commits++;
+    probe->last_ops_count = event->ops_count;
+}
+
+/*
+ * applyWrites is one commit per batch, not one per write. The control arm
+ * shows the counter does see separate commits, so the single-commit result
+ * below cannot be a counter that never increments. A failed batch must emit
+ * no commit at all.
+ */
+static int run_batch_one_commit(void) {
+    int failures = 0;
+    char path[256];
+    temp_path(path, sizeof(path), "onecommit");
+
+    metalbear_repo_store *store = NULL;
+    if (metalbear_repo_store_open(path, "did:plc:onecommit", "one.example.com",
+                                  &store) != WF_OK ||
+        !store) {
+        WF_CHECK(0);
+        unlink(path);
+        return failures + 1;
+    }
+    batch_event_probe probe = {0, 0};
+    metalbear_repo_store_set_event_callback(store, probe_store_event, &probe);
+
+    /* Control: three separate writes are three commits. */
+    char *u = NULL, *c = NULL;
+    static const char *const single_rkeys[] = {"singlea", "singleb", "singlec"};
+    for (int i = 0; i < 3; i++) {
+        char record[160];
+        snprintf(record, sizeof(record),
+                 "{\"$type\":\"com.example.batch\",\"n\":%d}", i);
+        WF_CHECK(metalbear_repo_store_create_record(store, "com.example.batch",
+                                                    single_rkeys[i], record,
+                                                    NULL, &u, &c) == WF_OK);
+        free(u);
+        free(c);
+        u = c = NULL;
+    }
+    WF_CHECK(probe.commits == 3);
+    WF_CHECK(probe.last_ops_count == 1);
+
+    /* Batch: three writes in one applyWrites call are one commit with three
+     * ops. */
+    probe.commits = 0;
+    probe.last_ops_count = 0;
+    const char *batch =
+        "["
+        "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+        "\"collection\":\"com.example.batch\",\"rkey\":\"batcha\","
+        "\"value\":{\"$type\":\"com.example.batch\",\"n\":10}},"
+        "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+        "\"collection\":\"com.example.batch\",\"rkey\":\"batchb\","
+        "\"value\":{\"$type\":\"com.example.batch\",\"n\":11}},"
+        "{\"$type\":\"com.atproto.repo.applyWrites#delete\","
+        "\"collection\":\"com.example.batch\",\"rkey\":\"singlea\"}"
+        "]";
+    char *bcid = NULL, *brev = NULL, *bres = NULL;
+    WF_CHECK(metalbear_repo_store_apply_writes(store, batch, NULL, &bcid, &brev,
+                                               &bres) == WF_OK);
+    WF_CHECK(probe.commits == 1);
+    WF_CHECK(probe.last_ops_count == 3);
+    free(bcid);
+    free(brev);
+    free(bres);
+
+    /* Failing batch: the second op names a record type its collection does not
+     * accept, so the batch is refused with no commit and no event. */
+    probe.commits = 0;
+    probe.last_ops_count = 0;
+    const char *bad =
+        "["
+        "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+        "\"collection\":\"com.example.batch\",\"rkey\":\"batchc\","
+        "\"value\":{\"$type\":\"com.example.batch\",\"n\":12}},"
+        "{\"$type\":\"com.atproto.repo.applyWrites#create\","
+        "\"collection\":\"com.example.batch\",\"rkey\":\"batchd\","
+        "\"value\":{\"$type\":\"com.example.other\",\"n\":13}}"
+        "]";
+    bcid = brev = bres = NULL;
+    WF_CHECK(metalbear_repo_store_apply_writes(store, bad, NULL, &bcid, &brev,
+                                               &bres) != WF_OK);
+    WF_CHECK(probe.commits == 0);
+    free(bcid);
+    free(brev);
+    free(bres);
+
+    metalbear_repo_store_free(store);
+    unlink(path);
+    return failures;
+}
+
 int main(void) {
     run_unit();
+    run_batch_one_commit();
     run_records_since_rev();
     run_backlink_dedup();
     run_record_validation();
