@@ -9,6 +9,7 @@ into the next version's. Releases made before it existed are described only by t
 
 ### Added
 
+- `scripts/container-update.sh` snapshots, upgrades and rolls back a Docker install. It takes a verified snapshot before any change, checks `/xrpc/_health` after it, restores the snapshot and the old image if that check fails, and refuses a rollback to a build that cannot read the snapshot's schema. ([#116](https://github.com/ewanc26/metalbear/issues/116))
 - `metalbear --version` prints the database schema number on a second line (`schema N`), and `metalbear-update.sh apply` logs whether a release changes it. The snapshot is still taken for every update. ([#56](https://github.com/ewanc26/metalbear/issues/56))
 
 ## [0.44.2] - 2026-10-16
