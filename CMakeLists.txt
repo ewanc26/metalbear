@@ -203,6 +203,7 @@ set(METALBEAR_CORE_SOURCES
   src/repo/blob_store.c
   src/repo/blob_store_server.c
   src/ops/status.c
+  src/ops/frontend_static.c
   src/ops/ops_routes.c
   cpp/metalbear/config_file.cpp
   cpp/metalbear/log.cpp
@@ -381,6 +382,13 @@ if(METALBEAR_BUILD_TESTS)
   target_include_directories(test_metalbear_routes
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_routes COMMAND test_metalbear_routes)
+
+  add_executable(test_metalbear_frontend_static test/test_frontend_static.c)
+  target_link_libraries(test_metalbear_frontend_static PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_frontend_static
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  add_test(NAME metalbear_frontend_static
+           COMMAND test_metalbear_frontend_static)
 
   add_executable(test_metalbear_registry test/test_registry.c)
   target_link_libraries(test_metalbear_registry PRIVATE metalbear_core)

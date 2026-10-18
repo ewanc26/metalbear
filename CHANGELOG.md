@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Changed
+
+- The container images serve the built SvelteKit frontend at `/`, so `docker run` gives a working landing page with no host-side build. The C landing page moves to `/landing` in those images. Set `METALBEAR_FRONTEND_DIR` to an empty value to keep the C landing page at `/`. Native builds are unchanged unless `METALBEAR_FRONTEND_DIR` is set. ([#115](https://github.com/ewanc26/metalbear/issues/115))
+
 ### Added
 
 - `scripts/container-update.sh` snapshots, upgrades and rolls back a Docker install. It takes a verified snapshot before any change, checks `/xrpc/_health` after it, restores the snapshot and the old image if that check fails, and refuses a rollback to a build that cannot read the snapshot's schema. ([#116](https://github.com/ewanc26/metalbear/issues/116))

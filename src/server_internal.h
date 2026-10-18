@@ -118,6 +118,8 @@ struct metalbear_server {
      * and in operator.json. When set, this takes precedence over
      * account_email for the operator contact address. */
     char *operator_email;
+    /* Built frontend directory; see metalbear_config.frontend_dir. */
+    char *frontend_dir;
     /* Who runs this instance; surfaced on describeServer where the protocol
      * defines a field, and on /operator.json where it does not. */
     char *operator_name;
