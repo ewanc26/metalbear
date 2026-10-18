@@ -1907,11 +1907,8 @@ int main(void) {
     cJSON_Delete(json);
     wf_response_free(&response);
 
-    /* queryLabels: MetalBear is a PDS with no label storage. The reference
-     * PDS does not serve this endpoint at all -- it is an AppView
-     * responsibility, fed by a labeler's own subscribeLabels firehose.
-     * Confirm the honest MethodNotImplemented rather than a fabricated
-     * empty result. */
+    /* queryLabels answers from this server's own label store. Alice has no
+     * takedown, so the honest answer is an empty list, not a refusal. */
     char label_uri[256];
     snprintf(label_uri, sizeof(label_uri), "at://%s/app.bsky.feed.post/first",
              alice_did);
@@ -1919,12 +1916,11 @@ int main(void) {
         {"uriPatterns", label_uri},
     };
     CHECK(wf_xrpc_query_params(client, "com.atproto.label.queryLabels",
-                               query_labels_params, 1,
-                               &response) == WF_ERR_HTTP);
-    CHECK(response.status == 501);
+                               query_labels_params, 1, &response) == WF_OK);
+    CHECK(response.status == 200);
     json = json_response(&response);
-    CHECK(strcmp(cJSON_GetObjectItemCaseSensitive(json, "error")->valuestring,
-                 "MethodNotImplemented") == 0);
+    cJSON *labels = cJSON_GetObjectItemCaseSensitive(json, "labels");
+    CHECK(cJSON_IsArray(labels) && cJSON_GetArraySize(labels) == 0);
     cJSON_Delete(json);
     wf_response_free(&response);
 

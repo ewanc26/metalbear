@@ -104,6 +104,7 @@ static bool is_public_route(const char *nsid) {
         "com.atproto.repo.getRecord",
         "com.atproto.repo.describeRepo",
         "com.atproto.repo.listRecords",
+        "com.atproto.label.queryLabels",
         "com.atproto.sync.getLatestCommit",
         "com.atproto.sync.getBlob",
         "com.atproto.sync.getRepo",

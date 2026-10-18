@@ -921,29 +921,6 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
     return WF_OK;
 }
 
-static wf_status h_query_labels(void *ctx, const wf_xrpc_request *req,
-                                wf_xrpc_response *resp) {
-    (void)req;
-    (void)ctx;
-    /* MetalBear is a PDS: it stores no labels and runs no moderation
-     * service. The reference implementation does not serve this endpoint
-     * from the PDS at all -- com.atproto.label.queryLabels is implemented
-     * by the AppView (packages/bsky/src/api/com/atproto/label/queryLabels.ts),
-     * reading rows populated from the com.atproto.label.subscribeLabels
-     * firehose that a labeler publishes. Returning {"labels":[]} would claim
-     * "queried, found none" when the truth is "this server cannot answer
-     * this query at all" -- exactly the fabricated success AGENTS.md
-     * forbids for a stub. Report the honest XRPC status instead. TODO: if
-     * MetalBear ever hosts its own labeler, replace this with real storage
-     * and per-collection/source/date filtering. */
-    wf_xrpc_response_set_error(resp, 501, "MethodNotImplemented",
-                               "com.atproto.label.queryLabels is not served "
-                               "by this PDS; label data is published by "
-                               "labelers via com.atproto.label.subscribeLabels "
-                               "and queried from an AppView, not a PDS");
-    return WF_OK;
-}
-
 static wf_status h_describe_repo(void *ctx, const wf_xrpc_request *req,
                                  wf_xrpc_response *resp) {
     metalbear_repo_store *s =
@@ -1433,9 +1410,6 @@ static wf_status register_pds_repo_handlers(wf_xrpc_server *server,
     if (s != WF_OK) return s;
     s = wf_xrpc_server_register_query(server, "com.atproto.repo.listRecords",
                                       h_list_records, b);
-    if (s != WF_OK) return s;
-    s = wf_xrpc_server_register_query(server, "com.atproto.label.queryLabels",
-                                      h_query_labels, b);
     if (s != WF_OK) return s;
     s = wf_xrpc_server_register_query(
         server, "com.atproto.sync.getLatestCommit", h_get_latest_commit, b);
