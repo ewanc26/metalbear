@@ -129,10 +129,23 @@ docker run -d --name metalbear -p 2583:2583 -v metalbear-data:/data \
   ghcr.io/ewanc26/metalbear:0.43
 ```
 
-Snapshot the volume first if the release notes mention a storage change: the
-databases are migrated in place on startup, and an older image is not
+The databases are migrated in place on startup, and an older image is not
 guaranteed to read them afterwards
-([#56](https://github.com/ewanc26/metalbear/issues/56)).
+([#56](https://github.com/ewanc26/metalbear/issues/56)), so use the script
+rather than the manual steps above. `scripts/container-update.sh` snapshots
+the volume, upgrades, checks `/xrpc/_health`, and restores the snapshot and
+the old image if the check fails:
+
+```sh
+scripts/container-update.sh snapshot
+scripts/container-update.sh upgrade ghcr.io/ewanc26/metalbear:0.43
+scripts/container-update.sh rollback   # back to the image before the last upgrade
+```
+
+Set `CONTAINER`, `VOLUME` and `RUN_OPTS` (the ports and environment you pass to
+`docker run`) if yours differ from the defaults. The script refuses a rollback
+to an image that cannot read the snapshot's schema. Its docs are in
+[docs/updating.md](docs/updating.md#container-installs).
 
 The Alpine image is the same server built against musl. Use it to try
 MetalBear out or where image size matters; prefer the Debian one where you

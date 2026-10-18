@@ -5,10 +5,11 @@ when you ask it to. The tool is `pdsadmin/metalbear-update.sh`, a shell script
 outside the server binary, so it costs a Raspberry Pi 1 nothing when it is not
 running ([#34](https://github.com/ewanc26/metalbear/issues/34)).
 
-It covers the prebuilt tarball install under systemd. A container install
-updates by pulling a newer image tag. A source build updates with `git pull`
-and a rebuild. There is no prebuilt ARMv6 or ARMv7 archive, so a Pi 1 builds
-from source and the script says so rather than guessing.
+It covers the prebuilt tarball install under systemd. A container install has
+its own script, `scripts/container-update.sh`, described under
+[Container installs](#container-installs). A source build updates with
+`git pull` and a rebuild. There is no prebuilt ARMv6 or ARMv7 archive, so a Pi
+1 builds from source and the script says so rather than guessing.
 
 ## Use
 
@@ -59,6 +60,51 @@ number on its second line (`schema N`), and `metalbear-update.sh apply` logs
 whether a release changes it. The snapshot is still taken for every update,
 because a rollback needs one; skipping it when the schema is unchanged is a
 separate decision, not yet made.
+
+## Container installs
+
+`scripts/container-update.sh` is the docker counterpart of the systemd updater.
+It runs one container, `metalbear` by default, on one named volume, which holds
+`/data`. It does the same things in the same order:
+
+- **`snapshot`** stops the container, archives `/data` with the image's own
+  `tar`, reads the archive back, and starts the container again. No snapshot,
+  no upgrade.
+- **`upgrade IMAGE`** takes a snapshot, records the current image and its
+  schema, starts `IMAGE`, and waits up to `HEALTH_TIMEOUT` seconds for
+  `HEALTH_URL` (`/xrpc/_health`). If the check fails, it empties the volume,
+  restores the snapshot, starts the previous image, and checks it again.
+- **`rollback [IMAGE]`** restores the snapshot taken by the last upgrade and
+  starts the previous image, or `IMAGE` if given. It refuses when `IMAGE`
+  writes an older schema than the snapshot holds, because that build cannot
+  read the data.
+- **`status`** shows the container's state and the last recorded upgrade.
+
+It reads the schema from `metalbear --version` (its second line,
+`schema N`), so it needs no database access on the host. It does not stop
+the volume from being written by anything else, so stop any other writer
+first.
+
+Set `RUN_OPTS` to the options you give `docker run`, minus the name, the volume
+and the image, such as `-p 2583:2583` and `-e METALBEAR_SERVICE_DID=…`. The
+script recreates the container with them, so a wrong `RUN_OPTS` produces a
+container that does not start, and the health check then rolls it back.
+
+The state for `rollback` lives in `BACKUP_DIR/last-upgrade.env`, next to the
+archives. Keep both. Losing the state file means `rollback` has nothing to
+restore, and the archives are then the only copy.
+
+### What has been tested
+
+On a macOS arm64 host with Docker 29.8.2, against a locally built image and a
+throwaway volume, not a published release. The run covered: a snapshot; a
+healthy upgrade; an upgrade to an image that listens on the wrong port, which
+restored the old image and its data; a status check; a rollback refused by the
+schema check (the snapshot's schema was edited to 2 to trigger it, because no
+build with schema 2 exists); and a rollback to the recorded image that passed
+its health check. It has not run against `ghcr.io` (the script pulls unless
+`PULL=0` is set), a real release tag, or bear1. The systemd updater and
+`test/update/test_update.sh` are unchanged.
 
 ## Release signing
 
