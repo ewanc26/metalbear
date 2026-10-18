@@ -13,7 +13,7 @@
 
 #include "server_internal.h"
 
-#include "server_includes.h"
+#include "server/includes.h"
 
 /* Logging lives in log.c so the daemon shares it: see metalbear/log.h. */
 

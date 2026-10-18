@@ -6,23 +6,23 @@
 #ifndef METALBEAR_SERVER_INCLUDES_H
 #define METALBEAR_SERVER_INCLUDES_H
 
-#include "admin/admin_routes.h"
-#include "identity/identity_routes.h"
-#include "oauth/oauth_credentials.h"
-#include "session/session_routes.h"
-#include "account/account_routes.h"
-#include "account/preferences_routes.h"
-#include "sync/sync_routes.h"
+#include "../admin/admin_routes.h"
+#include "../identity/identity_routes.h"
+#include "../oauth/oauth_credentials.h"
+#include "../session/session_routes.h"
+#include "../account/account_routes.h"
+#include "../account/preferences_routes.h"
+#include "../sync/sync_routes.h"
 #ifdef METALBEAR_MODULE_APPVIEW
-#include "appview/appview_routes.h"
+#include "../appview/appview_routes.h"
 #endif
-#include "moderation/moderation_routes.h"
+#include "../moderation/moderation_routes.h"
 #ifdef METALBEAR_MODULE_VIDEO
-#include "video/video_routes.h"
+#include "../video/video_routes.h"
 #endif
-#include "ops/status.h"
-#include "ops/ops_routes.h"
-#include "repo/blob_store_server.h"
+#include "../ops/status.h"
+#include "../ops/ops_routes.h"
+#include "../repo/blob_store_server.h"
 
 #include "metalbear/server.h"
 #include "metalbear/log.h"

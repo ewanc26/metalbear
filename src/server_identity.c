@@ -13,7 +13,7 @@
 
 #include "server_internal.h"
 
-#include "server_includes.h"
+#include "server/includes.h"
 #include "metalbear/label/labels_routes.h"
 #include "ops/frontend_static.h"
 
