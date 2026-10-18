@@ -1,0 +1,18 @@
+#!/bin/sh
+# Stand-in for the metalbear binary, for test/container/container-update-test.sh.
+# It reports a schema as the real binary does, records which build last wrote
+# /data, and serves /xrpc/_health. A broken build never starts serving.
+
+if [ "$1" = "--version" ]; then
+    printf 'stub\nschema %s\n' "$STUB_SCHEMA"
+    exit 0
+fi
+
+mkdir -p /data
+echo "$STUB_MARK" >> /data/marks
+
+if [ "${STUB_BROKEN:-0}" = 1 ]; then
+    exec sleep 3600
+fi
+
+exec python3 -m http.server -d /srv "${METALBEAR_PORT:-2583}"
