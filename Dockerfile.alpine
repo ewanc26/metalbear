@@ -56,6 +56,13 @@ RUN cmake -S MetalBear -B build \
         -DMETALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}" \
     && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)" --target metalbear
 
+# The browser frontend the server serves at / from METALBEAR_FRONTEND_DIR. Built
+# here so Node never reaches the runtime image; see the Debian Dockerfile.
+FROM node:22-alpine AS web
+WORKDIR /src/frontend
+COPY MetalBear/frontend/ ./
+RUN rm -rf node_modules && npm ci && npm run build
+
 FROM alpine:3.21 AS runtime
 
 LABEL org.opencontainers.image.title="MetalBear" \
@@ -82,6 +89,10 @@ COPY --from=build /src/build/metalbear /usr/local/bin/metalbear
 # write is stored unchecked and reported as validationStatus "unknown".
 COPY --from=build /src/build/_deps/wolfram-src/lexicons /usr/local/share/metalbear/lexicons
 
+# The frontend the server serves at /. Set METALBEAR_FRONTEND_DIR to an empty
+# value to keep the C landing page at / instead.
+COPY --from=web /src/frontend/build /usr/local/share/metalbear/frontend
+
 # Materialise /data in the image itself. It is normally a bind mount, but
 # without it `docker exec` cannot even start a process (it chdirs to WORKDIR
 # first), which is exactly when you need a shell to diagnose a broken mount.
@@ -93,7 +104,8 @@ WORKDIR /data
 # outside, which looks like a crash rather than a binding choice.
 ENV METALBEAR_DATA=/data \
     METALBEAR_LISTEN=0.0.0.0 \
-    METALBEAR_LEXICON_DIR=/usr/local/share/metalbear/lexicons
+    METALBEAR_LEXICON_DIR=/usr/local/share/metalbear/lexicons \
+    METALBEAR_FRONTEND_DIR=/usr/local/share/metalbear/frontend
 EXPOSE 2583
 
 # busybox wget, already present on Alpine.
