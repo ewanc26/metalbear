@@ -551,6 +551,7 @@ The `pdsadmin/metalbear-admin.sh` script mirrors the reference PDS admin tooling
 - Per-IP token-bucket rate limiting (100 requests/60 seconds default)
 - Configurable listen address and port
 - Optional email notifications for account operations
+- A labeler for its own account takedowns, served from `com.atproto.label.queryLabels`; see [docs/labeler.md](docs/labeler.md) for what it does not do
 - Automatic firehose event retention
 - Dynamic landing page listing hosted accounts and version: at `/`, or at `/landing` when the built frontend is served at `/` (see [Frontend](#frontend))
 

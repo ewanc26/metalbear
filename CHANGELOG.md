@@ -13,6 +13,7 @@ into the next version's. Releases made before it existed are described only by t
 
 ### Added
 
+- `com.atproto.label.queryLabels` answers from the server's own label store instead of returning 501. An account takedown writes a `!takedown` label, and lifting it writes the same label negated. Queries take `uriPatterns`, `sources`, `limit` and `cursor`. Labels are stored unsigned, and labels from other labelers are not subscribed to; see [docs/labeler.md](docs/labeler.md). ([#117](https://github.com/ewanc26/metalbear/issues/117))
 - `scripts/container-update.sh` snapshots, upgrades and rolls back a Docker install. It takes a verified snapshot before any change, checks `/xrpc/_health` after it, restores the snapshot and the old image if that check fails, and refuses a rollback to a build that cannot read the snapshot's schema. ([#116](https://github.com/ewanc26/metalbear/issues/116))
 - `metalbear --version` prints the database schema number on a second line (`schema N`), and `metalbear-update.sh apply` logs whether a release changes it. The snapshot is still taken for every update. ([#56](https://github.com/ewanc26/metalbear/issues/56))
 
