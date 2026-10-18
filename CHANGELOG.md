@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-10-18
+
 ### Fixed
 
 - `scripts/container-update.sh` records the running image by its ID. Before, it used the tag, so a tag moved by a pull (such as `:latest`) could make a failed upgrade restore the new build instead of the previous one. ([#116](https://github.com/ewanc26/metalbear/issues/116))
