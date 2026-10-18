@@ -51,8 +51,9 @@ typedef struct metalbear_config {
     int64_t retention_max_age_seconds;
     int64_t retention_min_events;
     /* Scheduled backups (see repo/backup_schedule.h). Off unless the interval
-     * is set. backup_dir defaults to the data directory with "-backups"
-     * appended; it must not be inside the data directory. */
+     * is set, and then backup_dir is required: a default beside the data
+     * directory is outside the volume in a container. It must not be inside
+     * the data directory. */
     int64_t backup_interval_seconds;
     int64_t backup_retain;
     const char *backup_dir;
