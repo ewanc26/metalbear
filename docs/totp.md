@@ -9,13 +9,18 @@ the password, then issues a session from the auth store (`src/oauth/auth.c`).
 A second factor belongs between those two steps: the password is right, but no
 session is issued until the second factor is too.
 
-The request shape follows the protocol's own pattern. `createSession` accepts an
-optional `authFactorToken`. When an account has two-factor login on and the
-request does not carry a valid token, the server answers `401` with the error
-name `AuthFactorTokenRequired`, and the client asks for the code and retries.
-This is how the reference PDS handles it, as far as I know it; I have not
-checked that against the reference source, so the error name and the retry
-shape need confirming before implementation.
+The lexicon in `wolfram/lexicons/com/atproto/server/createSession.json` defines
+an optional `authFactorToken` input and an `AuthFactorTokenRequired` error. Its
+output carries `emailAuthFactor`, which says the account's second factor is an
+emailed code. The lexicon does not describe TOTP at all.
+
+So the protocol's own second factor is email, and the field and error are the
+shape MetalBear should follow. Reusing `authFactorToken` for a TOTP code is an
+extension. A client that only knows the email factor gets
+`AuthFactorTokenRequired`, has nothing to enter it into, and cannot complete a
+TOTP login. That is acceptable for a dev PDS, but it should be a decision,
+recorded here, and not a side effect. The reference's own behaviour beyond the
+lexicon is not checked here.
 
 ## Enrolment
 
@@ -84,6 +89,28 @@ it means a leaked app password gets around the second factor. Options:
 I recommend A to match the reference, and treating an app password as its own
 credential that can be revoked. Your call.
 
+## Threat model for the server key
+
+The key protects the enrolled secrets and the backup codes. It is kept in the
+data directory by default, which is the same directory the scheduled backups
+(#129) archive. So this is what each arrangement protects against:
+
+- **Key beside the data.** Protects against a leak of the database files alone.
+  It does not protect against a leak of the whole data directory, and a backup
+  archive is a copy of the whole directory, key included.
+- **Key outside the data directory.** A leaked backup or database copy cannot
+  decrypt the secrets. The key is then a second thing to lose: losing it means
+  every enrolled account enrols again.
+
+Recommendation: make the key path configurable (`totp.key_file`), default it
+outside the data directory, and have backups exclude it, so a backup restored
+without the key fails closed.
+
+Rotation: write a new key, re-encrypt each stored secret, then retire the old
+key. A failed rotation must leave every secret readable under one of the two
+keys until it completes. Rotation is an operator action, documented with the
+feature.
+
 ## Not in this change
 
 - Passkeys stay as they are. They are already a second factor where the client
@@ -104,8 +131,10 @@ credential that can be revoked. Your call.
 
 ## Questions before code
 
-1. **App passwords** (above): A or B?
-2. **Server key**: a key file in the data directory, as described, or derived
-   from the admin password? The file is simpler to rotate. Deriving from the admin
-   password means changing that password would lock everyone out, so I do not
-   recommend it.
+1. **App passwords** (above): decided, option A. An app password is its own
+   revocable credential and skips the second factor.
+2. **Server key**: decided, a key file, configurable, outside the data directory
+   by default (see the threat model). Not derived from the admin password, since
+   changing that password would lock everyone out.
+3. **Second factor on the wire**: TOTP reuses `authFactorToken` (see above).
+   Confirm that a client without TOTP support is acceptable for this instance.
