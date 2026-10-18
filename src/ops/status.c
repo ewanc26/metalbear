@@ -641,8 +641,11 @@ wf_status metalbear_status_register(metalbear_server *server) {
     status = wf_xrpc_server_register_http_route(
         server->xrpc, "GET", "/_debug/health", debug_health_handler, server);
     if (status != WF_OK) return status;
-    status = wf_xrpc_server_register_http_route(server->xrpc, "GET", "/",
-                                                landing_handler, server);
+    /* With a frontend directory the built frontend owns "/", so the C landing
+     * page moves to /landing and stays reachable. */
+    status = wf_xrpc_server_register_http_route(
+        server->xrpc, "GET", server->frontend_dir ? "/landing" : "/",
+        landing_handler, server);
     if (status != WF_OK) return status;
     return WF_OK;
 }

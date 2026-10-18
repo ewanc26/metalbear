@@ -44,6 +44,9 @@ typedef struct metalbear_config {
      * and in operator.json. When set, this takes precedence over
      * account_email for the operator contact address. */
     const char *operator_email;
+    /* Directory of a built frontend (METALBEAR_FRONTEND_DIR). When set, its
+     * files are served from "/" and the C landing page moves to /landing. */
+    const char *frontend_dir;
     /* Firehose retention (optional, defaults: max_age=30d, min_events=1000) */
     int64_t retention_max_age_seconds;
     int64_t retention_min_events;

@@ -27,6 +27,7 @@
 #ifdef METALBEAR_MODULE_VIDEO
 #include "video/video_routes.h"
 #endif
+#include "ops/frontend_static.h"
 #include "ops/status.h"
 #include "ops/ops_routes.h"
 #include "repo/blob_store_server.h"
@@ -666,6 +667,15 @@ wf_status metalbear_register_identity_documents(metalbear_server *server) {
                                                 "text/plain; charset=utf-8",
                                                 robots, sizeof(robots) - 1);
     if (status != WF_OK) return status;
+
+    /* After the status routes and robots.txt, so the frontend's "/" replaces
+     * the landing page and its robots.txt, if any, is skipped. */
+    if (server->frontend_dir) {
+        size_t frontend_routes = 0;
+        status = metalbear_frontend_register(server->xrpc, server->frontend_dir,
+                                             &frontend_routes);
+        if (status != WF_OK) return status;
+    }
 
     status = wf_xrpc_server_register_http_route(
         server->xrpc, "GET", "/tls-check", tls_check_handler, server);
