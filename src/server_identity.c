@@ -27,6 +27,7 @@
 #ifdef METALBEAR_MODULE_VIDEO
 #include "video/video_routes.h"
 #endif
+#include "metalbear/label/labels_routes.h"
 #include "ops/frontend_static.h"
 #include "ops/status.h"
 #include "ops/ops_routes.h"
@@ -661,6 +662,8 @@ wf_status metalbear_register_identity_documents(metalbear_server *server) {
         server->xrpc, "GET", "/acct/", handle_account_did_web, server);
     if (status != WF_OK) return status;
     status = metalbear_status_register(server);
+    if (status != WF_OK) return status;
+    status = metalbear_labels_register(server->xrpc, server->labels);
     if (status != WF_OK) return status;
     static const char robots[] = "User-agent: *\nAllow: /\n";
     status = wf_xrpc_server_register_static_get(server->xrpc, "/robots.txt",

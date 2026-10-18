@@ -20,6 +20,7 @@
 #ifdef METALBEAR_MODULE_EMAIL
 #include "metalbear/email.h"
 #endif
+#include "metalbear/label/label_store.h"
 #include "metalbear/moderation/report.h"
 #ifdef METALBEAR_MODULE_UPDATE_WATCHER
 #include "metalbear/ops/update_watcher.h"
@@ -143,6 +144,9 @@ struct metalbear_server {
     char *appview_did; /* Upstream AppView DID for service-auth or NULL */
     metalbear_account_cache *account_cache;
     metalbear_report_store *reports;
+    /* This server's own labels (labels.sqlite3): one `!takedown` per account
+     * takedown, served from com.atproto.label.queryLabels. */
+    metalbear_label_store *labels;
     /* The PDS-wide firehose log. subscribeRepos is one stream for the whole
      * host, so every account publishes into this rather than its own. */
     metalbear_sequencer *sequencer;

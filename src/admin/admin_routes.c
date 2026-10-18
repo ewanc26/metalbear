@@ -412,6 +412,17 @@ wf_status admin_update_subject_status(void *ctx, const wf_xrpc_request *request,
         bool applying = cJSON_IsTrue(takedown_applied);
         metalbear_account_registry_set_takedown(
             server->registry, did, uri, blob_cid, applying ? ref_str : NULL);
+        /* The server is the labeler for its own accounts, so an account
+         * takedown is also a `!takedown` label, negated when lifted.
+         * Record/blob takedowns are not account labels and are not written
+         * here. */
+        if (account_subject && server->labels && server->service_did) {
+            wf_status label_status = metalbear_label_store_insert(
+                server->labels, server->service_did, did, "!takedown",
+                !applying, NULL);
+            if (label_status != WF_OK)
+                LOG_WARN("could not record the !takedown label for %s", did);
+        }
         /*
          * Every session the account holds is revoked, so a takedown takes
          * effect on the tokens already issued rather than only on new logins.
