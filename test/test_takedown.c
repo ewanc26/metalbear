@@ -207,6 +207,34 @@ static long get_record(wf_xrpc_client *client, const char *repo,
     return status;
 }
 
+/* Query queryLabels for one exact subject (an account's DID, for an account
+ * takedown). Returns the HTTP status, the label count, and whether the last
+ * label is a negation. */
+static long label_query(wf_xrpc_client *client, const char *subject,
+                        size_t *count, int *last_neg) {
+    wf_xrpc_param params[] = {{"uriPatterns", subject}};
+    wf_response response = {0};
+    wf_xrpc_query_params(client, "com.atproto.label.queryLabels", params, 1,
+                         &response);
+    long status = response.status;
+    *count = 0;
+    *last_neg = 0;
+    cJSON *json = json_response(&response);
+    cJSON *labels =
+        json ? cJSON_GetObjectItemCaseSensitive(json, "labels") : NULL;
+    if (cJSON_IsArray(labels)) {
+        *count = (size_t)cJSON_GetArraySize(labels);
+        if (*count > 0) {
+            cJSON *last = cJSON_GetArrayItem(labels, (int)*count - 1);
+            *last_neg =
+                cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(last, "neg"));
+        }
+    }
+    cJSON_Delete(json);
+    wf_response_free(&response);
+    return status;
+}
+
 /* Upload a blob and copy its CID out. Returns the HTTP status. */
 static long upload_blob(wf_xrpc_client *client, const char *base,
                         const char *token, const char *bytes, char *out_cid,
@@ -401,6 +429,13 @@ int main(void) {
 
     /* ---- (a)(b)(c) account takedown ------------------------------------ */
     CHECK(set_account_takedown(client, base, mallory_did, true) == 200);
+    {
+        /* The takedown is also a !takedown label on the account's DID. */
+        size_t labels = 0;
+        int last_neg = 1;
+        CHECK(label_query(client, mallory_did, &labels, &last_neg) == 200);
+        CHECK(labels == 1 && !last_neg);
+    }
 
     {
         wf_xrpc_param params[] = {{"did", mallory_did}};
@@ -665,6 +700,13 @@ int main(void) {
 
     /* ---- (f) lifting it restores everything ---------------------------- */
     CHECK(set_account_takedown(client, base, mallory_did, false) == 200);
+    {
+        /* Lifting adds a negation; the takedown label is not removed. */
+        size_t labels = 0;
+        int last_neg = 0;
+        CHECK(label_query(client, mallory_did, &labels, &last_neg) == 200);
+        CHECK(labels == 2 && last_neg);
+    }
     {
         wf_xrpc_param params[] = {{"did", mallory_did}};
         wf_xrpc_query_params(client, "com.atproto.sync.getRepoStatus", params,

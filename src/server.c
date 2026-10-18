@@ -371,6 +371,16 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
     free(reports_path);
+
+    /* Open this server's label store (the labeler's own records). */
+    char *labels_path = join_path(config->data_directory, "labels.sqlite3");
+    if (!labels_path ||
+        metalbear_label_store_open(labels_path, &server->labels) != WF_OK) {
+        LOG_ERROR("cannot open label store");
+        free(labels_path);
+        goto fail;
+    }
+    free(labels_path);
     /* Announce new data to configured relays, throttled. */
     metalbear_sequencer_set_notify(server->sequencer, notify_crawlers, server);
 
@@ -1003,6 +1013,7 @@ void metalbear_server_free(metalbear_server *server) {
     metalbear_update_watcher_free(server->update_watcher);
 #endif
     metalbear_report_store_free(server->reports);
+    metalbear_label_store_free(server->labels);
     wf_rate_limiter_free(server->rate_limiter);
     wf_rate_limiter_free(server->rl_create_session_day);
     wf_rate_limiter_free(server->rl_create_session_5min);
