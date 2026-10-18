@@ -25,6 +25,27 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Account totals from the registry, read at request time: all accounts, the
+ * active ones, and the taken-down ones. A taken-down account is counted there
+ * even when it is still active, so the active count excludes it. */
+static void count_accounts(metalbear_server *server, size_t *total,
+                           size_t *active, size_t *taken_down) {
+    *total = *active = *taken_down = 0;
+    metalbear_account_entry *entries = NULL;
+    size_t count = 0;
+    if (metalbear_account_registry_list(server->registry, &entries, &count) !=
+        WF_OK)
+        return;
+    *total = count;
+    for (size_t i = 0; i < count; i++) {
+        if (account_is_taken_down(server, entries[i].did))
+            (*taken_down)++;
+        else if (entries[i].active)
+            (*active)++;
+    }
+    metalbear_account_entries_free(entries, count);
+}
+
 /* ---- Dynamic landing page (GET /) ---- */
 
 /* Minimal HTML escaping for untrusted display strings (handles/DIDs). */
@@ -227,19 +248,7 @@ static wf_status metrics_handler(void *ctx, const wf_xrpc_request *req,
 
     /* Account counts, read from the registry at scrape time. */
     size_t total = 0, active = 0, taken_down = 0;
-    metalbear_account_entry *entries = NULL;
-    size_t count = 0;
-    if (metalbear_account_registry_list(server->registry, &entries, &count) ==
-        WF_OK) {
-        total = count;
-        for (size_t i = 0; i < count; i++) {
-            if (account_is_taken_down(server, entries[i].did))
-                taken_down++;
-            else if (entries[i].active)
-                active++;
-        }
-        metalbear_account_entries_free(entries, count);
-    }
+    count_accounts(server, &total, &active, &taken_down);
     if (ok)
         ok = sb_append(
             &sb,
@@ -502,19 +511,7 @@ static wf_status debug_health_handler(void *ctx, const wf_xrpc_request *req,
     }
 
     size_t total = 0, active = 0, taken_down = 0;
-    metalbear_account_entry *entries = NULL;
-    size_t count = 0;
-    if (metalbear_account_registry_list(server->registry, &entries, &count) ==
-        WF_OK) {
-        total = count;
-        for (size_t i = 0; i < count; i++) {
-            if (account_is_taken_down(server, entries[i].did))
-                taken_down++;
-            else if (entries[i].active)
-                active++;
-        }
-        metalbear_account_entries_free(entries, count);
-    }
+    count_accounts(server, &total, &active, &taken_down);
     cJSON *accounts = cJSON_CreateObject();
     if (accounts) {
         cJSON_AddNumberToObject(accounts, "total", (double)total);
