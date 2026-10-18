@@ -1,6 +1,6 @@
 # Two-factor login with TOTP and backup codes
 
-Status: design, for [#130](https://github.com/ewanc26/metalbear/issues/130). No code yet.
+Status: implemented in parts, for [#130](https://github.com/ewanc26/metalbear/issues/130). The primitives, the storage, the three endpoints and the login check are in; the endpoint names are `uk.ewancroft.totp.enrol`, `uk.ewancroft.totp.confirm` and `uk.ewancroft.totp.disable`.
 
 ## Where it fits
 
@@ -138,3 +138,11 @@ feature.
    changing that password would lock everyone out.
 3. **Second factor on the wire**: TOTP reuses `authFactorToken` (see above).
    Confirm that a client without TOTP support is acceptable for this instance.
+
+## Endpoints and settings
+
+- `uk.ewancroft.totp.enrol` (authenticated): returns a secret and an `otpauth://` URI. Nothing changes until the next call succeeds.
+- `uk.ewancroft.totp.confirm` (authenticated, `code`): turns the factor on and returns ten backup codes, shown once.
+- `uk.ewancroft.totp.disable` (authenticated, `password` and `code`): turns it off. A session token alone is not enough.
+
+The server key is set with `METALBEAR_TOTP_KEY_FILE` (or `totp.key_file`). It defaults to `totp.key` in the data directory. If the key cannot be loaded, two-factor logins are refused, which fails closed. Scheduled backups leave `totp.key` out.
