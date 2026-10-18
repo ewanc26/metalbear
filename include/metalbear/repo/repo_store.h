@@ -235,8 +235,9 @@ wf_status metalbear_repo_store_get_record(metalbear_repo_store *store,
  *   "com.atproto.repo.applyWrites#update"  -> {collection, rkey, value}
  *   "com.atproto.repo.applyWrites#delete"  -> {collection, rkey}
  *
- * Operations are applied in order. Each op advances the repo head; the
- * final head commit is reported as the overall commit. On WF_OK,
+ * Operations are staged in order and land as one signed commit: the whole
+ * batch advances the repo head once, and the firehose receives one #commit
+ * event carrying every op. On WF_OK,
  * *out_commit_cid / *out_commit_rev describe that commit and
  * *out_results_json is a JSON array of per-op results
  * ({uri, cid, validationStatus:"unknown"} for create/update; empty
@@ -248,9 +249,8 @@ wf_status metalbear_repo_store_get_record(metalbear_repo_store *store,
  *
  * All three outputs are caller-owned strings (free() them).
  *
- * Limitations: each write emits its own signed commit rather than a
- * single batched commit (the returned commit is the final head), and
- * the batch is capped at 200 writes (mirroring atproto's limit).
+ * A failed batch leaves the repo untouched: no write in it is committed.
+ * The batch is capped at 200 writes (mirroring atproto's limit).
  */
 wf_status metalbear_repo_store_apply_writes(metalbear_repo_store *store,
                                             const char *writes_json,
