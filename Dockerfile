@@ -80,6 +80,14 @@ RUN cmake -S MetalBear -B build \
         -DMETALBEAR_RELEASE_STAGE="${METALBEAR_RELEASE_STAGE}" \
     && cmake --build build --parallel "$(nproc 2>/dev/null || echo 4)" --target metalbear
 
+# The browser frontend: a SvelteKit build the server serves from
+# METALBEAR_FRONTEND_DIR. It is built here, so Node never reaches the runtime
+# image. `rm -rf node_modules` drops any local copy the build context carries.
+FROM node:22-bookworm-slim AS web
+WORKDIR /src/frontend
+COPY MetalBear/frontend/ ./
+RUN rm -rf node_modules && npm ci && npm run build
+
 # A toolchain image with the sources and the test suite, for poking at the
 # server without setting up a build host:
 #
@@ -129,6 +137,10 @@ COPY --from=build /src/build/metalbear /usr/local/bin/metalbear
 # write is stored unchecked and reported as validationStatus "unknown".
 COPY --from=build /src/build/_deps/wolfram-src/lexicons /usr/local/share/metalbear/lexicons
 
+# The frontend the server serves at /. Set METALBEAR_FRONTEND_DIR to an empty
+# value to keep the C landing page at / instead.
+COPY --from=web /src/frontend/build /usr/local/share/metalbear/frontend
+
 # Materialise /data in the image itself. It is normally a bind mount, but
 # without it in the image `docker exec` cannot even start a process (it chdirs
 # to WORKDIR first), which is exactly when you need a shell to diagnose a
@@ -140,7 +152,8 @@ WORKDIR /data
 # outside, which looks like a crash rather than a binding choice.
 ENV METALBEAR_DATA=/data \
     METALBEAR_LISTEN=0.0.0.0 \
-    METALBEAR_LEXICON_DIR=/usr/local/share/metalbear/lexicons
+    METALBEAR_LEXICON_DIR=/usr/local/share/metalbear/lexicons \
+    METALBEAR_FRONTEND_DIR=/usr/local/share/metalbear/frontend
 EXPOSE 2583
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
