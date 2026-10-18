@@ -83,7 +83,7 @@ RUN cmake -S MetalBear -B build \
 # The browser frontend: a SvelteKit build the server serves from
 # METALBEAR_FRONTEND_DIR. It is built here, so Node never reaches the runtime
 # image. `rm -rf node_modules` drops any local copy the build context carries.
-FROM node:22-bookworm-slim AS web
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS web
 WORKDIR /src/frontend
 COPY MetalBear/frontend/ ./
 RUN rm -rf node_modules && npm ci && npm run build
