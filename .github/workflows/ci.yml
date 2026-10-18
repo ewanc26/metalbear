@@ -31,6 +31,15 @@ jobs:
       - uses: actions/checkout@v7
       - run: test/update/test_update.sh
 
+  # The container snapshot/upgrade/rollback script (#116), run against stub
+  # images so it needs no release. Runs on the runner's docker.
+  container-update:
+    name: container update (stub images)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: sh test/container/container-update-test.sh
+
   # The Pi 1B/Zero configuration (#34): METALBEAR_PROFILE=minimal must build,
   # start and answer _health, and the sources using 64-bit atomics must compile
   # for ARMv6Z without needing libatomic. Host x86-64 and a compile-only ARMv6
@@ -93,7 +102,7 @@ jobs:
   gate:
     name: CI gate
     if: always()
-    needs: [default, format, drift, updater, minimal]
+    needs: [default, format, drift, updater, container-update, minimal]
     runs-on: ubuntu-latest
     steps:
       - name: Every required job must have succeeded
