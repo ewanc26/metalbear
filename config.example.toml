@@ -99,6 +99,15 @@ ping_seconds = 20
 retention_max_age_seconds = 2592000   # 30 days
 retention_min_events      = 1000
 
+# Scheduled backups of the data directory. Off unless interval_seconds is set.
+# Each run takes a consistent copy of every database and keeps the newest
+# `retain` archives. dir must not be inside the data directory; it defaults to
+# the data directory with "-backups" appended.
+# [backup]
+# interval_seconds = 86400
+# retain           = 7
+# dir              = "/var/backups/metalbear"
+
 [appview]
 url = "https://api.bsky.app"
 did = "did:web:api.bsky.app"

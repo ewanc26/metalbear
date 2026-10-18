@@ -143,6 +143,9 @@ static std::string unescape_basic(const std::string &v) {
                                                                                \
     INT("firehose.retention_max_age_seconds", retention_max_age_seconds)       \
     INT("firehose.retention_min_events", retention_min_events)                 \
+    INT("backup.interval_seconds", backup_interval_seconds)                    \
+    INT("backup.retain", backup_retain)                                        \
+    STR("backup.dir", backup_dir)                                              \
     INT("firehose.crawl_notify_seconds", crawl_notify_seconds)                 \
     INT("firehose.ping_seconds", firehose_ping_seconds)                        \
                                                                                \

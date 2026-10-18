@@ -50,6 +50,12 @@ typedef struct metalbear_config {
     /* Firehose retention (optional, defaults: max_age=30d, min_events=1000) */
     int64_t retention_max_age_seconds;
     int64_t retention_min_events;
+    /* Scheduled backups (see repo/backup_schedule.h). Off unless the interval
+     * is set. backup_dir defaults to the data directory with "-backups"
+     * appended; it must not be inside the data directory. */
+    int64_t backup_interval_seconds;
+    int64_t backup_retain;
+    const char *backup_dir;
     /* Admin password (refpds PDS_ADMIN_PASSWORD). When set, admin
      * endpoints require HTTP Basic `admin:<password>` auth. When unset,
      * admin endpoints return 401 honestly. */
