@@ -179,6 +179,7 @@ set(METALBEAR_CORE_SOURCES
   src/repo/backup.c
   src/repo/backup_schedule.c
   src/twofactor/totp.c
+  src/twofactor/totp_routes.c
   src/repo/explicit_slurs.c
   src/repo/explicit_slurs_patterns.c
   src/oauth/oauth.c
@@ -480,6 +481,12 @@ if(METALBEAR_BUILD_TESTS)
   target_include_directories(test_metalbear_twofactor_totp
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_twofactor_totp COMMAND test_metalbear_twofactor_totp)
+
+  add_executable(test_metalbear_totp_login test/test_totp_login.c)
+  target_link_libraries(test_metalbear_totp_login PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_totp_login
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_totp_login COMMAND test_metalbear_totp_login)
 
   add_executable(test_metalbear_multi_account test/test_multi_account.c)
   target_link_libraries(test_metalbear_multi_account PRIVATE metalbear_core

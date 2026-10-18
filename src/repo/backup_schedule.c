@@ -107,6 +107,9 @@ static wf_status stage_tree(const char *source, const char *dest) {
         if (ent->d_name[0] == '.') continue;
         if (ends_with(ent->d_name, "-wal") || ends_with(ent->d_name, "-shm"))
             continue;
+        /* The two-factor server key is not backed up with the data it protects:
+         * an archive without it cannot be used to check or decrypt secrets. */
+        if (strcmp(ent->d_name, "totp.key") == 0) continue;
         char from[PATH_MAX], to[PATH_MAX];
         snprintf(from, sizeof(from), "%s/%s", source, ent->d_name);
         snprintf(to, sizeof(to), "%s/%s", dest, ent->d_name);

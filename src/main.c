@@ -246,6 +246,7 @@ int main(int argc, char **argv) {
     ENV_I64("METALBEAR_BACKUP_INTERVAL_SECONDS", backup_interval_seconds);
     ENV_I64("METALBEAR_BACKUP_RETAIN", backup_retain);
     ENV_STR("METALBEAR_BACKUP_DIR", backup_dir);
+    ENV_STR("METALBEAR_TOTP_KEY_FILE", totp_key_file);
     ENV_I64("METALBEAR_DNS_TTL", dns_record_ttl);
     ENV_I64("METALBEAR_UPDATE_CHECK_INTERVAL", update_check_interval);
     ENV_STR("METALBEAR_UPDATE_METALBEAR_REPO", update_metalbear_repo);

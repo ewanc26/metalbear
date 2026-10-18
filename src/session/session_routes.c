@@ -4,6 +4,7 @@
 #include "metalbear/log.h"
 #include "metalbear/oauth/auth.h"
 #include "metalbear/ops/metrics.h"
+#include "../twofactor/totp_routes.h"
 
 #include <cJSON.h>
 #include <stdbool.h>
@@ -152,6 +153,51 @@ wf_status create_session(void *ctx, const wf_xrpc_request *request,
             return WF_OK;
         }
     }
+    /* Two-factor login (docs/totp.md): an account with the factor on needs a
+     * valid token. App passwords skip it, as the design records. Attempts draw
+     * on the same budget as password attempts. */
+    if (credential == METALBEAR_CREDENTIAL_ACCOUNT &&
+        metalbear_totp_login_required(server, acct)) {
+        const cJSON *identifier =
+            request->params ? cJSON_GetObjectItemCaseSensitive(request->params,
+                                                               "identifier")
+                            : NULL;
+        const char *id_str =
+            cJSON_IsString(identifier) ? identifier->valuestring : "";
+        char key[320];
+        snprintf(key, sizeof(key), "%s-%s", id_str,
+                 request->client_ip ? request->client_ip : "unknown");
+        if (!check_endpoint_rate_limit(server->rl_create_session_day,
+                                       server->rl_create_session_5min, key, 1,
+                                       response)) {
+            free(app_password_name);
+            return WF_OK;
+        }
+        const cJSON *token = request->params
+                                 ? cJSON_GetObjectItemCaseSensitive(
+                                       request->params, "authFactorToken")
+                                 : NULL;
+        if (!cJSON_IsString(token) || !token->valuestring[0]) {
+            free(app_password_name);
+            wf_xrpc_response_set_error(
+                response, 401, "AuthFactorTokenRequired",
+                "Two-factor authentication code required");
+            return WF_OK;
+        }
+        bool accepted = false;
+        wf_status checked = metalbear_totp_check_login_token(
+            server, acct, token->valuestring, &accepted);
+        if (checked != WF_OK || !accepted) {
+            free(app_password_name);
+            metalbear_metrics_inc(METALBEAR_METRIC_LOGIN_FAILURES);
+            LOG_WARN("create_session: wrong two-factor code for did=%s",
+                     acct->did);
+            wf_xrpc_response_set_error(
+                response, 401, "AuthFactorTokenRequired",
+                "Invalid two-factor authentication code");
+            return WF_OK;
+        }
+    }
     metalbear_access_scope scope =
         taken_down ? METALBEAR_ACCESS_TAKENDOWN
         : credential == METALBEAR_CREDENTIAL_ACCOUNT ? METALBEAR_ACCESS_FULL
@@ -227,8 +273,9 @@ wf_status refresh_session(void *ctx, const wf_xrpc_request *request,
                 wf_xrpc_response_set_error(response, 401, "InvalidToken",
                                            "Malformed token");
             else
-                wf_xrpc_response_set_error(response, 401, "ExpiredToken",
-                                           "Refresh token is expired or revoked");
+                wf_xrpc_response_set_error(
+                    response, 401, "ExpiredToken",
+                    "Refresh token is expired or revoked");
         } else if (rotate_status == WF_ERR_INVALID_ARG) {
             wf_xrpc_response_set_error(response, 401, "InvalidToken",
                                        "Malformed token");
