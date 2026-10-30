@@ -28,20 +28,15 @@ permissions:
   packages: write
 
 jobs:
-  # Gate for everything below. A tag is only releasable if it is vX.Y.Z, equals
-  # the VERSION in CMakeLists.txt, points at a commit on main, and `CI gate`
-  # passed on that commit. tools/release.sh produces such tags; this refuses
-  # one made any other way. A manual dry run has no tag, so the checks that
-  # need one are skipped.
-  verify:
-    name: verify tag
+  # Which tag is being released, and the version CMake declares. A dry run has
+  # no tag, so everything that needs one is skipped. Nothing is written here:
+  # the checks below can refuse before a tag exists.
+  plan:
+    name: plan release
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write   # to create the tag on a dispatch release
-      checks: read
     outputs:
-      latest: ${{ steps.latest.outputs.latest }}
       tag: ${{ steps.which.outputs.tag }}
+      version: ${{ steps.which.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -61,36 +56,55 @@ jobs:
             [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::a release by dispatch must run from main, not $GITHUB_REF"; exit 1; }
             tag="v${VERSION_INPUT#v}"
           fi
-          echo "tag=$tag" | tee -a "$GITHUB_OUTPUT"
-
-      - name: Tag matches the CMake version, has a changelog section, is on main
-        if: steps.which.outputs.tag != ''
-        env:
-          TAG: ${{ steps.which.outputs.tag }}
-        run: |
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag '$TAG' is not vX.Y.Z"; exit 1; }
           version="$(awk '/^project\(/,/\)[[:space:]]*$/' CMakeLists.txt \
             | sed -n 's/.*VERSION[[:space:]]\{1,\}\([0-9][0-9.]*\).*/\1/p' | head -1)"
-          [ "$TAG" = "v$version" ] || { echo "::error::tag $TAG but CMakeLists.txt VERSION is $version"; exit 1; }
-          grep -q "^## \[$version\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no section for $version"; exit 1; }
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
-            || { echo "::error::$GITHUB_SHA is not on main"; exit 1; }
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+          } | tee -a "$GITHUB_OUTPUT"
 
-      - name: CI gate passed on the tagged commit
-        if: steps.which.outputs.tag != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          state="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
-            --jq '[.check_runs[] | select(.name == "CI gate")] | map(.conclusion) | .[0] // "missing"')"
-          [ "$state" = success ] || { echo "::error::'CI gate' on $GITHUB_SHA is '$state'"; exit 1; }
+  # Wolfram's shared check, pinned to a Wolfram tag: the tag is vX.Y.Z, names
+  # the CMake version, has a changelog section, and sits on main with a green
+  # `CI gate`. A dry run has no tag and skips it.
+  release-check:
+    name: release-check
+    needs: plan
+    if: needs.plan.outputs.tag != ''
+    permissions:
+      contents: read
+      checks: read
+    uses: ewanc26/wolfram/.github/workflows/release-check-reusable.yml@v0.44.2
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+      version: ${{ needs.plan.outputs.version }}
+      sha: ${{ github.sha }}
+      canon_ref: v0.44.2
+      required_checks: CI gate
+
+  # Gate for everything below. The shared check has already passed, so the tag
+  # this job creates (dispatch only) always names a releasable commit.
+  verify:
+    name: verify tag
+    needs: [plan, release-check]
+    # A dry run skips release-check; a failed or cancelled check stops here.
+    if: always() && needs.plan.result == 'success' && needs.release-check.result != 'failure' && needs.release-check.result != 'cancelled'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # to create the tag on a dispatch release
+    outputs:
+      latest: ${{ steps.latest.outputs.latest }}
+      tag: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       # Dispatch only: create the annotated tag at this commit. Refuses if the
       # tag already exists anywhere; a wrong release gets a new patch.
       - name: Create the tag (dispatch only)
-        if: github.event_name == 'workflow_dispatch' && steps.which.outputs.tag != ''
+        if: github.event_name == 'workflow_dispatch' && needs.plan.outputs.tag != ''
         env:
-          TAG: ${{ steps.which.outputs.tag }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "::error::$TAG already exists; not re-tagging"; exit 1
@@ -105,7 +119,7 @@ jobs:
       - name: Is this the newest release?
         id: latest
         env:
-          TAG: ${{ steps.which.outputs.tag }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           newest="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
           if [ -n "$TAG" ] && [ "$TAG" = "$newest" ]; then echo latest=true; else echo latest=false; fi | tee -a "$GITHUB_OUTPUT"
