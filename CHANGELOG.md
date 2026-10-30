@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Changed
+
+- The release workflow uses Wolfram's shared release check instead of its own copy of the tag, CMake-version, changelog, main-ancestry and `CI gate` rules. A read-only `plan` job resolves the tag, the shared check validates it, and only then does `verify` create the tag on a dispatch, so a refused release never leaves a tag behind. ([wolfram#100](https://github.com/ewanc26/wolfram/issues/100))
+
 ## [0.45.0] - 2026-10-18
 
 ### Fixed
