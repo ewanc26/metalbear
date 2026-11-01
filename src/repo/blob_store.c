@@ -1032,37 +1032,37 @@ metalbear_blob_store_set_crypto_passphrase(metalbear_blob_store *store,
 
 #endif /* METALBEAR_BUILD_BLOB_CRYPTO */
 
-wf_status metalbear_blob_store_list(metalbear_blob_store *store,
-                                    char ***out_cids, size_t *out_count) {
-    if (!store || !out_cids || !out_count) return WF_ERR_INVALID_ARG;
-    *out_cids = NULL;
-    *out_count = 0;
-
-    pthread_mutex_lock(&store->mutex);
-
+/* Shared CID collection for list/list_since. since==NULL collects all;
+ * otherwise only blobs with rev strictly after it. Owns the same
+ * count/calloc/strdup/cleanup shape in one place instead of two. */
+static wf_status blob_collect_cids(metalbear_blob_store *store,
+                                   const char *since, char ***out_cids,
+                                   size_t *out_count) {
     size_t count = 0;
-    for (metalbear_blob_node *n = store->head; n; n = n->next) count++;
+    for (metalbear_blob_node *n = store->head; n; n = n->next) {
+        if (since && (n->rev[0] == '\0' || strcmp(n->rev, since) <= 0))
+            continue;
+        count++;
+    }
     if (count == 0) {
-        pthread_mutex_unlock(&store->mutex);
+        *out_cids = NULL;
+        *out_count = 0;
         return WF_OK;
     }
-
     char **cids = (char **)calloc(count, sizeof(*cids));
-    if (!cids) {
-        pthread_mutex_unlock(&store->mutex);
-        return WF_ERR_ALLOC;
-    }
+    if (!cids) return WF_ERR_ALLOC;
     size_t i = 0;
     wf_status status = WF_OK;
     for (metalbear_blob_node *n = store->head; n && status == WF_OK;
          n = n->next) {
+        if (since && (n->rev[0] == '\0' || strcmp(n->rev, since) <= 0))
+            continue;
         cids[i] = strdup(n->cid);
         if (!cids[i])
             status = WF_ERR_ALLOC;
         else
             i++;
     }
-    pthread_mutex_unlock(&store->mutex);
     if (status != WF_OK) {
         for (size_t j = 0; j < i; j++) free(cids[j]);
         free(cids);
@@ -1071,6 +1071,18 @@ wf_status metalbear_blob_store_list(metalbear_blob_store *store,
     *out_cids = cids;
     *out_count = count;
     return WF_OK;
+}
+
+wf_status metalbear_blob_store_list(metalbear_blob_store *store,
+                                    char ***out_cids, size_t *out_count) {
+    wf_status status;
+    if (!store || !out_cids || !out_count) return WF_ERR_INVALID_ARG;
+    *out_cids = NULL;
+    *out_count = 0;
+    pthread_mutex_lock(&store->mutex);
+    status = blob_collect_cids(store, NULL, out_cids, out_count);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
 }
 
 /* qsort comparator for the paginated listing: ascending CID string order,
@@ -1160,45 +1172,14 @@ void metalbear_blob_store_list_free(char **cids, size_t count) {
 wf_status metalbear_blob_store_list_since(metalbear_blob_store *store,
                                           const char *since, char ***out_cids,
                                           size_t *out_count) {
+    wf_status status;
     if (!store || !since || !out_cids || !out_count) return WF_ERR_INVALID_ARG;
     *out_cids = NULL;
     *out_count = 0;
-
     pthread_mutex_lock(&store->mutex);
-
-    size_t count = 0;
-    for (metalbear_blob_node *n = store->head; n; n = n->next)
-        if (n->rev[0] != '\0' && strcmp(n->rev, since) > 0) count++;
-    if (count == 0) {
-        pthread_mutex_unlock(&store->mutex);
-        return WF_OK;
-    }
-
-    char **cids = (char **)calloc(count, sizeof(*cids));
-    if (!cids) {
-        pthread_mutex_unlock(&store->mutex);
-        return WF_ERR_ALLOC;
-    }
-    size_t i = 0;
-    wf_status status = WF_OK;
-    for (metalbear_blob_node *n = store->head; n && status == WF_OK;
-         n = n->next) {
-        if (n->rev[0] == '\0' || strcmp(n->rev, since) <= 0) continue;
-        cids[i] = strdup(n->cid);
-        if (!cids[i])
-            status = WF_ERR_ALLOC;
-        else
-            i++;
-    }
+    status = blob_collect_cids(store, since, out_cids, out_count);
     pthread_mutex_unlock(&store->mutex);
-    if (status != WF_OK) {
-        for (size_t j = 0; j < i; j++) free(cids[j]);
-        free(cids);
-        return status;
-    }
-    *out_cids = cids;
-    *out_count = count;
-    return WF_OK;
+    return status;
 }
 
 void metalbear_blob_walk_refs(const cJSON *node,
