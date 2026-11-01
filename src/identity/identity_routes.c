@@ -675,39 +675,9 @@ wf_status update_handle(void *ctx, const wf_xrpc_request *request,
      * updateHandle awaits the PLC update first; a failure there means the
      * local-state write never runs, so the DID document and local state
      * never disagree). did:web accounts have no PLC document to update. */
-    if (wf_did_method_of(acct->did) == WF_DID_METHOD_PLC) {
-        wf_signing_key rotation_key;
-        if (metalbear_key_rotation_current_key(server->plc_rotation,
-                                               &rotation_key) != WF_OK) {
-            wf_xrpc_response_set_error(response, 500, "InternalError",
-                                       "Could not load PLC rotation key");
-            return WF_OK;
-        }
-        wf_xrpc_client *plc_client = wf_xrpc_client_new(server->plc_url);
-        if (!plc_client) {
-            wf_xrpc_response_set_error(response, 500, "InternalError",
-                                       "Could not reach the PLC directory");
-            return WF_OK;
-        }
-        char *signed_op = NULL;
-        wf_status plc_status = wf_plc_build_handle_update(
-            plc_client, server->plc_url, acct->did, handle->valuestring,
-            &rotation_key, &signed_op);
-        if (plc_status == WF_OK) {
-            plc_status = wf_plc_submit_operation_raw(server->plc_url, acct->did,
-                                                     signed_op);
-        }
-        wf_plc_operation_free(signed_op);
-        wf_xrpc_client_free(plc_client);
-        if (plc_status != WF_OK) {
-            LOG_ERROR("update_handle: PLC update failed for did=%s "
-                      "handle=%s (status=%d)",
-                      acct->did, handle->valuestring, plc_status);
-            wf_xrpc_response_set_error(response, 500, "InternalError",
-                                       "Could not update PLC document");
-            return WF_OK;
-        }
-    }
+    if (!metalbear_plc_update_handle(server, response, acct->did,
+                                     handle->valuestring, "update_handle"))
+        return WF_OK;
     char *old_handle = strdup(acct->handle);
     char *new_handle = strdup(handle->valuestring);
     if (!old_handle || !new_handle ||
