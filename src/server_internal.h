@@ -288,6 +288,15 @@ bool assert_repo_available(metalbear_server *server,
                            const wf_xrpc_request *request,
                            wf_xrpc_response *response);
 
+/* Shared PLC handle update for admin + identity routes: for did:plc,
+ * submit the alsoKnownAs update before any local mutation (reference
+ * account-manager.ts ordering); did:web needs nothing. Returns true when
+ * the caller should proceed; false fills response with 500 and the caller
+ * returns WF_OK. */
+bool metalbear_plc_update_handle(metalbear_server *server,
+                                 wf_xrpc_response *response, const char *did,
+                                 const char *handle, const char *log_name);
+
 /* server_auth.c, server_guards.c and server_identity.c: what server.c wires in.
  */
 void metalbear_account_cache_request_observer(void *ctx, const char *nsid,
