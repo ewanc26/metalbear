@@ -417,6 +417,28 @@ static Apply apply_setting(const SettingParsers &p, metalbear_config *config,
     return Apply::NotFound;
 }
 
+/* Shared tail for both loaders: build section.key, apply it, and report an
+ * unknown setting. Returns true when the line was applied (caller
+ * continues); false leaves the specific error in err for the caller to
+ * fail the load. Owns the full-key shape once instead of twice. */
+static bool apply_full_setting(const SettingParsers &p,
+                               metalbear_config *config,
+                               metalbear_config_file *owner, const char *path,
+                               int lineno, const std::string &section,
+                               const std::string &key, const std::string &val,
+                               char *err, size_t err_len) {
+    std::string full = section;
+    if (!section.empty()) full.push_back('.');
+    full += key;
+    Apply r = apply_setting(p, config, owner,
+                            {path, lineno, key, full, val, err, err_len});
+    if (r == Apply::Applied) return true;
+    if (r == Apply::NotFound)
+        set_error(err, err_len, "%s:%d: unknown setting '%s'", path, lineno,
+                  full.c_str());
+    return false;
+}
+
 /* ---------------------------------------------------------------- loaders --
  */
 
@@ -476,16 +498,9 @@ static wf_status load_toml(const char *path, metalbear_config *config,
             break;
         }
 
-        std::string full = section;
-        if (!section.empty()) full.push_back('.');
-        full += key;
-
-        Apply r = apply_setting(toml, config, owner,
-                                {path, lineno, key, full, val, err, err_len});
-        if (r == Apply::Applied) continue;
-        if (r == Apply::NotFound)
-            set_error(err, err_len, "%s:%d: unknown setting '%s'", path, lineno,
-                      full.c_str());
+        if (apply_full_setting(toml, config, owner, path, lineno, section, key,
+                               val, err, err_len))
+            continue;
         failed = true;
         break;
     }
@@ -594,13 +609,9 @@ static wf_status load_yaml(const char *path, metalbear_config *config,
             break;
         }
 
-        std::string full = section + "." + key;
-        Apply r = apply_setting(yaml, config, owner,
-                                {path, lineno, key, full, val, err, err_len});
-        if (r == Apply::Applied) continue;
-        if (r == Apply::NotFound)
-            set_error(err, err_len, "%s:%d: unknown setting '%s'", path, lineno,
-                      full.c_str());
+        if (apply_full_setting(yaml, config, owner, path, lineno, section, key,
+                               val, err, err_len))
+            continue;
         failed = true;
         break;
     }
