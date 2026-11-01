@@ -110,6 +110,37 @@ static cJSON *build_invite_code_json(metalbear_server *server,
     return obj;
 }
 
+/* Shared invitedBy/invites rendering for account views. Both
+ * getAccountInfo and the getAccountInfos item builder reported the
+ * same shape, so one helper owns it instead of two copies. */
+static void add_invite_fields(metalbear_server *server, cJSON *obj,
+                              const char *did, const char *handle) {
+    metalbear_invite_code_entry *invited_by_entry = NULL;
+    if (metalbear_account_registry_get_invite_code_for_account(
+            server->registry, did, handle, &invited_by_entry) == WF_OK) {
+        cJSON *invited_by_json =
+            build_invite_code_json(server, invited_by_entry, did);
+        if (invited_by_json)
+            cJSON_AddItemToObject(obj, "invitedBy", invited_by_json);
+        metalbear_invite_code_entries_free(invited_by_entry, 1);
+    }
+    metalbear_invite_code_entry *own_codes = NULL;
+    size_t own_code_count = 0;
+    if (metalbear_account_registry_get_invite_codes(
+            server->registry, did, &own_codes, &own_code_count) == WF_OK) {
+        cJSON *invites = cJSON_CreateArray();
+        if (invites) {
+            for (size_t i = 0; i < own_code_count; i++) {
+                cJSON *code_json =
+                    build_invite_code_json(server, &own_codes[i], did);
+                if (code_json) cJSON_AddItemToArray(invites, code_json);
+            }
+            cJSON_AddItemToObject(obj, "invites", invites);
+        }
+        metalbear_invite_code_entries_free(own_codes, own_code_count);
+    }
+}
+
 /* ---- com.atproto.admin.getAccountInfo (query, admin-gated) ----
  * Mirrors refpds `pdsadmin account list`: look the DID up in the
  * registry and return its did/handle/email/active. Unknown DID is
@@ -169,36 +200,8 @@ wf_status admin_get_account_info(void *ctx, const wf_xrpc_request *request,
      * the same account. */
     cJSON_AddStringToObject(root, "indexedAt",
                             entry->created_at ? entry->created_at : "");
-    /* invitedBy: the code that created this account, if any (self-signup
-     * with invites off, or created before invite tracking, leaves this
-     * absent -- matches the reference's optional field). */
-    metalbear_invite_code_entry *invited_by_entry = NULL;
-    if (metalbear_account_registry_get_invite_code_for_account(
-            server->registry, entry->did, entry->handle, &invited_by_entry) ==
-        WF_OK) {
-        cJSON *invited_by_json =
-            build_invite_code_json(server, invited_by_entry, entry->did);
-        if (invited_by_json)
-            cJSON_AddItemToObject(root, "invitedBy", invited_by_json);
-        metalbear_invite_code_entries_free(invited_by_entry, 1);
-    }
-    /* invites: codes this account itself owns/has minted. */
-    metalbear_invite_code_entry *own_codes = NULL;
-    size_t own_code_count = 0;
-    if (metalbear_account_registry_get_invite_codes(server->registry,
-                                                    entry->did, &own_codes,
-                                                    &own_code_count) == WF_OK) {
-        cJSON *invites = cJSON_CreateArray();
-        if (invites) {
-            for (size_t i = 0; i < own_code_count; i++) {
-                cJSON *code_json =
-                    build_invite_code_json(server, &own_codes[i], entry->did);
-                if (code_json) cJSON_AddItemToArray(invites, code_json);
-            }
-            cJSON_AddItemToObject(root, "invites", invites);
-        }
-        metalbear_invite_code_entries_free(own_codes, own_code_count);
-    }
+    /* invitedBy/invites share one helper with the getAccountInfos item. */
+    add_invite_fields(server, root, entry->did, entry->handle);
     metalbear_account_entry_free(entry);
     return set_json(response, root);
 }
@@ -591,32 +594,7 @@ static cJSON *build_account_view(metalbear_server *server,
     cJSON_AddStringToObject(obj, "indexedAt",
                             entry->created_at ? entry->created_at : "");
     /* Same invitedBy/invites as admin_get_account_info. */
-    metalbear_invite_code_entry *invited_by_entry = NULL;
-    if (metalbear_account_registry_get_invite_code_for_account(
-            server->registry, entry->did, entry->handle, &invited_by_entry) ==
-        WF_OK) {
-        cJSON *invited_by_json =
-            build_invite_code_json(server, invited_by_entry, entry->did);
-        if (invited_by_json)
-            cJSON_AddItemToObject(obj, "invitedBy", invited_by_json);
-        metalbear_invite_code_entries_free(invited_by_entry, 1);
-    }
-    metalbear_invite_code_entry *own_codes = NULL;
-    size_t own_code_count = 0;
-    if (metalbear_account_registry_get_invite_codes(server->registry,
-                                                    entry->did, &own_codes,
-                                                    &own_code_count) == WF_OK) {
-        cJSON *invites = cJSON_CreateArray();
-        if (invites) {
-            for (size_t i = 0; i < own_code_count; i++) {
-                cJSON *code_json =
-                    build_invite_code_json(server, &own_codes[i], entry->did);
-                if (code_json) cJSON_AddItemToArray(invites, code_json);
-            }
-            cJSON_AddItemToObject(obj, "invites", invites);
-        }
-        metalbear_invite_code_entries_free(own_codes, own_code_count);
-    }
+    add_invite_fields(server, obj, entry->did, entry->handle);
     return obj;
 }
 
