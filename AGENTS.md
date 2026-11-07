@@ -70,4 +70,4 @@ Rules on top of the flow above.
 
 ## Recent history
 
-Sync AGENTS.md from zincfox; Sync AGENTS.md from zincfox; Sync CONTRIBUTING.md from zincfox; Sync CONTRIBUTING.md from zincfox; test(server): cover mod-service auth for getPreferences
+test(server): cover mod-service auth for getPreferences
