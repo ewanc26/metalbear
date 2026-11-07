@@ -31,4 +31,4 @@ or operator would notice gets a line in [CHANGELOG.md](CHANGELOG.md) under
 
 ## Recent direction
 
-Recent commits: Sync AGENTS.md from zincfox; Sync AGENTS.md from zincfox; Sync CONTRIBUTING.md from zincfox; Sync CONTRIBUTING.md from zincfox; test(server): cover mod-service auth for getPreferences
+Recent commits: test(server): cover mod-service auth for getPreferences
