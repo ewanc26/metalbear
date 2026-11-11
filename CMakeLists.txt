@@ -210,6 +210,7 @@ set(METALBEAR_CORE_SOURCES
   src/label/label_store.c
   src/label/labels_routes.c
   src/ops/ops_routes.c
+  src/lexicon_routes.c
   cpp/metalbear/config_file.cpp
   cpp/metalbear/log.cpp
   cpp/metalbear/account.cpp)
@@ -329,6 +330,17 @@ if(METALBEAR_BUILD_TESTS)
   target_include_directories(test_metalbear
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_server COMMAND test_metalbear)
+
+  add_executable(test_metalbear_lexicon_resolve test/test_lexicon_resolve.c)
+  target_link_libraries(test_metalbear_lexicon_resolve PRIVATE metalbear_core)
+  target_include_directories(
+    test_metalbear_lexicon_resolve PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
+                                           "${METALBEAR_WOLFRAM_ROOT}/test")
+  target_compile_definitions(
+    test_metalbear_lexicon_resolve
+    PRIVATE METALBEAR_TEST_LEXICON_DIR="${METALBEAR_WOLFRAM_ROOT}/lexicons")
+  add_test(NAME metalbear_lexicon_resolve
+           COMMAND test_metalbear_lexicon_resolve)
 
   add_executable(test_metalbear_mod_service test/test_mod_service.c)
   target_link_libraries(test_metalbear_mod_service PRIVATE metalbear_core)

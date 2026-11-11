@@ -27,6 +27,7 @@
 #endif
 #include "ops/status.h"
 #include "ops/ops_routes.h"
+#include "lexicon_routes.h"
 #include "repo/blob_store_server.h"
 
 #include "metalbear/server.h"
@@ -459,6 +460,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     if (wf_xrpc_server_register_query(server->xrpc,
                                       "com.atproto.server.describeServer",
                                       describe_server, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+                                      "com.atproto.lexicon.resolveLexicon",
+                                      resolve_lexicon, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc, "_health", health,
                                       server) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,

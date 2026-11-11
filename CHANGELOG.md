@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- `com.atproto.lexicon.resolveLexicon` is now served from Wolfram's vendored lexicon corpus: a known NSID returns the exact lexicon document as `application/json`, an unknown NSID is a 400 `InvalidRequest`. Covered by `test/test_lexicon_resolve.c` through the `wf_xrpc_set_handler` seam. ([#153](https://github.com/ewanc26/metalbear/issues/153))
+
 ### Changed
 
 - MetalBear builds against Wolfram v0.44.2 (was v0.41.0), picking up the chat-group helpers, typed agent views and header newline fix from Wolfram v0.42.0-v0.44.2. ([#148](https://github.com/ewanc26/metalbear/pull/148))
