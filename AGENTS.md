@@ -4,7 +4,7 @@ Guidance for AI coding agents working in **metalbear**.
 
 ## Project overview
 
-an AT Protocol Personal Data Server written primarily in C and C++
+An AT Protocol Personal Data Server written primarily in C and C++
 
 - Language: C
 - Default branch: main

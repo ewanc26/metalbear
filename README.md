@@ -10,6 +10,12 @@
   <a href="https://github.com/ewanc26/metalbear/pkgs/container/metalbear"><img src="https://img.shields.io/badge/ghcr.io-ewanc26%2Fmetalbear-blue?logo=docker&logoColor=white" alt="Container image"></a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/ewanc26/metalbear/actions/workflows/ci.yml"><img src="https://github.com/ewanc26/metalbear/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/ewanc26/metalbear?label=licence" alt="Licence"></a>
+  <a href="https://github.com/sponsors/ewanc26"><img src="https://img.shields.io/github/sponsors/ewanc26?logo=githubsponsors&logoColor=white&label=sponsors" alt="Sponsor"></a>
+</p>
+
 # MetalBear
 
 MetalBear is an AT Protocol Personal Data Server written in C23 and built on [Wolfram](https://github.com/ewanc26/wolfram); it hosts multiple accounts and federates with Bluesky's relays and AppView.
@@ -727,7 +733,6 @@ Sponsorship supports MetalBear and its sibling SDK
 [Wolfram](https://github.com/ewanc26/wolfram) together — the two are developed
 in lockstep, and most of the protocol work lands in Wolfram first.
 
-## License
-
+## Licence
 [GNU AGPL-3.0](LICENSE). Running a modified MetalBear as a public PDS obliges
 you to offer its users the corresponding source.
