@@ -728,7 +728,6 @@ Sponsorship supports MetalBear and its sibling SDK
 [Wolfram](https://github.com/ewanc26/wolfram) together — the two are developed
 in lockstep, and most of the protocol work lands in Wolfram first.
 
-## License
-
+## Licence
 [GNU AGPL-3.0](LICENSE). Running a modified MetalBear as a public PDS obliges
 you to offer its users the corresponding source.
