@@ -1,34 +1,26 @@
-# Contributing to metalbear
+# Contributing to MetalBear
 
-an AT Protocol Personal Data Server written primarily in C and C++
+MetalBear is an AT Protocol Personal Data Server written in C23 and built on [Wolfram](https://github.com/ewanc26/wolfram). Thanks for helping!
 
-## Project context
+A PDS holds people's accounts and data, so correctness and durability outrank features. Every contribution that touches auth, storage, or sync should come with evidence it was tested against real client traffic.
 
-- Primary language: C
-- Default branch: main
+## Getting started
 
-## Before submitting changes
+Build per the [README](README.md); CI runs on every push. A container image is published to ghcr.io, so you can exercise a built server end to end.
 
-- Read the README, manifests, and CI workflows before choosing commands.
-- Run the documented formatter, linter, build, and test checks relevant to your change.
-- Keep commits focused and explain compatibility or operational impact.
-- Open changes through a pull request with verification results.
+## Notes for this project
 
-## How a change goes in
+- **This is server software people trustingly point their identity at.** Favour conservative, spec-faithful changes; link the relevant `com.atproto.*` lexicon in the PR when behaviour is protocol-visible.
+- Sessions are restart-persistent: anything you change around JWTs, refresh rotation, revocation, or app passwords must survive a restart and revoke cleanly.
+- `com.atproto.sync.subscribeRepos` sequencing has cursor replay across restarts; changes there need a replay test, not just a fresh-boot test.
+- Benchmark-sensitive paths (CAR export, blob store) should come with before/after numbers in the PR.
 
-The full rules are in [AGENTS.md](AGENTS.md); the short version is a
-branch named `<type>/<slug>`, conventional commit subjects, a pull request
-filled in from the template, and a green `CI gate` before it merges. Nothing
-goes straight to `main`, and pull requests are merged with rebase, so every
-commit on a branch lands as written: keep each one standalone, and fix review
-comments with new `fix(scope): ...` commits rather than merging `main` in.
-`tools/check-drift.sh` checks the facts the docs and code both state; the flow
-checks themselves are Wolfram's (`flow / conventions`).
+## Before opening a PR
 
-Releases go through `tools/release.sh`, never by hand-tagging. Anything a user
-or operator would notice gets a line in [CHANGELOG.md](CHANGELOG.md) under
-`[Unreleased]` in the same pull request.
+- CI green; tests for anything new.
+- Conventional commits (`feat:`, `fix:`, `docs:`, …), focused PRs, verification described in plain words.
+- AI-assisted PRs welcome; stand behind every line and run the checks yourself.
 
-## Recent direction
+## Licence
 
-Recent commits: test(server): cover mod-service auth for getPreferences
+See [LICENSE](LICENSE). Contributions are accepted under the same terms.
