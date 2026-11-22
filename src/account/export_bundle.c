@@ -80,7 +80,7 @@ static bool tar_write_file(bundle_buffer *b, const char *name,
 
     unsigned long checksum = 0;
     for (size_t i = 0; i < sizeof(header); i++) checksum += header[i];
-    snprintf((char *)header + 148, 8, "%06o", checksum);
+    snprintf((char *)header + 148, 8, "%06lo", checksum);
     header[154] = '\0';
     header[155] = ' ';
 
