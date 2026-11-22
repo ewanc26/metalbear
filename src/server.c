@@ -31,6 +31,7 @@
 #include "repo/blob_store_server.h"
 
 #include "metalbear/server.h"
+#include "metalbear/server_drain.h"
 #include "metalbear/log.h"
 #include "metalbear/ops/metrics.h"
 #include "metalbear/account/account.h"
@@ -171,6 +172,7 @@ static bool copy_config(metalbear_server *server,
         server->admission_closed_domains =
             strdup(config->admission_closed_domains);
     server->blob_upload_limit = config->blob_upload_limit;
+    server->drain_timeout_seconds = config->drain_timeout_seconds;
     server->accepting_imports = config->accepting_imports;
     server->max_import_size = config->max_import_size;
     if (config->plc_url && config->plc_url[0])
@@ -222,13 +224,19 @@ static bool parse_secp256k1_hex(const char *hex, wf_signing_key *out) {
 
 static bool valid_config(const metalbear_config *config) {
     /* No account is required to start: a host exists before its first user,
-     * and accounts arrive through createAccount. */
+     * and accounts arrive through createAccount. A negative drain timeout is
+     * a typo, not "wait forever" (that is expressed by a large positive
+     * value); refusing it avoids a hang nobody intended. */
     return config && config->listen_address && config->data_directory &&
-           config->service_did && config->user_domain;
+           config->service_did && config->user_domain &&
+           config->drain_timeout_seconds >= 0;
 }
 
 metalbear_server *metalbear_server_start(const metalbear_config *config) {
     metalbear_log_configure();
+    /* Reset the write gate before any route is registered so a test process
+     * that starts several servers does not inherit a latched drain. */
+    metalbear_drain_reset(config ? config->drain_timeout_seconds : 5);
     if (!valid_config(config)) {
         LOG_ERROR("invalid server configuration");
         return NULL;
@@ -480,9 +488,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                                       resolve_lexicon, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc, "_health", health,
                                       server) != WF_OK ||
-        wf_xrpc_server_register_procedure(server->xrpc,
-                                          "com.atproto.server.createAccount",
-                                          create_account, server) != WF_OK ||
+        metalbear_register_write_procedure(server->xrpc,
+                                           "com.atproto.server.createAccount",
+                                           create_account, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
                                       "com.atproto.identity.resolveHandle",
                                       resolve_handle, server) != WF_OK ||
@@ -573,9 +581,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             server->public_url, resolve_did_doc_json, server, server->lexicons,
             metalbear_repo_access_guard, server, server->accepting_imports,
             server->max_import_size) != WF_OK ||
-        wf_xrpc_server_register_procedure(server->xrpc,
-                                          "com.atproto.repo.uploadBlob",
-                                          upload_blob, server) != WF_OK ||
+        metalbear_register_write_procedure(server->xrpc,
+                                           "com.atproto.repo.uploadBlob",
+                                           upload_blob, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
                                       "com.atproto.repo.listMissingBlobs",
                                       list_missing_blobs, server) != WF_OK ||
@@ -1099,8 +1107,26 @@ uint16_t metalbear_server_port(const metalbear_server *server) {
     return server ? wf_xrpc_server_port(server->xrpc) : 0;
 }
 
+void metalbear_server_drain(metalbear_server *server) {
+    if (!server) return;
+    metalbear_drain_begin();
+    /* Every in-flight write has either committed or been turned away, so the
+     * firehose cursor is final. Flush its WAL before the listener and stores
+     * go away (issue #164). */
+    metalbear_sequencer_checkpoint(server->sequencer);
+}
+
+bool metalbear_server_is_draining(const metalbear_server *server) {
+    (void)server;
+    return metalbear_drain_is_active();
+}
+
 void metalbear_server_free(metalbear_server *server) {
     if (!server) return;
+    /* Close the listener to new connections, and make any write already past
+     * its gate but not yet finished see the latch, before stores are freed. */
+    metalbear_drain_shutdown();
+    metalbear_sequencer_checkpoint(server->sequencer);
     wf_xrpc_server_free(server->xrpc);
     /* Stop the sweep before the stores it walks (cache, sequencer, registry,
      * metrics, DNS) go away. Joining here waits for any in-flight pass. */

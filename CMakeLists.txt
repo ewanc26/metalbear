@@ -199,6 +199,7 @@ set(METALBEAR_CORE_SOURCES
   src/repo/did_document.c
   src/sequencer.c
   src/server.c
+  src/server_drain.c
   src/server_auth.c
   src/server_guards.c
   src/server_identity.c
@@ -539,6 +540,10 @@ if(METALBEAR_BUILD_TESTS)
   add_executable(test_metalbear_admission test/test_admission.c)
   target_link_libraries(test_metalbear_admission PRIVATE metalbear_core)
   add_test(NAME metalbear_admission COMMAND test_metalbear_admission)
+
+  add_executable(test_metalbear_drain test/test_drain.c)
+  target_link_libraries(test_metalbear_drain PRIVATE metalbear_core)
+  add_test(NAME metalbear_drain COMMAND test_metalbear_drain)
 
   add_executable(test_metalbear_audit_account test/test_audit_account.c)
   target_link_libraries(test_metalbear_audit_account

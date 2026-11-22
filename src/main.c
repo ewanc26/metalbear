@@ -164,6 +164,10 @@ int main(int argc, char **argv) {
          * lever on a server whose operator never thought about it; an
          * operator who wants no cap can still set 0 explicitly. */
         .blob_upload_limit = 5 * 1024 * 1024,
+        /* SIGTERM drains in-flight writes for up to this long (issue #164).
+         * Five seconds is short enough to fit inside Docker's 10s stop grace
+         * and long enough for an applyWrites batch on a small host. */
+        .drain_timeout_seconds = 5,
         /* The reference PDS accepts repo imports by default
          * (config.ts: `acceptingImports: env.acceptingImports ?? true`); an
          * operator who wants the bulk-replace path closed can disable it. */
@@ -237,6 +241,7 @@ int main(int argc, char **argv) {
     ENV_I64("METALBEAR_RATE_LIMIT", rate_limit);
     ENV_I64("METALBEAR_RATE_LIMIT_WINDOW", rate_limit_window);
     ENV_I64("METALBEAR_BLOB_UPLOAD_LIMIT", blob_upload_limit);
+    ENV_I64("METALBEAR_DRAIN_TIMEOUT_SECONDS", drain_timeout_seconds);
     ENV_I64("METALBEAR_MAX_IMPORT_SIZE", max_import_size);
     ENV_I64("METALBEAR_DELETION_HOLD_SECONDS", deletion_hold_seconds);
     ENV_I64("METALBEAR_DID_CACHE_TTL", did_cache_ttl_seconds);
@@ -360,6 +365,9 @@ int main(int argc, char **argv) {
     LOG_INFO("listening on %s:%u", config.listen_address,
              (unsigned)metalbear_server_port(server));
     while (!stopping) pause();
+    /* Drain writes before the listener and stores are torn down (issue #164).
+     * A write that entered before the latch commits; a late writer gets 503. */
+    metalbear_server_drain(server);
     metalbear_server_free(server);
     return 0;
 }

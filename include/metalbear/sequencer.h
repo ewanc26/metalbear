@@ -21,6 +21,13 @@ typedef struct metalbear_sequencer metalbear_sequencer;
  * createAccount for every account alike.
  */
 wf_status metalbear_sequencer_open(const char *path, metalbear_sequencer **out);
+/*
+ * Flush the event log's WAL to the main database (issue #164). Called after
+ * in-flight writes have quiesced during a graceful drain, so the durable
+ * firehose cursor is on disk before the process exits. A no-op when the
+ * sequencer is NULL.
+ */
+void metalbear_sequencer_checkpoint(metalbear_sequencer *sequencer);
 void metalbear_sequencer_free(metalbear_sequencer *sequencer);
 
 /* Keepalive interval for idle firehose connections. Must stay well under the

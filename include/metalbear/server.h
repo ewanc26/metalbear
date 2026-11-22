@@ -190,6 +190,14 @@ typedef struct metalbear_config {
     int64_t update_check_interval;
     const char *update_metalbear_repo;
     const char *update_wolfram_repo;
+    /* Graceful drain timeout in seconds (issue #164). On SIGINT/SIGTERM the
+     * server stops accepting new writes and waits this long for in-flight
+     * writes to finish before flushing the sequencer and exiting. 0 keeps the
+     * immediate-stop behaviour; keep it under the orchestrator's stop grace
+     * period (Docker's default is 10s). Negative values are refused at
+     * startup. Mapped to server.drain_timeout_seconds /
+     * METALBEAR_DRAIN_TIMEOUT_SECONDS. */
+    int64_t drain_timeout_seconds;
 } metalbear_config;
 
 /* Start a single-account AT Protocol PDS. All strings are copied. */
@@ -198,7 +206,21 @@ metalbear_server *metalbear_server_start(const metalbear_config *config);
 /* The actual bound port, useful when config.port was zero. */
 uint16_t metalbear_server_port(const metalbear_server *server);
 
-/* Stop and free the server. Durable repository and blob data remain on disk. */
+/*
+ * Begin graceful drain (issue #164): refuse new writes with 503 and wait up
+ * to the configured drain timeout for in-flight writes to finish. Safe to
+ * call from a signal handler's main loop, at most once before free(). Returns
+ * once writes are quiescent or the timeout elapsed. Reads keep working until
+ * metalbear_server_free() stops the listener. Idempotent.
+ */
+void metalbear_server_drain(metalbear_server *server);
+
+/* True once metalbear_server_drain() has latched. Write handlers use this to
+ * turn away new mutations with 503 while a drain is in progress. */
+bool metalbear_server_is_draining(const metalbear_server *server);
+
+/* Stop and free the server. Durable repository and blob data remain on disk.
+ * Calls metalbear_server_drain() first when a drain has not run yet. */
 void metalbear_server_free(metalbear_server *server);
 
 #ifdef __cplusplus
