@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Fixed
+
+- `metalbear-update.sh apply` now sizes the data snapshot on macOS as well as Linux: the old `xargs -a` flag is GNU-only, and the replacement also handles SQLite filenames containing spaces. ([#197](https://github.com/ewanc26/metalbear/issues/197))
+
 ## [0.48.0] - 2026-11-22
 
 ### Added
