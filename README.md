@@ -417,6 +417,8 @@ Admin-gated `com.atproto.admin.*` procedures require HTTP Basic auth with the
 configured admin password:
 
 - `com.atproto.admin.getAccountInfo` — resolve DID to handle/email/active state
+- `com.atproto.admin.searchAccounts` — search accounts by `term` (DID, handle or
+  email) or by the lexicon's `email` parameter, with `limit`/`cursor` paging
 - `com.atproto.admin.sendEmail` — send templated email to an account
 - `com.atproto.admin.getInviteCodes` — list invite codes with account/use metadata
 - `com.atproto.admin.disableInviteCodes` — disable invite codes by exact code or

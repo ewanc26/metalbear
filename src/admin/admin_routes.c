@@ -29,6 +29,7 @@
 #include "wolfram/xrpc.h"
 
 #include <cJSON.h>
+#include <ctype.h>
 #include <ftw.h>
 #include <limits.h>
 #include <stdio.h>
@@ -632,6 +633,157 @@ wf_status admin_get_account_infos(void *ctx, const wf_xrpc_request *request,
         if (view) cJSON_AddItemToArray(infos, view);
     }
     cJSON_AddItemToObject(root, "infos", infos);
+    return set_json(response, root);
+}
+
+/* Case-insensitive substring match for the search term. Handles, DIDs and
+ * email addresses are case-insensitive in practice, and the reference's
+ * searchAccounts uses SQL LIKE; strcasestr is not portable enough for the
+ * minimal build, so keep the small ASCII fold here. */
+static bool admin_search_contains(const char *haystack, const char *needle) {
+    if (!haystack || !needle || !needle[0]) return false;
+    for (const char *h = haystack; *h; h++) {
+        const char *p = needle;
+        const char *q = h;
+        while (*p && *q &&
+               tolower((unsigned char)*p) == tolower((unsigned char)*q)) {
+            p++;
+            q++;
+        }
+        if (!*p) return true;
+    }
+    return false;
+}
+
+/* ---- com.atproto.admin.searchAccounts (query, admin-gated) ----
+ *
+ * The vendored lexicon names the filter `email`, while issue #149 asks for a
+ * `term` that matches handle, email and DID. Accept both: `term` is the
+ * broader search and `email` keeps the published parameter; with neither,
+ * the route lists accounts. Pagination is a DID keyset walk, so it stays
+ * stable while accounts are added or removed; the cursor is the DID of the
+ * last account returned, as in metalbear_account_registry_list_after.
+ */
+wf_status admin_search_accounts(void *ctx, const wf_xrpc_request *request,
+                                wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *params = request->params;
+    cJSON *term_item =
+        params ? cJSON_GetObjectItemCaseSensitive(params, "term") : NULL;
+    cJSON *email_item =
+        params ? cJSON_GetObjectItemCaseSensitive(params, "email") : NULL;
+    cJSON *cursor_item =
+        params ? cJSON_GetObjectItemCaseSensitive(params, "cursor") : NULL;
+    cJSON *limit_item =
+        params ? cJSON_GetObjectItemCaseSensitive(params, "limit") : NULL;
+
+    const char *term = cJSON_IsString(term_item) && term_item->valuestring[0]
+                           ? term_item->valuestring
+                           : NULL;
+    const char *email = cJSON_IsString(email_item) && email_item->valuestring[0]
+                            ? email_item->valuestring
+                            : NULL;
+    const char *cursor =
+        cJSON_IsString(cursor_item) && cursor_item->valuestring[0]
+            ? cursor_item->valuestring
+            : NULL;
+
+    /* Default 50, clamped to the lexicon's 1..100 range. */
+    size_t limit = 50;
+    if (cJSON_IsNumber(limit_item) && limit_item->valuedouble >= 1) {
+        double requested = limit_item->valuedouble;
+        limit = (size_t)(requested > 100 ? 100 : requested);
+    }
+
+    if (cursor) {
+        metalbear_account_entry *at_cursor = NULL;
+        if (metalbear_account_registry_find_by_did(server->registry, cursor,
+                                                   &at_cursor) != WF_OK ||
+            !at_cursor) {
+            wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                       "unknown cursor");
+            return WF_OK;
+        }
+        metalbear_account_entry_free(at_cursor);
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *accounts = cJSON_CreateArray();
+    if (!root || !accounts) {
+        cJSON_Delete(root);
+        cJSON_Delete(accounts);
+        return WF_ERR_ALLOC;
+    }
+
+    char *scan_after = cursor ? strdup(cursor) : NULL;
+    if (cursor && !scan_after) {
+        cJSON_Delete(root);
+        cJSON_Delete(accounts);
+        return WF_ERR_ALLOC;
+    }
+    char *last_returned = NULL;
+    bool more = false;
+    bool alloc_failed = false;
+    bool store_failed = false;
+
+    for (;;) {
+        metalbear_account_entry *batch = NULL;
+        size_t batch_count = 0;
+        if (metalbear_account_registry_list_after(server->registry, scan_after,
+                                                  100, &batch,
+                                                  &batch_count) != WF_OK) {
+            wf_xrpc_response_set_error(response, 500, "InternalError",
+                                       "could not list accounts");
+            store_failed = true;
+            break;
+        }
+        for (size_t i = 0; i < batch_count; i++) {
+            const metalbear_account_entry *entry = &batch[i];
+            bool matches = !term && !email;
+            if (!matches) {
+                matches =
+                    term ? admin_search_contains(entry->did, term) ||
+                               admin_search_contains(entry->handle, term) ||
+                               admin_search_contains(entry->email, term)
+                         : admin_search_contains(entry->email, email);
+            }
+            if (matches) {
+                if ((size_t)cJSON_GetArraySize(accounts) >= limit) {
+                    more = true;
+                    break;
+                }
+                cJSON *view = build_account_view(server, entry);
+                if (view) cJSON_AddItemToArray(accounts, view);
+                free(last_returned);
+                last_returned = strdup(entry->did);
+                if (!last_returned) {
+                    alloc_failed = true;
+                    break;
+                }
+            }
+            free(scan_after);
+            scan_after = strdup(entry->did);
+            if (!scan_after) {
+                alloc_failed = true;
+                break;
+            }
+        }
+        bool last_batch = batch_count < 100;
+        metalbear_account_entries_free(batch, batch_count);
+        if (alloc_failed || store_failed || more || last_batch) break;
+    }
+
+    free(scan_after);
+    if (alloc_failed || store_failed) {
+        free(last_returned);
+        cJSON_Delete(root);
+        cJSON_Delete(accounts);
+        return alloc_failed ? WF_ERR_ALLOC : WF_OK;
+    }
+    cJSON_AddItemToObject(root, "accounts", accounts);
+    if (more && last_returned)
+        cJSON_AddStringToObject(root, "cursor", last_returned);
+    free(last_returned);
     return set_json(response, root);
 }
 
