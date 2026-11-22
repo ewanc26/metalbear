@@ -664,6 +664,31 @@ static bool admin_search_contains(const char *haystack, const char *needle) {
  * stable while accounts are added or removed; the cursor is the DID of the
  * last account returned, as in metalbear_account_registry_list_after.
  */
+/* An account's login email is recorded in the registry at signup, but rows
+ * that predate that column -- and accounts whose email was changed later --
+ * carry it only in the account store. The account view already reads the
+ * store, so search the same source when the registry has no address. Caller
+ * frees the returned string. */
+static char *admin_search_email(const metalbear_account_entry *entry) {
+    if (entry->email && entry->email[0]) return strdup(entry->email);
+    if (!entry->data_directory) return NULL;
+    char *path = join_path(entry->data_directory, "account.sqlite3");
+    if (!path) return NULL;
+    metalbear_account_store *store = NULL;
+    char *email = NULL;
+    int confirmed = 0;
+    if (metalbear_account_store_open(path, "", &store) == WF_OK && store) {
+        if (metalbear_account_get_email(store, &email, &confirmed) != WF_OK ||
+            !email || !email[0]) {
+            free(email);
+            email = NULL;
+        }
+        metalbear_account_store_free(store);
+    }
+    free(path);
+    return email;
+}
+
 wf_status admin_search_accounts(void *ctx, const wf_xrpc_request *request,
                                 wf_xrpc_response *response) {
     metalbear_server *server = ctx;
@@ -741,11 +766,16 @@ wf_status admin_search_accounts(void *ctx, const wf_xrpc_request *request,
             const metalbear_account_entry *entry = &batch[i];
             bool matches = !term && !email;
             if (!matches) {
+                char *stored_email = NULL;
+                const char *address = entry->email;
+                if (!address || !address[0])
+                    address = stored_email = admin_search_email(entry);
                 matches =
                     term ? admin_search_contains(entry->did, term) ||
                                admin_search_contains(entry->handle, term) ||
-                               admin_search_contains(entry->email, term)
-                         : admin_search_contains(entry->email, email);
+                               admin_search_contains(address, term)
+                         : admin_search_contains(address, email);
+                free(stored_email);
             }
             if (matches) {
                 if ((size_t)cJSON_GetArraySize(accounts) >= limit) {
