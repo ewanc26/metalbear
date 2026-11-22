@@ -60,8 +60,7 @@ routes, with no MetalBear-specific steps:
 > caller-supplied real DID when the request authenticates as that DID. A fresh
 > destination has no account or token for it, so its public route cannot
 > complete step 1 by itself; a production import needs an authenticated
-> provisioning or entryway step. The test suite uses the `did:example:` seam to
-> exercise the archive format without that bootstrap.
+> provisioning or entryway step.
 
 The bundle is assembled in memory and the XRPC layer copies it once more when
 writing the response, so an account with very large blobs needs roughly twice
