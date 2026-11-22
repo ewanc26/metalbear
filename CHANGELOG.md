@@ -10,6 +10,7 @@ into the next version's. Releases made before it existed are described only by t
 ### Added
 
 - `com.atproto.lexicon.resolveLexicon` is now served from Wolfram's vendored lexicon corpus: a known NSID returns the exact lexicon document as `application/json`, an unknown NSID is a 400 `InvalidRequest`. Covered by `test/test_lexicon_resolve.c` through the `wf_xrpc_set_handler` seam. ([#153](https://github.com/ewanc26/metalbear/issues/153))
+- `com.atproto.admin.searchAccounts` lets an operator search accounts by DID, handle or email (`term`), or with the lexicon's `email` filter, with keyset `cursor` pagination and a `limit` clamped to 1-100. It returns the same account view as `getAccountInfos` and stays behind the HTTP Basic admin guard. ([#149](https://github.com/ewanc26/metalbear/issues/149))
 
 ### Changed
 
