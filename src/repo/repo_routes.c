@@ -1422,6 +1422,37 @@ static wf_status register_pds_repo_handlers(wf_xrpc_server *server,
     return WF_OK;
 }
 
+wf_status metalbear_repo_routes_dispatch(metalbear_repo_store *store,
+                                         const char *service_did,
+                                         const char *public_url,
+                                         const char *nsid,
+                                         const wf_xrpc_request *req,
+                                         wf_xrpc_response *resp) {
+    if (!store || !nsid || !req || !resp) return WF_ERR_INVALID_ARG;
+    metalbear_pds_repo_bundle b;
+    memset(&b, 0, sizeof(b));
+    b.fallback_repo = store;
+    b.accepting_imports = true;
+    /* The handlers only read these two strings; the bundle is borrowed for
+     * the duration of the call, so no strdup/ownership transfer is needed. */
+    b.service_did = (char *)service_did;
+    b.public_url = (char *)public_url;
+
+    if (strcmp(nsid, "com.atproto.repo.createRecord") == 0)
+        return h_create_record(&b, req, resp);
+    if (strcmp(nsid, "com.atproto.repo.getRecord") == 0)
+        return h_get_record(&b, req, resp);
+    if (strcmp(nsid, "com.atproto.repo.listRecords") == 0)
+        return h_list_records(&b, req, resp);
+    if (strcmp(nsid, "com.atproto.repo.describeRepo") == 0)
+        return h_describe_repo(&b, req, resp);
+    if (strcmp(nsid, "com.atproto.sync.getLatestCommit") == 0)
+        return h_get_latest_commit(&b, req, resp);
+    wf_xrpc_response_set_error(resp, 404, "InvalidRequest",
+                               "unknown repo route");
+    return WF_OK;
+}
+
 wf_status metalbear_xrpc_server_register_pds_repo_resolver(
     wf_xrpc_server *server, metalbear_xrpc_repo_resolver resolver, void *ctx,
     const char *service_did, const char *public_url) {
