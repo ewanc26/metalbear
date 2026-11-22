@@ -911,6 +911,93 @@ wf_status admin_update_account_handle(void *ctx, const wf_xrpc_request *request,
     return set_json(response, root);
 }
 
+/* ---- com.atproto.admin.updateAccountSigningKey (procedure, admin-gated) ----
+ * The lexicon takes a public did:key, not a private key: the operator is
+ * publishing a key whose half lives elsewhere (or was pre-provisioned), so
+ * this route changes the DID document's #atproto verification method and the
+ * stored override used to build it -- not the repo's commit key. The PLC
+ * operation lands before either local write, so a directory failure leaves
+ * the published and stored keys untouched. */
+wf_status admin_update_account_signing_key(void *ctx,
+                                           const wf_xrpc_request *request,
+                                           wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did = request->params
+                     ? cJSON_GetObjectItemCaseSensitive(request->params, "did")
+                     : NULL;
+    cJSON *signing_key =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "signingKey")
+            : NULL;
+    if (!require_string(response, did, "did")) return WF_OK;
+    if (!require_string(response, signing_key, "signingKey")) return WF_OK;
+    if (!wf_syntax_did_is_valid(did->valuestring)) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "invalid did");
+        return WF_OK;
+    }
+    /* wf_didkey_decode validates the multibase point itself, so a string
+     * that merely looks like "did:key:..." cannot be published. Accept the
+     * bare multikey form too and normalise it to the canonical did:key form
+     * the DID document builder and PLC operation both expect. */
+    wf_key_type key_type;
+    unsigned char *raw = NULL;
+    size_t raw_len = 0;
+    char *didkey = NULL;
+    if (wf_didkey_decode(signing_key->valuestring, &key_type, &raw, &raw_len) !=
+            WF_OK ||
+        wf_didkey_encode(key_type, raw, raw_len, &didkey) != WF_OK) {
+        free(raw);
+        free(didkey);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "invalid signingKey");
+        return WF_OK;
+    }
+    free(raw);
+
+    /* Only accounts this PDS hosts can have their DID document updated. */
+    metalbear_account_entry *entry = NULL;
+    if (metalbear_account_registry_find_by_did(
+            server->registry, did->valuestring, &entry) != WF_OK ||
+        !entry) {
+        free(didkey);
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "Unknown did");
+        return WF_OK;
+    }
+    metalbear_account_entry_free(entry);
+
+    if (!metalbear_plc_update_signing_key(server, response, did->valuestring,
+                                          didkey,
+                                          "admin_update_account_signing_key")) {
+        free(didkey);
+        return WF_OK;
+    }
+
+    /* Persist through the account context (not just a process-local cache)
+     * so a restart keeps serving the DID document the directory publishes. */
+    metalbear_account_context *acct = context_for_did(server, did->valuestring);
+    bool stored = acct && metalbear_account_store_set_signing_key(
+                              acct->account, didkey) == WF_OK;
+    free(didkey);
+    if (!stored) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not store signing key");
+        return WF_OK;
+    }
+
+    if (metalbear_sequencer_identity(server->sequencer, acct->did,
+                                     acct->handle) != WF_OK)
+        LOG_ERROR("admin_update_account_signing_key: could not sequence "
+                  "#identity for did=%s; the key change is durable but "
+                  "unannounced",
+                  acct->did);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    return set_json(response, root);
+}
+
 /* ---- com.atproto.admin.updateAccountEmail (procedure, admin-gated) ---- */
 wf_status admin_update_account_email(void *ctx, const wf_xrpc_request *request,
                                      wf_xrpc_response *response) {

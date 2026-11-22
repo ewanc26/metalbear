@@ -87,6 +87,17 @@ wf_status metalbear_account_store_prefs_get(metalbear_account_store *store,
                                             char **out_json);
 wf_status metalbear_account_store_prefs_put(metalbear_account_store *store,
                                             const char *json);
+/* Published signing key (did:key:z...) advertised by this account's DID
+ * document. NULL (with WF_OK) when no admin override has been set, in which
+ * case the repo's creation-time key is used. The caller frees *out_didkey. */
+wf_status
+metalbear_account_store_get_signing_key(metalbear_account_store *store,
+                                        char **out_didkey);
+/* Persist the published signing key after a successful PLC operation. A NULL
+ * key clears the override, returning the account to its creation-time key. */
+wf_status
+metalbear_account_store_set_signing_key(metalbear_account_store *store,
+                                        const char *didkey);
 /* Return whether the account may receive new invite codes (default 1). */
 bool metalbear_account_invites_enabled(metalbear_account_store *store);
 /* Set whether the account may receive new invite codes. */

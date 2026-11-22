@@ -711,6 +711,15 @@ if(METALBEAR_BUILD_TESTS)
   add_test(NAME metalbear_handle_plc_update
           COMMAND test_metalbear_handle_plc_update)
 
+  add_executable(test_metalbear_admin_signing_key
+                 test/test_admin_signing_key.c)
+  target_link_libraries(test_metalbear_admin_signing_key
+                        PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_admin_signing_key
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_admin_signing_key
+          COMMAND test_metalbear_admin_signing_key)
+
   add_executable(test_metalbear_well_known_did_port
                  test/test_well_known_did_port.c)
   target_link_libraries(test_metalbear_well_known_did_port

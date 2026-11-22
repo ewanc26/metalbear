@@ -297,6 +297,22 @@ bool metalbear_plc_update_handle(metalbear_server *server,
                                  wf_xrpc_response *response, const char *did,
                                  const char *handle, const char *log_name);
 
+/* Effective signing key advertised by an account's DID document: the admin
+ * override when one has been published, else the repo's creation-time key.
+ * Heap-allocated; caller frees. */
+char *metalbear_account_signing_key_did(const metalbear_account_context *acct);
+
+/* Publish a new #atproto verification method to the PLC directory, copying
+ * every other field of the account's last operation forward. did:web needs
+ * nothing (its document is served locally). Returns true when the caller may
+ * persist the new key; false fills `response` with 500 and the caller returns
+ * WF_OK without mutating local state. */
+bool metalbear_plc_update_signing_key(metalbear_server *server,
+                                      wf_xrpc_response *response,
+                                      const char *did,
+                                      const char *signing_key_didkey,
+                                      const char *log_name);
+
 /* server_auth.c, server_guards.c and server_identity.c: what server.c wires in.
  */
 void metalbear_account_cache_request_observer(void *ctx, const char *nsid,
