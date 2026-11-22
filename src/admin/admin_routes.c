@@ -15,6 +15,7 @@
 
 #include "metalbear/account/account.h"
 #include "metalbear/account/account_registry.h"
+#include "metalbear/account/export_bundle.h"
 #ifdef METALBEAR_MODULE_EMAIL
 #include "metalbear/email.h"
 #endif
@@ -1397,4 +1398,48 @@ wf_status admin_delete_account(void *ctx, const wf_xrpc_request *request,
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
     return set_json(response, root);
+}
+
+/* ---- com.atproto.temp.exportAccountBundle (query, admin-gated) ----
+ * One-shot migration bundle: repo CAR, every blob, and the metadata an
+ * importer needs in a single plain tar archive. Kept in the temp namespace
+ * until a lexicon exists upstream; the wire format needs no lexicon. */
+wf_status admin_export_account_bundle(void *ctx, const wf_xrpc_request *request,
+                                      wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *did = request->params
+                     ? cJSON_GetObjectItemCaseSensitive(request->params, "did")
+                     : NULL;
+    if (!require_string(response, did, "did")) return WF_OK;
+
+    metalbear_account_entry *entry = NULL;
+    if (metalbear_account_registry_find_by_did(
+            server->registry, did->valuestring, &entry) != WF_OK ||
+        !entry) {
+        wf_xrpc_response_set_error(response, 400, "NotFound",
+                                   "Account not found");
+        return WF_OK;
+    }
+
+    metalbear_account_context *acct = context_for_did(server, did->valuestring);
+    if (!acct) {
+        metalbear_account_entry_free(entry);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "could not open account stores");
+        return WF_OK;
+    }
+
+    char *signing_key = metalbear_account_signing_key_did(acct);
+    unsigned char *bundle = NULL;
+    size_t bundle_len = 0;
+    wf_status st = metalbear_export_bundle_build(
+        acct, signing_key, entry->created_at, &bundle, &bundle_len);
+    free(signing_key);
+    metalbear_account_entry_free(entry);
+    if (st != WF_OK) return st;
+
+    wf_xrpc_response_set_content_type(response, "application/x-tar");
+    wf_xrpc_response_set_body(response, (const char *)bundle, bundle_len);
+    free(bundle);
+    return WF_OK;
 }

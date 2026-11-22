@@ -45,6 +45,8 @@ wf_status admin_disable_invite_codes(void *ctx, const wf_xrpc_request *request,
                                      wf_xrpc_response *response);
 wf_status admin_delete_account(void *ctx, const wf_xrpc_request *request,
                                wf_xrpc_response *response);
+wf_status admin_export_account_bundle(void *ctx, const wf_xrpc_request *request,
+                                      wf_xrpc_response *response);
 
 #ifdef __cplusplus
 }
