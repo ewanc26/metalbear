@@ -592,6 +592,9 @@ sequence number.
 stopped advancing while accounts are still writing is indistinguishable, from
 outside, from a PDS that is down.
 
+An optional Prometheus + Grafana stack lives in `deploy/monitoring/`; see
+[docs/monitoring.md](docs/monitoring.md) for setup.
+
 ### Logging
 
 `METALBEAR_LOG_LEVEL` is `debug`, `info` (default), `warn` or `error`, and
