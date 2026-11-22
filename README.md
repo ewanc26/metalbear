@@ -670,6 +670,10 @@ ctest --test-dir build --output-on-failure
 Wolfram is fetched pinned to the released `v0.45.0` tag via CMake's
 FetchContent on the first configure, so no sibling checkout is needed.
 
+To check a running instance against the core protocol flows, use
+`tools/conformance.sh` (or `ctest -R metalbear_conformance` for the local
+harness); see [docs/conformance.md](docs/conformance.md).
+
 Two of its behaviours are worth knowing before writing code against it,
 because both differ from the `v0.22.0` pin this tree was last green against:
 

@@ -1,0 +1,38 @@
+name: Conformance
+
+# Advisory only: this workflow is never a required status check and is not part
+# of CI gate. Run it by hand against the dev instance or a self-hosted PDS.
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Base URL of the instance to check'
+        type: string
+        default: 'http://127.0.0.1:3001'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: conformance self-check
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config libsqlite3-dev libcurl4-openssl-dev \
+            libssl-dev libsecp256k1-dev libmicrohttpd-dev libzstd-dev zlib1g-dev \
+            libc-ares-dev libidn2-dev libpcre2-dev
+
+      - name: Build checker
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build --target test_metalbear_conformance
+
+      - name: Run checks
+        run: tools/conformance.sh "${{ inputs.base_url }}"
