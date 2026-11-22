@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(
   metalbear
-  VERSION 0.50.0
+  VERSION 0.51.0
   DESCRIPTION "A C23-first AT Protocol Personal Data Server with isolated C++ modules"
   LANGUAGES C CXX)
 
