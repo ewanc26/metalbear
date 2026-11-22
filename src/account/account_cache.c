@@ -224,6 +224,10 @@ metalbear_account_cache_get(metalbear_account_cache *cache,
     }
     ne->ctx = ctx;
     ne->refcount = 1;
+    /* malloc does not zero memory. On platforms that hand back recycled pages
+     * this would otherwise be garbage, and every lookup/eviction would skip
+     * the entry as if a delete had retired it. */
+    ne->retired = false;
     ne->seq = ++cache->seq_counter;
     ne->next = cache->entries;
     cache->entries = ne;
