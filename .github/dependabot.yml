@@ -16,6 +16,12 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
+    # Explicit labels stop Dependabot from creating its own defaults
+    # (dependencies, javascript), which are not in .github/labels.yml and
+    # fail flow / labels and metadata. Keep these in the canonical taxonomy.
+    labels:
+      - chore
+      - "area: ui"
     groups:
       production:
         dependency-type: production
@@ -31,6 +37,11 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 3
+    # github_actions is a Dependabot default, not a label in the canonical
+    # taxonomy; use existing labels so the repository stays drift-free.
+    labels:
+      - chore
+      - "area: ci"
     groups:
       actions:
         patterns: ["*"]
