@@ -77,6 +77,17 @@ accounts:
   # at runtime, and wins. See docs/account-deletion.md.
   deletion_hold_seconds: 0
 
+# Per-domain signup admission. The default applies when no listed domain
+# matches; when omitted it falls back to accounts.invite_required above.
+# Domains are handle suffixes including the leading dot; the longest match
+# wins. An invite code is consumed only for `invite` domains. A `closed`
+# domain is refused with 400 UnsupportedDomain.
+admission:
+  default: "invite"   # open | invite | closed
+  # open_domains: [".open.example.com"]
+  # invite_domains: [".invite.example.com"]
+  # closed_domains: [".closed.example.com"]
+
 limits:
   # Per-client request budget: requests per window. The historical 100/60 is under
   # two requests a second, which one AppView or a relay backfilling with getRepo

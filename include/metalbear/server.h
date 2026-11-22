@@ -71,8 +71,18 @@ typedef struct metalbear_config {
      * NoCrawlersConfigured error. */
     const char *crawlers;
     /* When true, createAccount requires a valid invite code (refpds
-     * PDS_INVITE_REQUIRED). Honest minimum: reject when absent. */
+     * PDS_INVITE_REQUIRED). Honest minimum: reject when absent. This is the
+     * fallback when no per-domain admission policy matches. */
     bool invite_required;
+    /* Per-domain signup admission (issue #163). `admission_default` is
+     * "open", "invite" or "closed"; when unset, invite_required supplies the
+     * fallback. Each list is a comma-separated set of handle suffixes
+     * including the leading dot, e.g. ".open.example.com". Explicit domains
+     * win over the fallback; closed wins over invite and open. */
+    const char *admission_default;
+    const char *admission_open_domains;
+    const char *admission_invite_domains;
+    const char *admission_closed_domains;
     /* Resident account-context budget (MetalBear-specific; no refpds
      * equivalent). Caps the number of open account contexts (repo + auth +
      * blob stores) the cache holds at once; idle ones are evicted past it.
