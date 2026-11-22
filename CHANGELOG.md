@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-11-22
+
 ### Added
 
 - Operator-visible admin audit log: every `com.atproto.admin.*` call records its time, admin identity, action, target DID and outcome, readable through the admin-gated `GET /_ops/audit` route with `limit`/`cursor` pagination. Database schema version 5. ([#160](https://github.com/ewanc26/metalbear/issues/160))
