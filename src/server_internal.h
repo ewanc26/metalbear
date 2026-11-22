@@ -34,10 +34,12 @@
 #include "metalbear/repo/repo_store.h"
 #include "metalbear/sequencer.h"
 #include "metalbear/server.h"
+#include "metalbear/server_drain.h"
 #include "wolfram/xrpc_server.h"
 
 #include <cJSON.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -47,6 +49,10 @@ extern "C" {
 
 struct metalbear_server {
     wf_xrpc_server *xrpc;
+    /* Graceful drain timeout (issue #164). The gate itself lives in
+     * server_drain.c so write handlers without a direct server pointer can
+     * consult it; this copy is kept for diagnostics and tests. */
+    int64_t drain_timeout_seconds;
     /* When this process began serving, for the uptime gauge at /metrics. */
     time_t started_at;
     /*

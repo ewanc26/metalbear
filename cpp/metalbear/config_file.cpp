@@ -124,6 +124,7 @@ static std::string unescape_basic(const std::string &v) {
     STR("server.user_domain", user_domain)                                     \
     STR("server.contact_email", account_email)                                 \
     STR("server.lexicon_dir", lexicon_dir)                                     \
+    NONNEG("server.drain_timeout_seconds", drain_timeout_seconds)              \
                                                                                \
     STR("identity.plc_url", plc_url)                                           \
     STR("identity.plc_rotation_key", plc_rotation_key)                         \

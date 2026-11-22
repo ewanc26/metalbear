@@ -22,6 +22,9 @@ server:
   user_domain: ".pds.example.com"   # suffix accounts may register handles under
   # contact_email: "admin@example.com"
   # lexicon_dir: "/usr/local/share/metalbear/lexicons"
+  # Seconds to wait for in-flight writes on SIGTERM/SIGINT before exiting.
+  # New writes get 503 once the drain begins; 0 stops immediately.
+  # drain_timeout_seconds: 5
 
 operator:
   # Who runs this instance. `email`, `privacy_policy` and `terms_of_service` are

@@ -1390,16 +1390,20 @@ static wf_status register_pds_repo_handlers(wf_xrpc_server *server,
                                             metalbear_pds_repo_bundle *b) {
     if (!server || !b) return WF_ERR_INVALID_ARG;
     wf_status s;
-    s = wf_xrpc_server_register_procedure(
+    /* Mutating repo routes go through the drain gate (issue #164): a SIGTERM
+     * mid-write either lets this batch commit or answers 503, never leaves a
+     * half-written repo. Queries stay unwrapped and keep working until the
+     * listener is stopped. */
+    s = metalbear_register_write_procedure(
         server, "com.atproto.repo.createRecord", h_create_record, b);
     if (s != WF_OK) return s;
-    s = wf_xrpc_server_register_procedure(server, "com.atproto.repo.putRecord",
-                                          h_put_record, b);
+    s = metalbear_register_write_procedure(server, "com.atproto.repo.putRecord",
+                                           h_put_record, b);
     if (s != WF_OK) return s;
-    s = wf_xrpc_server_register_procedure(
+    s = metalbear_register_write_procedure(
         server, "com.atproto.repo.deleteRecord", h_delete_record, b);
     if (s != WF_OK) return s;
-    s = wf_xrpc_server_register_procedure(
+    s = metalbear_register_write_procedure(
         server, "com.atproto.repo.applyWrites", h_apply_writes, b);
     if (s != WF_OK) return s;
     s = wf_xrpc_server_register_query(server, "com.atproto.repo.getRecord",
@@ -1416,8 +1420,8 @@ static wf_status register_pds_repo_handlers(wf_xrpc_server *server,
     if (s != WF_OK) return s;
     /* importRepo (CAR POST body) — see h_import_repo. uploadBlob is
      * registered separately by wf_xrpc_server_register_blob_store. */
-    s = wf_xrpc_server_register_procedure(server, "com.atproto.repo.importRepo",
-                                          h_import_repo, b);
+    s = metalbear_register_write_procedure(
+        server, "com.atproto.repo.importRepo", h_import_repo, b);
     if (s != WF_OK) return s;
     return WF_OK;
 }

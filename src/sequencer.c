@@ -972,6 +972,17 @@ wf_status metalbear_sequencer_purge_account(metalbear_sequencer *s,
     return status;
 }
 
+void metalbear_sequencer_checkpoint(metalbear_sequencer *s) {
+    if (!s) return;
+    pthread_mutex_lock(&s->mutex);
+    /* TRUNCATE both checkpoints the log and returns the WAL to zero bytes,
+     * so a stopped process leaves no unapplied frames behind. Busy handler
+     * would only fire if another connection held the DB, which cannot happen
+     * after writes have quiesced, but keep the default timeout honest. */
+    sqlite3_exec(s->db, "PRAGMA wal_checkpoint(TRUNCATE);", NULL, NULL, NULL);
+    pthread_mutex_unlock(&s->mutex);
+}
+
 void metalbear_sequencer_free(metalbear_sequencer *s) {
     if (!s) return;
     pthread_mutex_lock(&s->mutex);
