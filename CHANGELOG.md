@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-11-22
+
 ### Added
 
 - A background sweep hard-deletes deactivated accounts after a configurable hold (`accounts.deletion_hold_seconds`, or `METALBEAR_DELETION_HOLD_SECONDS`), emitting the same takedown and purge events as `deleteAccount` so relays learn the account is gone. The hold is off by default. ([#159](https://github.com/ewanc26/metalbear/issues/159))
