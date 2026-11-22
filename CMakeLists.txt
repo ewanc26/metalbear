@@ -182,6 +182,8 @@ set(METALBEAR_CORE_SOURCES
   src/twofactor/totp_routes.c
   src/repo/explicit_slurs.c
   src/repo/explicit_slurs_patterns.c
+  src/handle/reserved.c
+  src/handle/reserved_data.c
   src/oauth/oauth.c
   src/oauth/oauth_routes.c
   src/oauth/oauth_account_routes.c
@@ -724,6 +726,14 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_explicit_slurs
           COMMAND test_metalbear_explicit_slurs)
+
+  add_executable(test_metalbear_reserved_handles
+                 test/test_reserved_handles.c)
+  target_link_libraries(test_metalbear_reserved_handles PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_reserved_handles
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_reserved_handles
+           COMMAND test_metalbear_reserved_handles)
 
   add_executable(test_metalbear_schema_version test/test_schema_version.c)
   target_link_libraries(test_metalbear_schema_version

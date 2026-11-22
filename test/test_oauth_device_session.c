@@ -200,7 +200,7 @@ int main(void) {
         create_account(client, "victim.example.com", "victim-secret-pw",
                        victim_did, sizeof(victim_did));
     char *other_token =
-        create_account(client, "other.example.com", "other-secret-pw",
+        create_account(client, "mallory.example.com", "other-secret-pw",
                        other_did, sizeof(other_did));
     CHECK(victim_token != NULL);
     CHECK(other_token != NULL);
@@ -334,10 +334,11 @@ int main(void) {
     /* ---- (f) the same cookie does not authorize a different account -----*/
     if (device_cookie) {
         char other_url[512];
-        snprintf(other_url, sizeof(other_url),
-                 "%s/oauth/authorize?request_uri=%s&client_id=https%%3A%%2F%%2F"
-                 "client.example%%2Fmetadata.json&login_hint=other.example.com",
-                 base, request_uri);
+        snprintf(
+            other_url, sizeof(other_url),
+            "%s/oauth/authorize?request_uri=%s&client_id=https%%3A%%2F%%2F"
+            "client.example%%2Fmetadata.json&login_hint=mallory.example.com",
+            base, request_uri);
         wf_http_header hdr = {"Cookie", device_cookie};
         wf_status s =
             wf_http_get_with_headers(client, other_url, &hdr, 1, &response);

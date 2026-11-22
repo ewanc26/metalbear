@@ -18,6 +18,7 @@
 #ifdef METALBEAR_MODULE_EMAIL
 #include "metalbear/email.h"
 #endif
+#include "metalbear/handle/reserved.h"
 #include "metalbear/log.h"
 #include "metalbear/oauth/auth.h"
 #include "metalbear/ops/metrics.h"
@@ -837,6 +838,14 @@ wf_status admin_update_account_handle(void *ctx, const wf_xrpc_request *request,
     if (!wf_syntax_handle_is_valid(handle->valuestring)) {
         wf_xrpc_response_set_error(response, 400, "InvalidRequest",
                                    "invalid handle");
+        return WF_OK;
+    }
+    /* An admin override must not bypass the signup/update reserved-label
+     * blocklist, matching the reference's shared constraint check. */
+    if (metalbear_handle_is_reserved(handle->valuestring,
+                                     server->user_domain)) {
+        wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
+                                   "Reserved handle");
         return WF_OK;
     }
     /* Check handle is not already taken by another account. */
