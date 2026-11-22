@@ -222,6 +222,17 @@ const char *account_status_string(metalbear_server *server,
                                   metalbear_account_context *acct,
                                   bool *out_active);
 
+/* Signup-handle constraints shared by createAccount, updateHandle, the admin
+ * override and com.atproto.temp.checkHandleAvailability. Syntax includes the
+ * server's configured user-domain suffix and the 3-18 character label rule
+ * used at signup. `except_did`, when non-NULL, lets an account keep its own
+ * handle while still treating every other registered handle as taken. */
+bool handle_syntax_and_domain_valid(metalbear_server *server,
+                                    const char *handle);
+bool handle_is_reserved_now(metalbear_server *server, const char *handle);
+bool handle_is_available_for_signup(metalbear_server *server,
+                                    const char *handle, const char *except_did);
+
 /* Serialize `root` (consumed) into `response` as the XRPC JSON body. */
 wf_status set_json(wf_xrpc_response *response, cJSON *root);
 

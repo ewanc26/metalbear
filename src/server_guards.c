@@ -15,6 +15,8 @@
 
 #include "server/includes.h"
 
+#include "metalbear/handle/reserved.h"
+
 /* Logging lives in log.c so the daemon shares it: see metalbear/log.h. */
 
 /* ---- admin / refpds config (mirrors refpds PDS_* env) ---- */
@@ -68,6 +70,50 @@ bool query_param_bool(const cJSON *params, const char *name, bool fallback) {
             return false;
     }
     return fallback;
+}
+
+/* ---- Handle availability (com.atproto.temp.* and signup) --------------- */
+
+bool handle_syntax_and_domain_valid(metalbear_server *server,
+                                    const char *handle) {
+    if (!server || !handle || !*handle) return false;
+    if (wf_syntax_handle_validate(handle) != WF_OK) return false;
+    size_t handle_length = strlen(handle);
+    size_t domain_length =
+        server->user_domain ? strlen(server->user_domain) : 0;
+    if (domain_length == 0 || handle_length <= domain_length) return false;
+    if (strcmp(handle + handle_length - domain_length, server->user_domain) !=
+        0)
+        return false;
+    size_t label_length = handle_length - domain_length;
+    return label_length >= 3 && label_length <= 18;
+}
+
+bool handle_is_reserved_now(metalbear_server *server, const char *handle) {
+    if (!server || !handle || !*handle) return false;
+    if (metalbear_handle_is_reserved(handle, server->user_domain)) return true;
+    bool reserved = false;
+    if (server->registry && metalbear_account_registry_is_handle_reserved(
+                                server->registry, handle, &reserved) == WF_OK)
+        return reserved;
+    return false;
+}
+
+bool handle_is_available_for_signup(metalbear_server *server,
+                                    const char *handle,
+                                    const char *except_did) {
+    if (!handle_syntax_and_domain_valid(server, handle)) return false;
+    if (handle_is_reserved_now(server, handle)) return false;
+    metalbear_account_entry *existing = NULL;
+    wf_status status = server->registry
+                           ? metalbear_account_registry_find_by_handle(
+                                 server->registry, handle, &existing)
+                           : WF_ERR_NOT_FOUND;
+    if (status != WF_OK) return true;
+    bool taken = existing && (!except_did || !existing->did ||
+                              strcmp(existing->did, except_did) != 0);
+    metalbear_account_entry_free(existing);
+    return !taken;
 }
 
 /* The takedown ref recorded against an account, or NULL. Caller frees. */

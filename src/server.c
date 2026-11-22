@@ -824,7 +824,14 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_procedure(server->xrpc,
                                           "com.atproto.sync.requestCrawl",
                                           request_crawl, server) != WF_OK ||
-        /* Temporary unspecced route — always returns { activated: true } */
+        /* Temporary unspecced routes — signup handle helpers and the
+         * always-true queue status. */
+        wf_xrpc_server_register_query(
+            server->xrpc, "com.atproto.temp.checkHandleAvailability",
+            check_handle_availability, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(
+            server->xrpc, "com.atproto.temp.addReservedHandle",
+            add_reserved_handle, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
                                       "com.atproto.temp.checkSignupQueue",
                                       check_signup_queue, server) != WF_OK ||

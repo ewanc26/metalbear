@@ -69,6 +69,30 @@ metalbear_account_registry_find_by_handle(metalbear_account_registry *registry,
                                           const char *handle,
                                           metalbear_account_entry **out);
 
+/* --- Reserved handles --------------------------------------------------- */
+
+/* Reservations made through com.atproto.temp.addReservedHandle expire after
+ * this many seconds. The lexicon has no TTL input, so the policy lives here;
+ * callers passing a negative TTL to the test-facing reserve function get an
+ * already-expired row, which is how the expiry path is covered offline. */
+#define METALBEAR_RESERVED_HANDLE_TTL_SECONDS (24 * 60 * 60)
+
+/* Reserve `handle` for `ttl_seconds`, replacing any existing reservation.
+ * Handles are case-insensitive and normalised to lower case. Returns WF_OK
+ * and leaves *out_reserved true when the reservation is live at the end of
+ * the call; callers can pass NULL when they only want to write. */
+wf_status
+metalbear_account_registry_reserve_handle(metalbear_account_registry *registry,
+                                          const char *handle, int ttl_seconds,
+                                          bool *out_reserved);
+
+/* Whether `handle` is currently reserved. Expired rows are pruned on every
+ * check, so a reservation's TTL is observable without a background job.
+ * On success *out_reserved is true or false; on failure it is left false. */
+wf_status metalbear_account_registry_is_handle_reserved(
+    metalbear_account_registry *registry, const char *handle,
+    bool *out_reserved);
+
 /* Look up an account by email. Caller must free the returned entry. */
 wf_status
 metalbear_account_registry_find_by_email(metalbear_account_registry *registry,

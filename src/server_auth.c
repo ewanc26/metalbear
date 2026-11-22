@@ -94,6 +94,7 @@ static bool is_public_route(const char *nsid) {
         "_health",
         "com.atproto.server.createSession",
         "com.atproto.server.createAccount",
+        "com.atproto.temp.checkHandleAvailability",
         "com.atproto.server.requestPasswordReset",
         "com.atproto.server.resetPassword",
         "com.atproto.server.reserveSigningKey",
@@ -150,7 +151,8 @@ static bool is_admin_route(const char *nsid) {
            strcmp(nsid, "com.atproto.admin.disableAccountInvites") == 0 ||
            strcmp(nsid, "com.atproto.admin.getInviteCodes") == 0 ||
            strcmp(nsid, "com.atproto.admin.disableInviteCodes") == 0 ||
-           strcmp(nsid, "com.atproto.admin.deleteAccount") == 0;
+           strcmp(nsid, "com.atproto.admin.deleteAccount") == 0 ||
+           strcmp(nsid, "com.atproto.temp.addReservedHandle") == 0;
 }
 
 /* Parse and verify the HTTP Basic credential against the configured admin

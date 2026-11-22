@@ -841,9 +841,9 @@ wf_status admin_update_account_handle(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     /* An admin override must not bypass the signup/update reserved-label
-     * blocklist, matching the reference's shared constraint check. */
-    if (metalbear_handle_is_reserved(handle->valuestring,
-                                     server->user_domain)) {
+     * blocklist or a dynamic reservation, matching the shared constraint
+     * check. */
+    if (handle_is_reserved_now(server, handle->valuestring)) {
         wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
                                    "Reserved handle");
         return WF_OK;
