@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-22
+
 ### Added
 
 - `com.atproto.lexicon.resolveLexicon` is now served from Wolfram's vendored lexicon corpus: a known NSID returns the exact lexicon document as `application/json`, an unknown NSID is a 400 `InvalidRequest`. Covered by `test/test_lexicon_resolve.c` through the `wf_xrpc_set_handler` seam. ([#153](https://github.com/ewanc26/metalbear/issues/153))
