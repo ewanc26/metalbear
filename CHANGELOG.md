@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-11-22
+
 ### Added
 
 - Graceful shutdown drain: on SIGTERM/SIGINT the server refuses new writes with `503 ServiceUnavailable`, waits up to `server.drain_timeout_seconds` / `METALBEAR_DRAIN_TIMEOUT_SECONDS` (default 5s, `0` keeps immediate stop) for in-flight writes to commit, then checkpoints the firehose WAL before exiting. ([#164](https://github.com/ewanc26/metalbear/issues/164))
