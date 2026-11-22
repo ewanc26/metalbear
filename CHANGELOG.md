@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-11-22
+
 ### Added
 
 - Four offline operator commands — `rotate-keys`, `rebuild-repo`, `sequencer-recover` and `publish-identity` — repair a stopped instance's keys, indexes and firehose tail from its data directory, refusing to run against a live server. `docs/operator-commands.md` explains what each one does and does not change. ([#162](https://github.com/ewanc26/metalbear/issues/162))
