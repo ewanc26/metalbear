@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- `com.atproto.admin.searchAccounts` lets an operator search accounts by DID, handle or email (`term`), or with the lexicon's `email` filter, with keyset `cursor` pagination and a `limit` clamped to 1-100. It returns the same account view as `getAccountInfos` and stays behind the HTTP Basic admin guard. ([#149](https://github.com/ewanc26/metalbear/issues/149))
+
 ### Changed
 
 - MetalBear builds against Wolfram v0.44.2 (was v0.41.0), picking up the chat-group helpers, typed agent views and header newline fix from Wolfram v0.42.0-v0.44.2. ([#148](https://github.com/ewanc26/metalbear/pull/148))

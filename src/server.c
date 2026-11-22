@@ -783,6 +783,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_query(
             server->xrpc, "com.atproto.admin.getAccountInfos",
             admin_get_account_infos, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
+                                      "com.atproto.admin.searchAccounts",
+                                      admin_search_accounts, server) != WF_OK ||
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.updateAccountHandle",
             admin_update_account_handle, server) != WF_OK ||

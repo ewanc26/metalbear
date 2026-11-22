@@ -21,6 +21,8 @@ wf_status admin_send_email(void *ctx, const wf_xrpc_request *request,
                            wf_xrpc_response *response);
 wf_status admin_get_account_infos(void *ctx, const wf_xrpc_request *request,
                                   wf_xrpc_response *response);
+wf_status admin_search_accounts(void *ctx, const wf_xrpc_request *request,
+                                wf_xrpc_response *response);
 wf_status admin_update_account_handle(void *ctx, const wf_xrpc_request *request,
                                       wf_xrpc_response *response);
 wf_status admin_update_account_email(void *ctx, const wf_xrpc_request *request,
