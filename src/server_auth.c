@@ -143,6 +143,7 @@ static bool is_admin_route(const char *nsid) {
            strcmp(nsid, "com.atproto.admin.updateSubjectStatus") == 0 ||
            strcmp(nsid, "com.atproto.admin.sendEmail") == 0 ||
            strcmp(nsid, "com.atproto.admin.updateAccountHandle") == 0 ||
+           strcmp(nsid, "com.atproto.admin.updateAccountSigningKey") == 0 ||
            strcmp(nsid, "com.atproto.admin.updateAccountEmail") == 0 ||
            strcmp(nsid, "com.atproto.admin.updateAccountPassword") == 0 ||
            strcmp(nsid, "com.atproto.admin.enableAccountInvites") == 0 ||

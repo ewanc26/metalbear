@@ -109,12 +109,171 @@ bool metalbear_plc_update_handle(metalbear_server *server,
     return true;
 }
 
+static void plc_string_array_free_local(char **values, size_t count) {
+    if (!values) return;
+    for (size_t i = 0; i < count; i++) free(values[i]);
+    free(values);
+}
+
+static wf_status plc_string_array_from_local(const cJSON *array, char ***out,
+                                             size_t *out_count) {
+    *out = NULL;
+    *out_count = 0;
+    if (!array || !cJSON_IsArray(array)) return WF_OK;
+    size_t n = (size_t)cJSON_GetArraySize(array);
+    if (!n) return WF_OK;
+    char **values = calloc(n, sizeof(*values));
+    if (!values) return WF_ERR_ALLOC;
+    size_t used = 0;
+    const cJSON *item = NULL;
+    cJSON_ArrayForEach(item, array) {
+        if (!cJSON_IsString(item) || !item->valuestring) continue;
+        values[used] = strdup(item->valuestring);
+        if (!values[used]) {
+            plc_string_array_free_local(values, used);
+            return WF_ERR_ALLOC;
+        }
+        used++;
+    }
+    *out = values;
+    *out_count = used;
+    return WF_OK;
+}
+
+bool metalbear_plc_update_signing_key(metalbear_server *server,
+                                      wf_xrpc_response *response,
+                                      const char *did,
+                                      const char *signing_key_didkey,
+                                      const char *log_name) {
+    if (wf_did_method_of(did) != WF_DID_METHOD_PLC) return true;
+    wf_signing_key rotation_key;
+    if (metalbear_key_rotation_current_key(server->plc_rotation,
+                                           &rotation_key) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not load PLC rotation key");
+        return false;
+    }
+    wf_xrpc_client *plc_client = wf_xrpc_client_new(server->plc_url);
+    if (!plc_client) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not reach the PLC directory");
+        return false;
+    }
+    char *prev = NULL, *last_json = NULL;
+    wf_status status =
+        wf_plc_get_last_op(plc_client, server->plc_url, did, &prev, &last_json);
+    char *unsigned_op = NULL, *signed_op = NULL;
+    char **rotation_keys = NULL, **also_known_as = NULL;
+    size_t rotation_keys_count = 0, also_known_as_count = 0;
+    char *verification_methods_json = NULL, *services_json = NULL;
+
+    cJSON *last_op = status == WF_OK ? cJSON_Parse(last_json) : NULL;
+    if (!last_op || !cJSON_IsObject(last_op)) {
+        status = WF_ERR_PARSE;
+        goto done;
+    }
+    status = plc_string_array_from_local(
+        cJSON_GetObjectItemCaseSensitive(last_op, "rotationKeys"),
+        &rotation_keys, &rotation_keys_count);
+    if (status != WF_OK) goto done;
+    status = plc_string_array_from_local(
+        cJSON_GetObjectItemCaseSensitive(last_op, "alsoKnownAs"),
+        &also_known_as, &also_known_as_count);
+    if (status != WF_OK) goto done;
+
+    /* Replace only verificationMethods.atproto; any other verification
+     * method in the published document stays exactly as it was. */
+    cJSON *methods = cJSON_CreateObject();
+    const cJSON *published_methods =
+        cJSON_GetObjectItemCaseSensitive(last_op, "verificationMethods");
+    if (methods && cJSON_IsObject(published_methods)) {
+        const cJSON *method = NULL;
+        cJSON_ArrayForEach(method, published_methods) {
+            if (!method->string || strcmp(method->string, "atproto") == 0)
+                continue;
+            cJSON_AddItemToObject(methods, method->string,
+                                  cJSON_Duplicate(method, true));
+        }
+    }
+    if (!methods ||
+        !cJSON_AddStringToObject(methods, "atproto", signing_key_didkey)) {
+        status = WF_ERR_ALLOC;
+        cJSON_Delete(methods);
+        goto done;
+    }
+    verification_methods_json = cJSON_PrintUnformatted(methods);
+    cJSON_Delete(methods);
+    if (!verification_methods_json) {
+        status = WF_ERR_ALLOC;
+        goto done;
+    }
+    const cJSON *services =
+        cJSON_GetObjectItemCaseSensitive(last_op, "services");
+    if (services) services_json = cJSON_PrintUnformatted(services);
+
+    wf_plc_operation_update update = {
+        .rotation_keys = (const char *const *)rotation_keys,
+        .rotation_keys_count = rotation_keys_count,
+        .verification_methods_json = verification_methods_json,
+        .services_json = services_json,
+        .also_known_as = (const char *const *)also_known_as,
+        .also_known_as_count = also_known_as_count,
+        .prev = prev,
+    };
+    status = wf_plc_operation_build(&update, &unsigned_op);
+    if (status == WF_OK)
+        status = wf_plc_operation_sign(unsigned_op, &rotation_key, &signed_op);
+    if (status == WF_OK)
+        status = wf_plc_submit_operation_raw(server->plc_url, did, signed_op);
+
+done:
+    cJSON_Delete(last_op);
+    free(last_json);
+    free(prev);
+    free(services_json);
+    free(verification_methods_json);
+    plc_string_array_free_local(rotation_keys, rotation_keys_count);
+    plc_string_array_free_local(also_known_as, also_known_as_count);
+    wf_plc_operation_free(unsigned_op);
+    wf_plc_operation_free(signed_op);
+    wf_xrpc_client_free(plc_client);
+    if (status != WF_OK) {
+        LOG_ERROR("%s: PLC signing-key update failed for did=%s (status=%d)",
+                  log_name, did, status);
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "Could not update PLC document");
+        return false;
+    }
+    return true;
+}
+
+/* Signing key this account's DID document must advertise: the override set
+ * by an admin.updateAccountSigningKey call if present, otherwise the key its
+ * repo was created with. Heap-allocated; caller frees. Only the locally
+ * served document uses this override: checkAccountStatus's
+ * did_doc_matches_service deliberately keeps comparing against the key the
+ * repo actually signs commits with, so it still reports validDid=false when
+ * the two differ. */
+char *metalbear_account_signing_key_did(const metalbear_account_context *acct) {
+    if (!acct || !acct->account) return NULL;
+    char *override = NULL;
+    if (metalbear_account_store_get_signing_key(acct->account, &override) ==
+            WF_OK &&
+        override && override[0])
+        return override;
+    free(override);
+    const char *repo_key =
+        acct->repo ? metalbear_repo_store_signing_key_did(acct->repo) : NULL;
+    return repo_key ? strdup(repo_key) : NULL;
+}
+
 cJSON *build_did_doc(metalbear_server *server,
                      metalbear_account_context *acct) {
-    const char *signing_didkey =
-        acct->repo ? metalbear_repo_store_signing_key_did(acct->repo) : NULL;
-    return metalbear_did_document_build(acct->did, acct->handle, signing_didkey,
-                                        server->public_url);
+    char *signing_didkey = metalbear_account_signing_key_did(acct);
+    cJSON *doc = metalbear_did_document_build(
+        acct->did, acct->handle, signing_didkey, server->public_url);
+    free(signing_didkey);
+    return doc;
 }
 
 static bool valid_service_audience(const char *audience) {

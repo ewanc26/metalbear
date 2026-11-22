@@ -794,6 +794,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             server->xrpc, "com.atproto.admin.updateAccountHandle",
             admin_update_account_handle, server) != WF_OK ||
         wf_xrpc_server_register_procedure(
+            server->xrpc, "com.atproto.admin.updateAccountSigningKey",
+            admin_update_account_signing_key, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.updateAccountEmail",
             admin_update_account_email, server) != WF_OK ||
         wf_xrpc_server_register_procedure(

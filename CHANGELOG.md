@@ -7,6 +7,14 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- `com.atproto.admin.updateAccountSigningKey` lets an operator publish a new `did:key` verification method for an account. The PLC operation lands before the local write, so a directory failure leaves the DID document unchanged; the new key is persisted and served from the account's DID document. ([#150](https://github.com/ewanc26/metalbear/issues/150))
+
+### Changed
+
+- Account databases gain a `signing_key_didkey` column and use schema version 2; existing files are migrated on open, and an older binary now refuses to open a database written by this release. ([#150](https://github.com/ewanc26/metalbear/issues/150))
+
 ## [0.47.0] - 2026-11-22
 
 ### Added

@@ -83,7 +83,8 @@ wf_status metalbear_account_store_open(const char *path,
         "active INTEGER NOT NULL CHECK(active IN(0,1)),"
         "email TEXT,email_confirmed INTEGER NOT NULL DEFAULT 0,"
         "deactivated_at TEXT,delete_after TEXT,"
-        "invites_enabled INTEGER NOT NULL DEFAULT 1);"
+        "invites_enabled INTEGER NOT NULL DEFAULT 1,"
+        "signing_key_didkey TEXT);"
         "INSERT OR IGNORE INTO account_state(id,active) VALUES(0,1);"
         "CREATE TABLE IF NOT EXISTS credentials("
         "id INTEGER PRIMARY KEY CHECK(id=0),salt BLOB NOT NULL,"
@@ -112,6 +113,20 @@ wf_status metalbear_account_store_open(const char *path,
                  "ALTER TABLE account_state ADD COLUMN invites_enabled INTEGER "
                  "NOT NULL DEFAULT 1;",
                  nullptr, nullptr, &err);
+    if (err && !std::strstr(err, "duplicate column name")) {
+        sqlite3_free(err);
+        metalbear_account_store_free(store);
+        return WF_ERR_INTERNAL;
+    }
+    if (err) sqlite3_free(err);
+    /* Published signing-key override from admin.updateAccountSigningKey.
+     * NULL means "use the repo's creation-time key"; older databases predate
+     * the column, so add it idempotently before either accessor runs. */
+    err = nullptr;
+    sqlite3_exec(
+        store->db.get(),
+        "ALTER TABLE account_state ADD COLUMN signing_key_didkey TEXT;",
+        nullptr, nullptr, &err);
     if (err && !std::strstr(err, "duplicate column name")) {
         sqlite3_free(err);
         metalbear_account_store_free(store);
@@ -711,6 +726,54 @@ wf_status metalbear_account_store_prefs_put(metalbear_account_store *store,
                            "REPLACE INTO preferences(id, data) VALUES(0, ?);",
                            -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, json, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_DONE) status = WF_OK;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status
+metalbear_account_store_get_signing_key(metalbear_account_store *store,
+                                        char **out_didkey) {
+    if (!store || !out_didkey) return WF_ERR_INVALID_ARG;
+    *out_didkey = nullptr;
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = nullptr;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db.get(),
+                           "SELECT signing_key_didkey FROM account_state "
+                           "WHERE id=0;",
+                           -1, &stmt, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *value = sqlite3_column_text(stmt, 0);
+            if (value)
+                *out_didkey = strdup(reinterpret_cast<const char *>(value));
+            status = *out_didkey || !value ? WF_OK : WF_ERR_ALLOC;
+        } else {
+            status = WF_OK; /* no row: no override */
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status
+metalbear_account_store_set_signing_key(metalbear_account_store *store,
+                                        const char *didkey) {
+    if (!store || (didkey && !didkey[0])) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = nullptr;
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db.get(),
+                           "UPDATE account_state SET signing_key_didkey=? "
+                           "WHERE id=0;",
+                           -1, &stmt, nullptr) == SQLITE_OK) {
+        if (didkey)
+            sqlite3_bind_text(stmt, 1, didkey, -1, SQLITE_TRANSIENT);
+        else
+            sqlite3_bind_null(stmt, 1);
         if (sqlite3_step(stmt) == SQLITE_DONE) status = WF_OK;
     }
     sqlite3_finalize(stmt);
