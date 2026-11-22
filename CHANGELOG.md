@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-11-22
+
 ### Added
 
 - `com.atproto.temp.checkHandleAvailability` answers signup clients with the lexicon's tagged available/unavailable result, including suggestions; the admin-only `com.atproto.temp.addReservedHandle` holds a handle for 24 hours. Dynamic reservations are enforced at signup, `com.atproto.identity.updateHandle` and the admin handle override. ([#155](https://github.com/ewanc26/metalbear/issues/155))
