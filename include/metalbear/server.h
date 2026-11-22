@@ -57,6 +57,12 @@ typedef struct metalbear_config {
     int64_t backup_interval_seconds;
     int64_t backup_retain;
     const char *backup_dir;
+    /* Periodic repo garbage collection (issue #167). Seconds between passes
+     * that drop MST/record blocks unreachable from each account's current
+     * head. 0 (the default) leaves collection off; negative values are
+     * refused at startup. Mapped to repo.gc_interval_seconds /
+     * METALBEAR_REPO_GC_INTERVAL_SECONDS. */
+    int64_t repo_gc_interval_seconds;
     /* Server key file for two-factor login. Defaults to totp.key in the data
      * directory. Keep it outside the data directory where you can: see
      * docs/totp.md. */

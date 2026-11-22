@@ -60,6 +60,9 @@ static void test_reads_every_type(void) {
         "  max_resident_accounts: 7\n"
         "  deletion_hold_seconds: 86400\n"
         "\n"
+        "repo:\n"
+        "  gc_interval_seconds: 86400\n"
+        "\n"
         "limits:\n"
         "  rate_limit: 2500\n"
         "\n"
@@ -81,6 +84,7 @@ static void test_reads_every_type(void) {
     CHECK(cfg.invite_required == false);
     CHECK(cfg.max_resident_accounts == 7);
     CHECK(cfg.deletion_hold_seconds == 86400);
+    CHECK(cfg.repo_gc_interval_seconds == 86400);
     CHECK(cfg.rate_limit == 2500);
     CHECK(cfg.crawlers &&
           strcmp(cfg.crawlers, "https://a.example,https://b.example") == 0);
@@ -271,6 +275,8 @@ static void test_toml_and_yaml_examples_agree(void) {
         CHECK(strcmp(toml_cfg.crawlers, yaml_cfg.crawlers) == 0);
         CHECK(toml_cfg.invite_required == yaml_cfg.invite_required);
         CHECK(toml_cfg.did_cache_ttl_seconds == yaml_cfg.did_cache_ttl_seconds);
+        CHECK(toml_cfg.repo_gc_interval_seconds ==
+              yaml_cfg.repo_gc_interval_seconds);
         metalbear_config_file_free(toml_owner);
         metalbear_config_file_free(yaml_owner);
         return;

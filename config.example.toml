@@ -81,6 +81,14 @@ max_resident_accounts = 0
 # at runtime, and wins. See docs/account-deletion.md.
 deletion_hold_seconds = 0
 
+[repo]
+# Seconds between periodic repo garbage collections. Each pass drops MST and
+# record blocks unreachable from an account's current head commit, from both
+# the block table and the in-memory CAR. 0 (the default) leaves collection off;
+# negative values are refused at startup. Active, non-taken-down accounts only.
+# METALBEAR_REPO_GC_INTERVAL_SECONDS overrides this at runtime, and wins.
+# gc_interval_seconds = 86400
+
 # Per-domain signup admission. The default applies when no listed domain
 # matches; when omitted it falls back to accounts.invite_required above.
 # Domains are handle suffixes including the leading dot; the longest match

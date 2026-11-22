@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- Periodic repository garbage collection: `repo.gc_interval_seconds` / `METALBEAR_REPO_GC_INTERVAL_SECONDS` (default off) drops MST and record blocks unreachable from an account's current head commit, keeping `getRepo` and CAR exports consistent. ([#167](https://github.com/ewanc26/metalbear/issues/167))
+
 ## [0.54.0] - 2026-11-22
 
 ### Added

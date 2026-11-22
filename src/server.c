@@ -229,7 +229,8 @@ static bool valid_config(const metalbear_config *config) {
      * value); refusing it avoids a hang nobody intended. */
     return config && config->listen_address && config->data_directory &&
            config->service_did && config->user_domain &&
-           config->drain_timeout_seconds >= 0;
+           config->drain_timeout_seconds >= 0 &&
+           config->repo_gc_interval_seconds >= 0;
 }
 
 metalbear_server *metalbear_server_start(const metalbear_config *config) {
@@ -1096,6 +1097,21 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                      interval, (long long)config->deletion_hold_seconds);
     }
 
+    /* Periodic repo GC (issue #167). Off unless an interval is set, so a host
+     * that never opts in keeps every historical block. The first pass runs one
+     * interval after startup, not immediately, so it cannot add load to a cold
+     * server that is still reconciling accounts. */
+    if (config->repo_gc_interval_seconds > 0) {
+        server->repo_gc_schedule = metalbear_repo_gc_schedule_start(
+            server, (long)config->repo_gc_interval_seconds);
+        if (!server->repo_gc_schedule)
+            LOG_WARN("repo gc: could not start; unreachable blocks will not be "
+                     "reclaimed automatically");
+        else
+            LOG_INFO("repo gc: every %lld seconds",
+                     (long long)config->repo_gc_interval_seconds);
+    }
+
     return server;
 
 fail:
@@ -1128,9 +1144,11 @@ void metalbear_server_free(metalbear_server *server) {
     metalbear_drain_shutdown();
     metalbear_sequencer_checkpoint(server->sequencer);
     wf_xrpc_server_free(server->xrpc);
-    /* Stop the sweep before the stores it walks (cache, sequencer, registry,
-     * metrics, DNS) go away. Joining here waits for any in-flight pass. */
+    /* Stop the sweep and repo-GC timer before the stores they walk (cache,
+     * sequencer, registry, metrics, DNS) go away. Joining here waits for any
+     * in-flight pass. */
     metalbear_deletion_sweep_free(server->deletion_sweep);
+    metalbear_repo_gc_schedule_free(server->repo_gc_schedule);
     metalbear_account_cache_free(server->account_cache);
     metalbear_oauth_store_free(server->oauth);
     metalbear_key_rotation_free(server->plc_rotation);
