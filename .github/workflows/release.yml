@@ -73,12 +73,12 @@ jobs:
     permissions:
       contents: read
       checks: read
-    uses: ewanc26/wolfram/.github/workflows/release-check-reusable.yml@v0.44.2
+    uses: ewanc26/wolfram/.github/workflows/release-check-reusable.yml@v0.45.0
     with:
       tag: ${{ needs.plan.outputs.tag }}
       version: ${{ needs.plan.outputs.version }}
       sha: ${{ github.sha }}
-      canon_ref: v0.44.2
+      canon_ref: v0.45.0
       required_checks: CI gate
 
   # Gate for everything below. The shared check has already passed, so the tag
