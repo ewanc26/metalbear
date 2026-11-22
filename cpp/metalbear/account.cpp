@@ -119,6 +119,30 @@ wf_status metalbear_account_store_open(const char *path,
         return WF_ERR_INTERNAL;
     }
     if (err) sqlite3_free(err);
+    /* Deactivation state used by the scheduled deletion sweep (issue #159).
+     * Fresh databases already carry both columns, but v1/v2 files do not; add
+     * them idempotently so an upgraded host can deactivate and sweep accounts
+     * created before the columns existed. */
+    err = nullptr;
+    sqlite3_exec(store->db.get(),
+                 "ALTER TABLE account_state ADD COLUMN deactivated_at TEXT;",
+                 nullptr, nullptr, &err);
+    if (err && !std::strstr(err, "duplicate column name")) {
+        sqlite3_free(err);
+        metalbear_account_store_free(store);
+        return WF_ERR_INTERNAL;
+    }
+    if (err) sqlite3_free(err);
+    err = nullptr;
+    sqlite3_exec(store->db.get(),
+                 "ALTER TABLE account_state ADD COLUMN delete_after TEXT;",
+                 nullptr, nullptr, &err);
+    if (err && !std::strstr(err, "duplicate column name")) {
+        sqlite3_free(err);
+        metalbear_account_store_free(store);
+        return WF_ERR_INTERNAL;
+    }
+    if (err) sqlite3_free(err);
     /* Published signing-key override from admin.updateAccountSigningKey.
      * NULL means "use the repo's creation-time key"; older databases predate
      * the column, so add it idempotently before either accessor runs. */

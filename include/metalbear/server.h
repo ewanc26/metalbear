@@ -79,6 +79,12 @@ typedef struct metalbear_config {
      * 0 keeps the conservative default. Overridable at runtime by
      * METALBEAR_MAX_RESIDENT_ACCOUNTS, which wins over this. */
     int64_t max_resident_accounts;
+    /* Seconds a deactivated account is held before the sweep hard-deletes it
+     * and emits the same takedown events as deleteAccount. 0 disables the
+     * sweep entirely: accounts stay on disk until an operator deletes them.
+     * Negative values are refused at startup. Mapped to
+     * accounts.deletion_hold_seconds / METALBEAR_DELETION_HOLD_SECONDS. */
+    int64_t deletion_hold_seconds;
     /* Maximum blob upload size in bytes (refpds PDS_BLOB_UPLOAD_LIMIT).
      * 0 => no limit. Enforced in the blob upload path. */
     int64_t blob_upload_limit;

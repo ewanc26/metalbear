@@ -59,6 +59,15 @@ void metalbear_account_cache_set_max_resident(metalbear_account_cache *cache,
 void metalbear_account_cache_free(metalbear_account_cache *cache);
 
 /*
+ * Forget an account after it has been hard-deleted. The entry is removed from
+ * lookups immediately so no request can resolve a context whose data directory
+ * has just been removed. A context still held by an in-flight request is closed
+ * when that last reference is released; an idle one is closed here.
+ */
+void metalbear_account_cache_drop(metalbear_account_cache *cache,
+                                  const char *did);
+
+/*
  * Return the open context for `did`, opening it on first use, and acquire a
  * reference on it. The caller must release the reference exactly once when the
  * context is no longer needed — either with metalbear_account_cache_release,

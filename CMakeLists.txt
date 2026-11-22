@@ -173,6 +173,8 @@ set(METALBEAR_CORE_SOURCES
   cpp/metalbear/account_registry.cpp
   src/account/account_context.c
   src/account/account_cache.c
+  src/account/account_deletion.c
+  src/account/deletion_sweep.c
   src/storage/schema_version.c
   src/account/preferences_routes.c
   src/oauth/auth.c
@@ -763,6 +765,14 @@ if(METALBEAR_BUILD_TESTS)
                                                "${METALBEAR_WOLFRAM_ROOT}/test")
   add_test(NAME metalbear_handle_availability
            COMMAND test_metalbear_handle_availability)
+
+  add_executable(test_metalbear_deletion_sweep test/test_deletion_sweep.c)
+  target_link_libraries(test_metalbear_deletion_sweep PRIVATE metalbear_core
+                                                      SQLite3::SQLite3)
+  target_include_directories(
+    test_metalbear_deletion_sweep PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
+                                          "${METALBEAR_WOLFRAM_ROOT}/test")
+  add_test(NAME metalbear_deletion_sweep COMMAND test_metalbear_deletion_sweep)
 
   add_executable(test_metalbear_schema_version test/test_schema_version.c)
   target_link_libraries(test_metalbear_schema_version
