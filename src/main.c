@@ -252,6 +252,7 @@ int main(int argc, char **argv) {
     ENV_I64("METALBEAR_RETENTION_MIN_EVENTS", retention_min_events);
     ENV_I64("METALBEAR_BACKUP_INTERVAL_SECONDS", backup_interval_seconds);
     ENV_I64("METALBEAR_BACKUP_RETAIN", backup_retain);
+    ENV_I64("METALBEAR_REPO_GC_INTERVAL_SECONDS", repo_gc_interval_seconds);
     ENV_STR("METALBEAR_BACKUP_DIR", backup_dir);
     ENV_STR("METALBEAR_TOTP_KEY_FILE", totp_key_file);
     ENV_I64("METALBEAR_DNS_TTL", dns_record_ttl);
@@ -293,6 +294,11 @@ int main(int argc, char **argv) {
     if (config.deletion_hold_seconds < 0) {
         LOG_ERROR("accounts.deletion_hold_seconds "
                   "(METALBEAR_DELETION_HOLD_SECONDS) must not be negative");
+        return 2;
+    }
+    if (config.repo_gc_interval_seconds < 0) {
+        LOG_ERROR("repo.gc_interval_seconds "
+                  "(METALBEAR_REPO_GC_INTERVAL_SECONDS) must not be negative");
         return 2;
     }
     /* Refuse to start on a malformed service identity rather than bake it into

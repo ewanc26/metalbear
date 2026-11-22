@@ -155,6 +155,18 @@ wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store,
 wf_status metalbear_repo_store_get_stats(metalbear_repo_store *store,
                                          metalbear_repo_store_stats *out_stats);
 
+/**
+ * Garbage-collect the repo: delete every block not reachable from the current
+ * head commit (the commit itself plus all blocks its MST references). Both
+ * the durable block table and the in-memory CAR are compacted atomically; a
+ * failure leaves the store unchanged. Safe on an empty repo (no-op).
+ *
+ * On WF_OK, *out_removed_blocks (when non-NULL) receives the number of blocks
+ * deleted. Callers must not hold the store mutex (this takes it).
+ */
+wf_status metalbear_repo_store_gc(metalbear_repo_store *store,
+                                  size_t *out_removed_blocks);
+
 /** Install or clear the post-persistence repository event observer. */
 void metalbear_repo_store_set_event_callback(
     metalbear_repo_store *store, metalbear_repo_store_event_cb callback,

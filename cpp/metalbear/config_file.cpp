@@ -147,6 +147,7 @@ static std::string unescape_basic(const std::string &v) {
     INT("limits.max_import_bytes", max_import_size)                            \
                                                                                \
     BOOL("repo.accepting_imports", accepting_imports)                          \
+    NONNEG("repo.gc_interval_seconds", repo_gc_interval_seconds)               \
                                                                                \
     INT("firehose.retention_max_age_seconds", retention_max_age_seconds)       \
     INT("firehose.retention_min_events", retention_min_events)                 \

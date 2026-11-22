@@ -30,6 +30,7 @@
 #include "metalbear/oauth/oauth.h"
 #include "metalbear/repo/key_rotation.h"
 #include "metalbear/repo/backup_schedule.h"
+#include "metalbear/repo/repo_gc_schedule.h"
 #include "metalbear/twofactor/totp.h"
 #include "metalbear/repo/repo_store.h"
 #include "metalbear/sequencer.h"
@@ -144,6 +145,8 @@ struct metalbear_server {
     int64_t retention_min_events;
     /* Scheduled backup timer, or NULL when backups are off. */
     metalbear_backup_schedule *backup_schedule;
+    /* Periodic repo-GC timer, or NULL when repo.gc_interval_seconds is 0. */
+    metalbear_repo_gc_schedule *repo_gc_schedule;
     /* Deferred hard-deletion timer, or NULL when the hold is 0/off. */
     metalbear_deletion_sweep *deletion_sweep;
     /* Server key for two-factor login (docs/totp.md). Not ready when the key

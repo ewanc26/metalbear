@@ -182,6 +182,7 @@ set(METALBEAR_CORE_SOURCES
   src/oauth/auth.c
   src/repo/backup.c
   src/repo/backup_schedule.c
+  src/repo/repo_gc_schedule.c
   src/twofactor/totp.c
   src/twofactor/totp_routes.c
   src/repo/explicit_slurs.c
@@ -709,6 +710,14 @@ if(METALBEAR_BUILD_TESTS)
     test_metalbear_blob_gc PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
                                    "${METALBEAR_WOLFRAM_ROOT}/test")
   add_test(NAME metalbear_blob_gc COMMAND test_metalbear_blob_gc)
+
+  add_executable(test_metalbear_repo_gc test/test_repo_gc.c)
+  target_link_libraries(test_metalbear_repo_gc PRIVATE metalbear_core)
+  target_include_directories(
+    test_metalbear_repo_gc PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
+                                   "${METALBEAR_WOLFRAM_ROOT}/test"
+                                   "${CMAKE_CURRENT_SOURCE_DIR}/src/repo")
+  add_test(NAME metalbear_repo_gc COMMAND test_metalbear_repo_gc)
 
   add_executable(test_metalbear_import_repo test/test_import_repo.c)
   target_link_libraries(test_metalbear_import_repo PRIVATE metalbear_core)

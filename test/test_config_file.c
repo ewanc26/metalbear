@@ -50,6 +50,9 @@ static void test_reads_every_type(void) {
         "max_resident_accounts = 7\n"
         "deletion_hold_seconds = 86400\n"
         "\n"
+        "[repo]\n"
+        "gc_interval_seconds = 86400\n"
+        "\n"
         "[limits]\n"
         "rate_limit = 2500\n"
         "\n"
@@ -69,6 +72,7 @@ static void test_reads_every_type(void) {
     CHECK(cfg.invite_required == false);
     CHECK(cfg.max_resident_accounts == 7);
     CHECK(cfg.deletion_hold_seconds == 86400);
+    CHECK(cfg.repo_gc_interval_seconds == 86400);
     CHECK(cfg.rate_limit == 2500);
     /* An array becomes the comma-separated form used everywhere else, rather
      * than a second representation of one setting. */

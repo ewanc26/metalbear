@@ -1094,6 +1094,140 @@ metalbear_repo_store_get_stats(metalbear_repo_store *store,
     return WF_OK;
 }
 
+/* Drop every block not reachable from the current head commit: the commit
+ * itself plus everything its MST references (node CIDs, leaf value CIDs and
+ * intermediate subtree CIDs). Called by the periodic GC scheduler, and safe
+ * to call directly. A failure at any step leaves the store untouched — a
+ * partially collected repo is worse than an oversized one. */
+wf_status metalbear_repo_store_gc(metalbear_repo_store *store,
+                                  size_t *out_removed_blocks) {
+    if (!store) return WF_ERR_INVALID_ARG;
+    if (out_removed_blocks) *out_removed_blocks = 0;
+
+    pthread_mutex_lock(&store->mutex);
+    wf_status st = WF_OK;
+
+    if (store->head.len == 0) goto out; /* empty repo: nothing to collect */
+
+    wf_car_block *head_block = wf_car_find_block(&store->car, &store->head);
+    if (!head_block) {
+        st = WF_ERR_NOT_FOUND;
+        goto out;
+    }
+    wf_commit commit;
+    memset(&commit, 0, sizeof(commit));
+    st = wf_commit_parse(head_block->data, head_block->data_len, &commit);
+    if (st != WF_OK) goto out;
+
+    wf_cid *reachable = NULL;
+    size_t reachable_count = 0;
+    st = wf_mst_get_all_cids(&store->car, &commit.data, &reachable,
+                             &reachable_count);
+    if (st != WF_OK) goto out;
+
+    /* The commit block is not part of its own MST; keep it explicitly. */
+    wf_cid *grown = realloc(reachable, (reachable_count + 1) * sizeof(*grown));
+    if (!grown) {
+        wf_mst_cid_list_free(reachable, reachable_count);
+        st = WF_ERR_ALLOC;
+        goto out;
+    }
+    reachable = grown;
+    reachable[reachable_count++] = store->head;
+
+    /* Build the compacted CAR in a separate array: nothing in the live store
+     * is modified until the SQL transaction commits. A failure anywhere
+     * leaves both the database and the in-memory CAR exactly as they were. */
+    wf_car_block *compact = calloc(
+        store->car.block_count ? store->car.block_count : 1, sizeof(*compact));
+    if (!compact) {
+        st = WF_ERR_ALLOC;
+        goto out_reachable;
+    }
+
+    if (sqlite3_exec(store->db, "BEGIN IMMEDIATE;", NULL, NULL, NULL) !=
+        SQLITE_OK) {
+        st = WF_ERR_INTERNAL;
+        goto out_compact;
+    }
+
+    sqlite3_stmt *del = NULL;
+    if (sqlite3_prepare_v2(store->db, "DELETE FROM blocks WHERE cid = ?;", -1,
+                           &del, NULL) != SQLITE_OK) {
+        st = WF_ERR_INTERNAL;
+        goto out_rollback;
+    }
+
+    size_t kept = 0, removed = 0;
+    for (size_t i = 0; i < store->car.block_count; i++) {
+        wf_car_block *blk = &store->car.blocks[i];
+        int is_reachable = 0;
+        for (size_t j = 0; j < reachable_count; j++) {
+            if (cid_equal(&blk->cid, &reachable[j])) {
+                is_reachable = 1;
+                break;
+            }
+        }
+        if (is_reachable) {
+            compact[kept++] = *blk;
+            continue;
+        }
+
+        char *cidstr = wf_cid_to_string(&blk->cid);
+        if (!cidstr) {
+            st = WF_ERR_ALLOC;
+            break;
+        }
+        sqlite3_bind_text(del, 1, cidstr, -1, SQLITE_TRANSIENT);
+        int rc = sqlite3_step(del);
+        sqlite3_reset(del);
+        sqlite3_clear_bindings(del);
+        free(cidstr);
+        if (rc != SQLITE_DONE) {
+            st = WF_ERR_INTERNAL;
+            break;
+        }
+        removed++;
+    }
+    sqlite3_finalize(del);
+    if (st == WF_OK &&
+        sqlite3_exec(store->db, "COMMIT;", NULL, NULL, NULL) != SQLITE_OK)
+        st = WF_ERR_INTERNAL;
+
+out_rollback:
+    if (st != WF_OK) {
+        sqlite3_exec(store->db, "ROLLBACK;", NULL, NULL, NULL);
+        goto out_compact;
+    }
+    /* Commit succeeded: now it is safe to release the removed payloads and
+     * swap in the compacted array. */
+    for (size_t i = 0; i < store->car.block_count; i++) {
+        int is_reachable = 0;
+        for (size_t j = 0; j < reachable_count; j++) {
+            if (cid_equal(&store->car.blocks[i].cid, &reachable[j])) {
+                is_reachable = 1;
+                break;
+            }
+        }
+        if (!is_reachable) free(store->car.blocks[i].data);
+    }
+    free(store->car.blocks);
+    store->car.blocks = compact;
+    store->car.block_count = kept;
+    /* Every surviving block is still in the database. */
+    store->persisted_blocks = kept;
+    if (out_removed_blocks) *out_removed_blocks = removed;
+    goto out_reachable;
+
+out_compact:
+    free(compact);
+out_reachable:
+    wf_mst_cid_list_free(reachable, reachable_count);
+out:
+    pthread_mutex_unlock(&store->mutex);
+    return st;
+}
+
 void metalbear_repo_store_set_event_callback(
     metalbear_repo_store *store, metalbear_repo_store_event_cb callback,
     void *context) {
