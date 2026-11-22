@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Fixed
+
+- Account export bundles now format the ustar checksum as an `unsigned long`, matching its type on 64-bit hosts and removing a compiler warning without changing archive bytes. ([#219](https://github.com/ewanc26/metalbear/pull/219))
+
 ## [0.56.0] - 2026-11-22
 
 ### Added
