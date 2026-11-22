@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-11-22
+
 ### Added
 
 - Per-domain signup admission: an `[admission]`/`admission:` block with `default` (`open`, `invite` or `closed`) and dotted-suffix `open_domains`, `invite_domains` and `closed_domains` lists; longest suffix wins and closed domains get `400 UnsupportedDomain`. Falls back to `accounts.invite_required` when unset. ([#163](https://github.com/ewanc26/metalbear/issues/163))
