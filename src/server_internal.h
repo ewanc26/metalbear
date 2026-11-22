@@ -334,6 +334,16 @@ wf_status metalbear_authenticate(wf_xrpc_request *req, void *ctx);
 wf_status metalbear_repo_resolver(void *ctx, const wf_xrpc_request *req,
                                   metalbear_repo_store **out_repo,
                                   metalbear_blob_store **out_blobs);
+/* Offline test seam: run one repo route handler against an explicit store.
+ * Production uses the server-registered handlers and resolver bundle; this
+ * only lets tests exercise the same handler code through wf_xrpc_set_handler
+ * without opening a socket. `service_did`/`public_url` are borrowed. */
+wf_status metalbear_repo_routes_dispatch(metalbear_repo_store *store,
+                                         const char *service_did,
+                                         const char *public_url,
+                                         const char *nsid,
+                                         const wf_xrpc_request *req,
+                                         wf_xrpc_response *resp);
 bool metalbear_repo_access_guard(void *ctx, const wf_xrpc_request *req,
                                  const char *record_uri,
                                  wf_xrpc_response *resp);

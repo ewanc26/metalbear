@@ -663,6 +663,16 @@ if(METALBEAR_BUILD_TESTS)
     PRIVATE METALBEAR_TEST_LEXICON_DIR="${METALBEAR_WOLFRAM_ROOT}/lexicons")
   add_test(NAME metalbear_repo_store COMMAND test_metalbear_repo_store)
 
+  add_executable(test_metalbear_repo_read_after_write
+                 test/test_repo_read_after_write.c)
+  target_link_libraries(test_metalbear_repo_read_after_write
+                        PRIVATE metalbear_core)
+  target_include_directories(
+    test_metalbear_repo_read_after_write PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
+                                                 "${METALBEAR_WOLFRAM_ROOT}/test")
+  add_test(NAME metalbear_repo_read_after_write
+           COMMAND test_metalbear_repo_read_after_write)
+
   add_executable(test_metalbear_repo_store_resolver
                  test/test_repo_store_resolver.c)
   target_link_libraries(test_metalbear_repo_store_resolver
