@@ -33,6 +33,9 @@ struct metalbear_account_cache {
         struct cache_entry *next;
         /* Number of live references (get acquisitions not yet released). */
         int refcount;
+        /* Set by cache_drop after a hard delete: unlinked from lookups, and
+         * closed by whichever side drops the last reference. */
+        bool retired;
         /* Monotonic LRU timestamp; lower means evicted first when idle. */
         unsigned long seq;
     } *entries;
@@ -110,6 +113,17 @@ static void entry_close(struct cache_entry *victim) {
     free(victim);
 }
 
+/* Unlink `victim` from the cache list using the already-found predecessor.
+ * Caller holds cache->lock and adjusts the counters. */
+static void entry_unlink(metalbear_account_cache *cache,
+                         struct cache_entry *victim, struct cache_entry *prev) {
+    if (prev)
+        prev->next = victim->next;
+    else
+        cache->entries = victim->next;
+    cache->total_count--;
+}
+
 /*
  * Evict the least-recently-used idle (refcount == 0) entry if the idle count
  * is over budget. Caller holds cache->lock.
@@ -120,7 +134,7 @@ static void evict_if_over_budget_locked(metalbear_account_cache *cache) {
         struct cache_entry *oldest_prev = NULL;
         struct cache_entry *prev = NULL;
         for (struct cache_entry *e = cache->entries; e; e = e->next) {
-            if (e->refcount != 0) continue;
+            if (e->refcount != 0 || e->retired) continue;
             if (!oldest || e->seq < oldest->seq) {
                 oldest = e;
                 oldest_prev = prev;
@@ -150,6 +164,7 @@ metalbear_account_cache_get(metalbear_account_cache *cache,
 
     pthread_mutex_lock(&cache->lock);
     for (struct cache_entry *e = cache->entries; e; e = e->next) {
+        if (e->retired) continue;
         if (strcmp(e->did, did) == 0) {
             if (e->refcount == 0) cache->idle_count--;
             e->refcount++;
@@ -224,19 +239,47 @@ void metalbear_account_cache_release(metalbear_account_cache *cache,
                                      metalbear_account_context *ctx) {
     if (!cache || !ctx) return;
     pthread_mutex_lock(&cache->lock);
-    for (struct cache_entry *e = cache->entries; e; e = e->next) {
+    struct cache_entry *prev = NULL;
+    for (struct cache_entry *e = cache->entries; e; prev = e, e = e->next) {
         if (e->ctx == ctx) {
             if (e->refcount > 0) {
                 e->refcount--;
                 if (e->refcount == 0) {
-                    cache->idle_count++;
-                    e->seq = ++cache->seq_counter;
-                    evict_if_over_budget_locked(cache);
+                    if (e->retired) {
+                        /* The account was hard-deleted while a request still
+                         * held this context. It can never be reused, so close
+                         * it now rather than returning it to the idle pool. */
+                        entry_unlink(cache, e, prev);
+                        entry_close(e);
+                    } else {
+                        cache->idle_count++;
+                        e->seq = ++cache->seq_counter;
+                        evict_if_over_budget_locked(cache);
+                    }
                 }
             }
             pthread_mutex_unlock(&cache->lock);
             return;
         }
+    }
+    pthread_mutex_unlock(&cache->lock);
+}
+
+void metalbear_account_cache_drop(metalbear_account_cache *cache,
+                                  const char *did) {
+    if (!cache || !did) return;
+    pthread_mutex_lock(&cache->lock);
+    struct cache_entry *prev = NULL;
+    for (struct cache_entry *e = cache->entries; e; prev = e, e = e->next) {
+        if (strcmp(e->did, did) != 0) continue;
+        if (e->retired) break; /* already dropped */
+        e->retired = true;
+        if (e->refcount == 0) {
+            if (cache->idle_count > 0) cache->idle_count--;
+            entry_unlink(cache, e, prev);
+            entry_close(e);
+        }
+        break;
     }
     pthread_mutex_unlock(&cache->lock);
 }

@@ -237,6 +237,7 @@ int main(int argc, char **argv) {
     ENV_I64("METALBEAR_RATE_LIMIT_WINDOW", rate_limit_window);
     ENV_I64("METALBEAR_BLOB_UPLOAD_LIMIT", blob_upload_limit);
     ENV_I64("METALBEAR_MAX_IMPORT_SIZE", max_import_size);
+    ENV_I64("METALBEAR_DELETION_HOLD_SECONDS", deletion_hold_seconds);
     ENV_I64("METALBEAR_DID_CACHE_TTL", did_cache_ttl_seconds);
     ENV_I64("METALBEAR_DID_CACHE_ENTRIES", did_cache_entries);
     ENV_I64("METALBEAR_CRAWL_NOTIFY_SECONDS", crawl_notify_seconds);
@@ -281,6 +282,11 @@ int main(int argc, char **argv) {
     }
     if (!config.user_domain) {
         LOG_ERROR("METALBEAR_USER_DOMAIN or server.user_domain is required");
+        return 2;
+    }
+    if (config.deletion_hold_seconds < 0) {
+        LOG_ERROR("accounts.deletion_hold_seconds "
+                  "(METALBEAR_DELETION_HOLD_SECONDS) must not be negative");
         return 2;
     }
     /* Refuse to start on a malformed service identity rather than bake it into

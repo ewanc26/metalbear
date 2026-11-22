@@ -13,6 +13,7 @@
 #include "metalbear/account/account.h"
 #include "metalbear/account/account_cache.h"
 #include "metalbear/account/account_context.h"
+#include "metalbear/account/deletion_sweep.h"
 #include "metalbear/account/account_registry.h"
 #ifdef METALBEAR_MODULE_DNS
 #include "metalbear/dns/handle_dns.h"
@@ -136,6 +137,8 @@ struct metalbear_server {
     int64_t retention_min_events;
     /* Scheduled backup timer, or NULL when backups are off. */
     metalbear_backup_schedule *backup_schedule;
+    /* Deferred hard-deletion timer, or NULL when the hold is 0/off. */
+    metalbear_deletion_sweep *deletion_sweep;
     /* Server key for two-factor login (docs/totp.md). Not ready when the key
      * file could not be loaded: enrolment and two-factor logins then fail. */
     unsigned char totp_key[METALBEAR_TWOFACTOR_KEY_BYTES];
@@ -179,6 +182,11 @@ struct metalbear_server {
 void publish_handle_dns(metalbear_server *server, const char *handle,
                         const char *did);
 void retract_handle_dns(metalbear_server *server, const char *handle);
+/* Hard-delete an account from every store and the firehose, with the same
+ * event sequence as com.atproto.server.deleteAccount. Shared with the
+ * scheduled deletion sweep so the two paths cannot drift. */
+void metalbear_hard_delete_account(metalbear_server *server, const char *did,
+                                   const char *data_dir, const char *handle);
 
 /* Join a directory and a name into a heap-allocated path, adding exactly one
  * '/' regardless of whether `directory` already ends with one. */

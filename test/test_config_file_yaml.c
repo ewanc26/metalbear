@@ -58,6 +58,7 @@ static void test_reads_every_type(void) {
         "accounts:\n"
         "  invite_required: false\n"
         "  max_resident_accounts: 7\n"
+        "  deletion_hold_seconds: 86400\n"
         "\n"
         "limits:\n"
         "  rate_limit: 2500\n"
@@ -79,6 +80,7 @@ static void test_reads_every_type(void) {
           strcmp(cfg.service_did, "did:web:example.com") == 0);
     CHECK(cfg.invite_required == false);
     CHECK(cfg.max_resident_accounts == 7);
+    CHECK(cfg.deletion_hold_seconds == 86400);
     CHECK(cfg.rate_limit == 2500);
     CHECK(cfg.crawlers &&
           strcmp(cfg.crawlers, "https://a.example,https://b.example") == 0);

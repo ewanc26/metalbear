@@ -70,6 +70,13 @@ invite_required = true
 # METALBEAR_MAX_RESIDENT_ACCOUNTS overrides this at runtime, and wins.
 max_resident_accounts = 0
 
+# Seconds a deactivated account is kept before the background sweep
+# hard-deletes it (with the same firehose events as deleteAccount). 0 leaves
+# deactivated accounts on disk until an operator deletes them by hand; negative
+# values are refused at startup. METALBEAR_DELETION_HOLD_SECONDS overrides this
+# at runtime, and wins. See docs/account-deletion.md.
+deletion_hold_seconds = 0
+
 [limits]
 # Per-client request budget: requests per window. The historical 100/60 is under
 # two requests a second, which one AppView or a relay backfilling with getRepo

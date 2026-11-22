@@ -1053,6 +1053,23 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         }
     }
 
+    /* Deferred hard-deletion of deactivated accounts (issue #159). Off when
+     * the hold is 0, in which case accounts stay on disk until an operator
+     * deletes them by hand. The check interval is capped so a long hold does
+     * not leave expired accounts sitting around for days. */
+    if (config->deletion_hold_seconds > 0) {
+        long interval = (long)config->deletion_hold_seconds;
+        if (interval > 3600) interval = 3600;
+        server->deletion_sweep = metalbear_deletion_sweep_start(
+            server, config->deletion_hold_seconds, interval);
+        if (!server->deletion_sweep)
+            LOG_WARN("deletion sweep: could not start; deactivated accounts "
+                     "will not be reclaimed automatically");
+        else
+            LOG_INFO("deletion sweep: every %ld seconds, holding %lld seconds",
+                     interval, (long long)config->deletion_hold_seconds);
+    }
+
     return server;
 
 fail:
@@ -1067,6 +1084,9 @@ uint16_t metalbear_server_port(const metalbear_server *server) {
 void metalbear_server_free(metalbear_server *server) {
     if (!server) return;
     wf_xrpc_server_free(server->xrpc);
+    /* Stop the sweep before the stores it walks (cache, sequencer, registry,
+     * metrics, DNS) go away. Joining here waits for any in-flight pass. */
+    metalbear_deletion_sweep_free(server->deletion_sweep);
     metalbear_account_cache_free(server->account_cache);
     metalbear_oauth_store_free(server->oauth);
     metalbear_key_rotation_free(server->plc_rotation);

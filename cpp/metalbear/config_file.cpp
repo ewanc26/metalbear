@@ -113,7 +113,7 @@ static std::string unescape_basic(const std::string &v) {
  * each loader as macros that parse a raw value in that dialect's syntax and
  * assign it into `config`.
  */
-#define METALBEAR_CONFIG_FIELDS(STR, INT, U16, UINT, BOOL, ARR)                \
+#define METALBEAR_CONFIG_FIELDS(STR, INT, NONNEG, U16, UINT, BOOL, ARR)        \
     STR("server.listen", listen_address)                                       \
     U16("server.port", port)                                                   \
     UINT("server.threads", thread_count)                                       \
@@ -133,6 +133,7 @@ static std::string unescape_basic(const std::string &v) {
     STR("accounts.admin_password", admin_password)                             \
     BOOL("accounts.invite_required", invite_required)                          \
     INT("accounts.max_resident_accounts", max_resident_accounts)               \
+    NONNEG("accounts.deletion_hold_seconds", deletion_hold_seconds)            \
                                                                                \
     INT("limits.rate_limit", rate_limit)                                       \
     INT("limits.rate_limit_window_seconds", rate_limit_window)                 \
@@ -358,6 +359,20 @@ static Apply apply_setting(const SettingParsers &p, metalbear_config *config,
         config->field = iv;                                                    \
         return Apply::Applied;                                                 \
     }
+/* Like INT, but refuses negatives at parse time. Used for durations where a
+ * negative would otherwise be silently read as "off" and hide a typo such as
+ * `-3600`. */
+#define NONNEG(name, field)                                                    \
+    if (at.full == name) {                                                     \
+        if (!parse_int(at.val.c_str(), &iv) || iv < 0) {                       \
+            set_error(at.err, at.err_len,                                      \
+                      "%s:%d: '%s' expects a non-negative integer", at.path,   \
+                      at.lineno, at.key.c_str());                              \
+            return Apply::Failed;                                              \
+        }                                                                      \
+        config->field = iv;                                                    \
+        return Apply::Applied;                                                 \
+    }
 #define U16(name, field)                                                       \
     if (at.full == name) {                                                     \
         if (!parse_int(at.val.c_str(), &iv) || iv < 0 || iv > 65535) {         \
@@ -405,10 +420,11 @@ static Apply apply_setting(const SettingParsers &p, metalbear_config *config,
         return Apply::Applied;                                                 \
     }
 
-    METALBEAR_CONFIG_FIELDS(STR, INT, U16, UINT, BOOL, ARR)
+    METALBEAR_CONFIG_FIELDS(STR, INT, NONNEG, U16, UINT, BOOL, ARR)
 
 #undef STR
 #undef INT
+#undef NONNEG
 #undef U16
 #undef UINT
 #undef BOOL

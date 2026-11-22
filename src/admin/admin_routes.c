@@ -31,7 +31,6 @@
 
 #include <cJSON.h>
 #include <ctype.h>
-#include <ftw.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1354,16 +1353,6 @@ wf_status admin_disable_invite_codes(void *ctx, const wf_xrpc_request *request,
 }
 
 /* ---- com.atproto.admin.deleteAccount (procedure, admin-gated) ---- */
-static int rmtree_remove_cb(const char *path, const struct stat *sb, int type,
-                            struct FTW *ftwbuf) {
-    (void)sb;
-    (void)type;
-    (void)ftwbuf;
-    return remove(path);
-}
-static void rmtree(const char *path) {
-    nftw(path, rmtree_remove_cb, 64, FTW_DEPTH | FTW_PHYS);
-}
 
 wf_status admin_delete_account(void *ctx, const wf_xrpc_request *request,
                                wf_xrpc_response *response) {
@@ -1398,43 +1387,11 @@ wf_status admin_delete_account(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
 
-    /*
-     * Announce the deletion before the registry row goes away.
-     *
-     * This used to resolve a context after the removal, which only succeeded
-     * when the account happened to still be in the in-memory cache — for any
-     * other account the registry lookup then failed and the #account event was
-     * skipped entirely, so relays never learned the account was gone. Sequence
-     * it against the host log directly, which needs no context at all.
-     */
-    metalbear_sequencer_account_status(server->sequencer, did->valuestring, 0,
-                                       "deleted");
-    /*
-     * Then drop everything else this DID ever published. The data directory
-     * is about to be removed, and leaving the same records on the firehose
-     * would keep serving them to any consumer backfilling from an old cursor
-     * — a deletion that removes the copy nobody reads and keeps the copy the
-     * network does.
-     */
-    int64_t purged = 0;
-    metalbear_sequencer_purge_account(server->sequencer, did->valuestring,
-                                      &purged);
-    metalbear_metrics_inc(METALBEAR_METRIC_ACCOUNTS_DELETED);
-    LOG_INFO("admin_delete_account: purged %lld firehose events for did=%s",
-             (long long)purged, did->valuestring);
-
-    metalbear_account_registry_remove(server->registry, did->valuestring);
-    /* Moderation state goes with it: a DID re-registered later must not
-     * inherit the deleted account's takedowns. */
-    metalbear_account_registry_clear_takedowns_for_did(server->registry,
-                                                       did->valuestring);
-
-    /* Drop the handle's TXT record: leaving it would keep pointing resolvers
-     * at a DID this host no longer serves. */
-    retract_handle_dns(server, handle);
+    /* Shared with the scheduled deletion sweep: announce first, purge the
+     * firehose, then drop registry/moderation/DNS state and the data
+     * directory. See account_deletion.c. */
+    metalbear_hard_delete_account(server, did->valuestring, data_dir, handle);
     free(handle);
-
-    rmtree(data_dir);
     free(data_dir);
 
     cJSON *root = cJSON_CreateObject();
