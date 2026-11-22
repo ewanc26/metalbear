@@ -1,6 +1,7 @@
 #include "identity_routes.h"
 #include "../server_internal.h"
 
+#include "metalbear/handle/reserved.h"
 #include "metalbear/log.h"
 #include "wolfram/crypto.h"
 #include "wolfram/identity.h"
@@ -644,6 +645,14 @@ wf_status update_handle(void *ctx, const wf_xrpc_request *request,
         wf_xrpc_response_set_error(
             response, 400, "InvalidHandle",
             "Handle must be under the configured domain");
+        return WF_OK;
+    }
+    /* Same reserved-label check as signup and the reference's shared
+     * ensureHandleServiceConstraints. */
+    if (metalbear_handle_is_reserved(handle->valuestring,
+                                     server->user_domain)) {
+        wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
+                                   "Reserved handle");
         return WF_OK;
     }
     metalbear_account_context *acct = resolve_request_context(server, request);

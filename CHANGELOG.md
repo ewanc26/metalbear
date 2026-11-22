@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- Reserved handle labels from the reference PDS — service names such as `admin`, `api` and `atp`, plus well-known account names — are now rejected with `HandleNotAvailable` at signup, `com.atproto.identity.updateHandle` and the admin handle override. The list is generated from the reference's `reserved.ts`, so it stays traceable to upstream. ([#156](https://github.com/ewanc26/metalbear/issues/156))
+
 ## [0.46.1] - 2026-11-22
 
 ### Fixed

@@ -268,6 +268,9 @@ A handle is verified either over HTTPS at
 `https://<handle>/.well-known/atproto-did`, or by a DNS TXT record at
 `_atproto.<handle>` holding `did=<did>`.
 
+Handle labels are limited to 3–18 characters under the configured user domain
+and may not use the reference PDS's reserved names; see [docs/handles.md](docs/handles.md).
+
 A wildcard certificate covers **one** label. A host minting
 `alice.pds.example.com` under `*.example.com` therefore has no certificate for
 the handle, and the HTTPS route cannot work for it at all — which leaves DNS as

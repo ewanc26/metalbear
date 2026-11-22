@@ -2,6 +2,7 @@
 #include "../server_internal.h"
 
 #include "metalbear/account/account_registry.h"
+#include "metalbear/handle/reserved.h"
 #ifdef METALBEAR_MODULE_EMAIL
 #include "metalbear/email.h"
 #endif
@@ -291,6 +292,14 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
     if (label_len < 3 || label_len > 18) {
         wf_xrpc_response_set_error(response, 400, "InvalidHandle",
                                    "handle too short or too long");
+        return WF_OK;
+    }
+    /* Reference ensureHandleServiceConstraints (handle/index.ts): a
+     * reserved service label is a HandleNotAvailable, not InvalidHandle. */
+    if (metalbear_handle_is_reserved(handle->valuestring,
+                                     server->user_domain)) {
+        wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
+                                   "Reserved handle");
         return WF_OK;
     }
 
