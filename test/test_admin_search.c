@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int failures = 0;
@@ -51,6 +52,30 @@ static void add_account(const char *n, const char *email) {
     snprintf(dir, sizeof(dir), "%s/%s", temp_dir, n);
     WF_CHECK(metalbear_account_registry_add_with_email(
                  registry, did, handle, "hash", dir, email, 1) == WF_OK);
+}
+
+/* An account created before the registry's email column existed, or whose
+ * email was set later, has the address only in its account store. The search
+ * must still find it: that store is where build_account_view reads email. */
+static void add_store_email_account(const char *n, const char *email) {
+    char did[128];
+    char handle[128];
+    char dir[512];
+    char path[640];
+    snprintf(did, sizeof(did), "did:plc:%s", n);
+    snprintf(handle, sizeof(handle), "%s.example", n);
+    snprintf(dir, sizeof(dir), "%s/%s", temp_dir, n);
+    WF_CHECK(mkdir(dir, 0700) == 0);
+    WF_CHECK(metalbear_account_registry_add_with_email(
+                 registry, did, handle, "hash", dir, "", 1) == WF_OK);
+    snprintf(path, sizeof(path), "%s/account.sqlite3", dir);
+    metalbear_account_store *store = NULL;
+    WF_CHECK(metalbear_account_store_open(path, "hash", &store) == WF_OK);
+    WF_CHECK(store != NULL);
+    if (store) {
+        WF_CHECK(metalbear_account_store_email(store, email) == WF_OK);
+        metalbear_account_store_free(store);
+    }
 }
 
 /* Build a request and return the parsed JSON body. The caller deletes it. */
@@ -151,6 +176,24 @@ int main(void) {
         cJSON_Delete(root);
     }
 
+    /* An address that exists only in the account store (older registry rows,
+     * or email set after signup) is searchable too. */
+    add_store_email_account("legacy001", "legacy@example.test");
+    {
+        cJSON *root = search(NULL, "legacy@example.test", NULL, -1, NULL);
+        WF_CHECK(root != NULL);
+        WF_CHECK(account_count(root) == 1);
+        WF_CHECK(strcmp(account_did(root, 0), "did:plc:legacy001") == 0);
+        cJSON_Delete(root);
+    }
+    {
+        cJSON *root = search("LEGACY@EXAMPLE.TEST", NULL, NULL, -1, NULL);
+        WF_CHECK(root != NULL);
+        WF_CHECK(account_count(root) == 1);
+        WF_CHECK(strcmp(account_did(root, 0), "did:plc:legacy001") == 0);
+        cJSON_Delete(root);
+    }
+
     /* No filter lists accounts; limit=1 uses a DID keyset cursor. */
     {
         cJSON *first = search(NULL, NULL, NULL, 1, NULL);
@@ -169,11 +212,18 @@ int main(void) {
         cJSON *third = search(NULL, NULL, cursor2, 1, NULL);
         WF_CHECK(third != NULL);
         WF_CHECK(account_count(third) == 1);
-        WF_CHECK(next_cursor(third) == NULL);
+        const char *cursor3 = next_cursor(third);
+        WF_CHECK(cursor3 != NULL);
+
+        cJSON *fourth = search(NULL, NULL, cursor3, 1, NULL);
+        WF_CHECK(fourth != NULL);
+        WF_CHECK(account_count(fourth) == 1);
+        WF_CHECK(next_cursor(fourth) == NULL);
 
         cJSON_Delete(first);
         cJSON_Delete(second);
         cJSON_Delete(third);
+        cJSON_Delete(fourth);
     }
 
     /* A cursor that is not an account DID is a client error. */
@@ -202,7 +252,7 @@ int main(void) {
 
     /* Limit clamping: 105 accounts with limit=1000 answers 100 + cursor, and
      * the next page answers the remaining five with no cursor. */
-    for (int i = 4; i <= 105; i++) {
+    for (int i = 4; i <= 104; i++) {
         char n[32];
         char email[128];
         snprintf(n, sizeof(n), "user%03d", i);
@@ -227,11 +277,14 @@ int main(void) {
     metalbear_account_registry_free(registry);
     char path[512];
     const char *names[] = {"registry.sqlite3", "registry.sqlite3-wal",
-                           "registry.sqlite3-shm", "account.sqlite3"};
+                           "registry.sqlite3-shm", "account.sqlite3",
+                           "legacy001/account.sqlite3"};
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         snprintf(path, sizeof(path), "%s/%s", temp_dir, names[i]);
         unlink(path);
     }
+    snprintf(path, sizeof(path), "%s/legacy001", temp_dir);
+    rmdir(path);
     rmdir(temp_dir);
     if (failures == 0) printf("ALL PASS: admin_search\n");
     return failures;

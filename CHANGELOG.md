@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Fixed
+
+- `com.atproto.admin.searchAccounts` now finds accounts whose login email is stored only in their account store, such as registrations made before the registry tracked email or addresses changed later. Both `term` and the `email` filter consult the same source the account view reports. ([#149](https://github.com/ewanc26/metalbear/issues/149))
+
 ## [0.46.0] - 2026-11-22
 
 ### Added
