@@ -782,6 +782,12 @@ if(METALBEAR_BUILD_TESTS)
     PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_export_bundle COMMAND test_metalbear_export_bundle)
 
+  add_executable(test_metalbear_conformance test/test_conformance.c)
+  target_link_libraries(test_metalbear_conformance PRIVATE metalbear_core)
+  target_include_directories(
+    test_metalbear_conformance PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_conformance COMMAND test_metalbear_conformance)
+
   add_executable(test_metalbear_schema_version test/test_schema_version.c)
   target_link_libraries(test_metalbear_schema_version
                         PRIVATE metalbear_core SQLite3::SQLite3)
