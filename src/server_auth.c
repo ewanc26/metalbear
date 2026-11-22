@@ -152,6 +152,7 @@ static bool is_admin_route(const char *nsid) {
            strcmp(nsid, "com.atproto.admin.getInviteCodes") == 0 ||
            strcmp(nsid, "com.atproto.admin.disableInviteCodes") == 0 ||
            strcmp(nsid, "com.atproto.admin.deleteAccount") == 0 ||
+           strcmp(nsid, "com.atproto.temp.exportAccountBundle") == 0 ||
            strcmp(nsid, "com.atproto.temp.addReservedHandle") == 0;
 }
 

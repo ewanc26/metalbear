@@ -817,6 +817,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.deleteAccount",
             admin_delete_account, server) != WF_OK ||
+        wf_xrpc_server_register_query(
+            server->xrpc, "com.atproto.temp.exportAccountBundle",
+            admin_export_account_bundle, server) != WF_OK ||
         wf_xrpc_server_register_procedure(server->xrpc,
                                           "com.atproto.moderation.createReport",
                                           create_report, server) != WF_OK ||

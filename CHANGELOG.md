@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- `metalbear-admin export-account <DID> <FILE.tar>` and the admin-only `com.atproto.temp.exportAccountBundle` route write a one-shot migration archive holding the repo CAR, every blob, and the account metadata an importer needs. `docs/account-migration.md` describes the round-trip. ([#154](https://github.com/ewanc26/metalbear/issues/154))
+
 ## [0.50.0] - 2026-11-22
 
 ### Added

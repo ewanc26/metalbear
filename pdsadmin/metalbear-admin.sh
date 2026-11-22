@@ -13,6 +13,7 @@
 #   account create <EMAIL> <HANDLE>   Create a new account
 #   create-invite-code [useCount]    Mint an invite code (admin)
 #   request-crawl [HOST,...]           Ask crawlers/relays to crawl this PDS
+#   export-account <DID> <FILE>        Write a migration bundle (tar) for a DID
 #
 set -o errexit
 set -o nounset
@@ -260,6 +261,39 @@ elif [[ "${COMMAND}" == "create-invite-code" ]]; then
     "https://${METALBEAR_HOSTNAME}/xrpc/com.atproto.server.createInviteCode" \
     | jq --raw-output '.code'
 
+elif [[ "${COMMAND}" == "export-account" ]]; then
+  DID="${1:-}"
+  OUTPUT_FILE="${2:-}"
+  if [[ -z "${DID}" || -z "${OUTPUT_FILE}" ]]; then
+    echo "ERROR: export-account requires a DID and an output file." >/dev/stderr
+    echo "Usage: $0 export-account <DID> <FILE.tar>" >/dev/stderr
+    exit 1
+  fi
+  if [[ -z "${METALBEAR_HOSTNAME:-}" ]]; then
+    echo "ERROR: METALBEAR_HOSTNAME is not set" >/dev/stderr
+    exit 1
+  fi
+  if [[ -z "${METALBEAR_ADMIN_PASSWORD:-}" ]]; then
+    echo "ERROR: METALBEAR_ADMIN_PASSWORD is not set" >/dev/stderr
+    exit 1
+  fi
+  # The route returns application/x-tar; write it straight to the requested
+  # file. Fail before creating/truncating OUTPUT_FILE if the server refuses.
+  TMP_FILE="${OUTPUT_FILE}.partial.$$"
+  if curl_cmd_get \
+      --user "admin:${METALBEAR_ADMIN_PASSWORD}" \
+      --get \
+      --data-urlencode "did=${DID}" \
+      --output "${TMP_FILE}" \
+      "https://${METALBEAR_HOSTNAME}/xrpc/com.atproto.temp.exportAccountBundle"; then
+    mv -f "${TMP_FILE}" "${OUTPUT_FILE}"
+  else
+    rm -f "${TMP_FILE}"
+    echo "ERROR: export failed for ${DID}" >/dev/stderr
+    exit 1
+  fi
+  echo "Wrote ${OUTPUT_FILE}"
+
 elif [[ "${COMMAND}" == "request-crawl" ]]; then
   RELAY_HOSTS="${1:-}"
   if [[ -z "${RELAY_HOSTS}" ]]; then
@@ -304,6 +338,7 @@ Usage:
   metalbear-admin account reset-password <DID>
   metalbear-admin create-invite-code [useCount]
   metalbear-admin request-crawl [RELAY HOST,...]
+  metalbear-admin export-account <DID> <FILE.tar>
 
 Configuration: sourced from METALBEAR_ENV_FILE (default ./metalbear.env)
 or the METALBEAR_* environment variables (METALBEAR_HOSTNAME,

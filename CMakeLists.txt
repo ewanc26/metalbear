@@ -175,6 +175,7 @@ set(METALBEAR_CORE_SOURCES
   src/account/account_cache.c
   src/account/account_deletion.c
   src/account/deletion_sweep.c
+  src/account/export_bundle.c
   src/storage/schema_version.c
   src/account/preferences_routes.c
   src/oauth/auth.c
@@ -773,6 +774,13 @@ if(METALBEAR_BUILD_TESTS)
     test_metalbear_deletion_sweep PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
                                           "${METALBEAR_WOLFRAM_ROOT}/test")
   add_test(NAME metalbear_deletion_sweep COMMAND test_metalbear_deletion_sweep)
+
+  add_executable(test_metalbear_export_bundle test/test_export_bundle.c)
+  target_link_libraries(test_metalbear_export_bundle PRIVATE metalbear_core)
+  target_include_directories(
+    test_metalbear_export_bundle
+    PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_export_bundle COMMAND test_metalbear_export_bundle)
 
   add_executable(test_metalbear_schema_version test/test_schema_version.c)
   target_link_libraries(test_metalbear_schema_version

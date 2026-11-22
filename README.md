@@ -435,6 +435,9 @@ configured admin password:
 - `com.atproto.admin.updateAccountPassword` — reset an account password (admin)
 - `com.atproto.admin.enableAccountInvites` / `disableAccountInvites` — toggle
   whether an account may create invite codes
+- `com.atproto.temp.exportAccountBundle` — write a one-shot migration tar with
+  the repo CAR, blobs, and account metadata; see
+  [docs/account-migration.md](docs/account-migration.md)
 
 ## Moderation
 
