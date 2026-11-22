@@ -18,6 +18,13 @@ extern "C" {
  * observer counts them. */
 wf_status metalbear_status_register(metalbear_server *server);
 
+/* GET /_ops/audit — admin-only, paginated admin action audit trail (#160).
+ * Exposed for the offline seam test; the real server registers it as an HTTP
+ * route, so it performs its own admin check rather than using the XRPC
+ * auth callback. */
+wf_status admin_audit_handler(void *ctx, const wf_xrpc_request *request,
+                              wf_xrpc_response *response);
+
 #ifdef __cplusplus
 }
 #endif

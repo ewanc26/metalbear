@@ -631,12 +631,99 @@ static wf_status debug_health_handler(void *ctx, const wf_xrpc_request *req,
 }
 #endif
 
+/* ---- GET /_ops/audit (admin-only, issue #160) ----
+ *
+ * HTTP routes bypass the XRPC auth callback, so this handler applies the
+ * same Basic-auth guard as /_debug/health itself. Rows are returned newest
+ * first; `cursor` is the last row's id and is only emitted when a further
+ * page exists. The caller echoes it back verbatim. */
+wf_status admin_audit_handler(void *ctx, const wf_xrpc_request *request,
+                              wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    if (!admin_authenticated(server, request)) {
+        wf_xrpc_response_set_error(response, 401, "AuthenticationRequired",
+                                   "Authentication required");
+        return WF_OK;
+    }
+    if (!server->audit) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "audit log unavailable");
+        return WF_OK;
+    }
+
+    int limit = query_param_int(request->params, "limit", 100, 1, 500);
+    int64_t before_id = 0;
+    const cJSON *cursor =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "cursor")
+            : NULL;
+    if (cJSON_IsString(cursor) && cursor->valuestring[0]) {
+        const char *p = cursor->valuestring;
+        char *end = NULL;
+        long long parsed = strtoll(p, &end, 10);
+        if (*p == '-' || !*p || !end || *end || parsed <= 0) {
+            wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                       "malformed cursor");
+            return WF_OK;
+        }
+        before_id = (int64_t)parsed;
+    }
+
+    metalbear_admin_audit_entry *entries = NULL;
+    size_t count = 0;
+    if (metalbear_admin_audit_list(server->audit, before_id, (size_t)limit + 1,
+                                   &entries, &count) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalError",
+                                   "cannot read audit log");
+        return WF_OK;
+    }
+    size_t returned = count > (size_t)limit ? (size_t)limit : count;
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *items = cJSON_CreateArray();
+    if (!root || !items) {
+        cJSON_Delete(root);
+        cJSON_Delete(items);
+        metalbear_admin_audit_entries_free(entries, count);
+        return WF_ERR_ALLOC;
+    }
+    for (size_t i = 0; i < returned; i++) {
+        metalbear_admin_audit_entry *entry = &entries[i];
+        cJSON *item = cJSON_CreateObject();
+        if (!item) {
+            cJSON_Delete(root);
+            metalbear_admin_audit_entries_free(entries, count);
+            return WF_ERR_ALLOC;
+        }
+        cJSON_AddNumberToObject(item, "id", (double)entry->id);
+        cJSON_AddStringToObject(item, "time", entry->time);
+        cJSON_AddStringToObject(item, "admin", entry->admin);
+        cJSON_AddStringToObject(item, "action", entry->action);
+        if (entry->target_did)
+            cJSON_AddStringToObject(item, "targetDid", entry->target_did);
+        cJSON_AddStringToObject(item, "outcome", entry->outcome);
+        cJSON_AddItemToArray(items, item);
+    }
+    if (count > (size_t)limit) {
+        char next[32];
+        snprintf(next, sizeof(next), "%lld",
+                 (long long)entries[returned - 1].id);
+        cJSON_AddStringToObject(root, "cursor", next);
+    }
+    metalbear_admin_audit_entries_free(entries, count);
+    cJSON_AddItemToObject(root, "audit", items);
+    return set_json(response, root);
+}
+
 wf_status metalbear_status_register(metalbear_server *server) {
     wf_status status = wf_xrpc_server_register_http_route(
         server->xrpc, "GET", "/metrics", metrics_handler, server);
     if (status != WF_OK) return status;
     status = wf_xrpc_server_register_http_route(
         server->xrpc, "GET", "/_debug/health", debug_health_handler, server);
+    if (status != WF_OK) return status;
+    status = wf_xrpc_server_register_http_route(
+        server->xrpc, "GET", "/_ops/audit", admin_audit_handler, server);
     if (status != WF_OK) return status;
     /* With a frontend directory the built frontend owns "/", so the C landing
      * page moves to /landing and stays reachable. */

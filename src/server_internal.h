@@ -22,6 +22,7 @@
 #include "metalbear/email.h"
 #endif
 #include "metalbear/admission.h"
+#include "metalbear/admin/audit.h"
 #include "metalbear/label/label_store.h"
 #include "metalbear/moderation/report.h"
 #ifdef METALBEAR_MODULE_UPDATE_WATCHER
@@ -171,6 +172,8 @@ struct metalbear_server {
     char *appview_did; /* Upstream AppView DID for service-auth or NULL */
     metalbear_account_cache *account_cache;
     metalbear_report_store *reports;
+    /* Operator-visible admin action audit trail (issue #160). */
+    metalbear_admin_audit *audit;
     /* This server's own labels (labels.sqlite3): one `!takedown` per account
      * takedown, served from com.atproto.label.queryLabels. */
     metalbear_label_store *labels;
@@ -265,6 +268,12 @@ wf_status set_json(wf_xrpc_response *response, cJSON *root);
  * only when a password is configured AND the header matches exactly. Gates
  * /metrics and /_debug/health in src/ops/status.c. */
 bool admin_authenticated(metalbear_server *server, const wf_xrpc_request *req);
+
+/* Append one admin audit row for `action`. Uses req (when non-NULL) to derive
+ * the target DID; a NULL audit store is a no-op so stacks assembled in tests
+ * do not have to open one. Never stores credential material. */
+void admin_audit_record(metalbear_server *server, const char *action,
+                        const wf_xrpc_request *req, const char *outcome);
 
 /* Resolve an XRPC request's bearer token to its account context. Owned by
  * the cache, never freed by the caller. NULL when unauthenticated or the

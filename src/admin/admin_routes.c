@@ -1443,3 +1443,77 @@ wf_status admin_export_account_bundle(void *ctx, const wf_xrpc_request *request,
     free(bundle);
     return WF_OK;
 }
+
+/* Append one audit row for an admin call. The identity is the HTTP Basic
+ * username when authenticated (always `admin` in this model); refused calls
+ * are recorded as `unauthenticated`. Never store the credential itself. */
+void admin_audit_record(metalbear_server *server, const char *action,
+                        const wf_xrpc_request *req, const char *outcome) {
+    if (!server || !server->audit || !action) return;
+    char target[512];
+    bool have_target =
+        req && metalbear_admin_audit_target_did(req, target, sizeof(target));
+    const char *identity =
+        req && admin_authenticated(server, req) ? "admin" : "unauthenticated";
+    const char *result = outcome ? outcome : "unknown";
+    (void)metalbear_admin_audit_append(server->audit, NULL, identity, action,
+                                       have_target ? target : NULL, result,
+                                       NULL);
+}
+
+/* ---- audited wrappers (issue #160) ------------------------------------
+ *
+ * The shared auth callback refuses unauthenticated calls before a handler is
+ * reached; that path logs a `denied` row in server_auth.c. These wrappers
+ * cover every call that reaches a com.atproto.admin.* handler, so the audit
+ * trail records the final outcome rather than merely the request.
+ */
+typedef wf_status (*admin_handler_fn)(void *, const wf_xrpc_request *,
+                                      wf_xrpc_response *);
+
+static wf_status admin_audited(void *ctx, const wf_xrpc_request *request,
+                               wf_xrpc_response *response, const char *action,
+                               admin_handler_fn handler) {
+    wf_status status = handler(ctx, request, response);
+    int code = response ? response->http_status : 500;
+    const char *outcome =
+        status == WF_OK && code >= 200 && code < 400 ? "ok" : "error";
+    admin_audit_record((metalbear_server *)ctx, action, request, outcome);
+    return status;
+}
+
+#define METALBEAR_DEFINE_AUDITED(name, nsid)                                   \
+    wf_status name##_audited(void *ctx, const wf_xrpc_request *request,        \
+                             wf_xrpc_response *response) {                     \
+        return admin_audited(ctx, request, response, nsid, name);              \
+    }
+
+METALBEAR_DEFINE_AUDITED(admin_get_account_info,
+                         "com.atproto.admin.getAccountInfo")
+METALBEAR_DEFINE_AUDITED(admin_get_subject_status,
+                         "com.atproto.admin.getSubjectStatus")
+METALBEAR_DEFINE_AUDITED(admin_update_subject_status,
+                         "com.atproto.admin.updateSubjectStatus")
+METALBEAR_DEFINE_AUDITED(admin_send_email, "com.atproto.admin.sendEmail")
+METALBEAR_DEFINE_AUDITED(admin_get_account_infos,
+                         "com.atproto.admin.getAccountInfos")
+METALBEAR_DEFINE_AUDITED(admin_search_accounts,
+                         "com.atproto.admin.searchAccounts")
+METALBEAR_DEFINE_AUDITED(admin_update_account_handle,
+                         "com.atproto.admin.updateAccountHandle")
+METALBEAR_DEFINE_AUDITED(admin_update_account_signing_key,
+                         "com.atproto.admin.updateAccountSigningKey")
+METALBEAR_DEFINE_AUDITED(admin_update_account_email,
+                         "com.atproto.admin.updateAccountEmail")
+METALBEAR_DEFINE_AUDITED(admin_update_account_password,
+                         "com.atproto.admin.updateAccountPassword")
+METALBEAR_DEFINE_AUDITED(admin_enable_account_invites,
+                         "com.atproto.admin.enableAccountInvites")
+METALBEAR_DEFINE_AUDITED(admin_disable_account_invites,
+                         "com.atproto.admin.disableAccountInvites")
+METALBEAR_DEFINE_AUDITED(admin_get_invite_codes,
+                         "com.atproto.admin.getInviteCodes")
+METALBEAR_DEFINE_AUDITED(admin_disable_invite_codes,
+                         "com.atproto.admin.disableInviteCodes")
+METALBEAR_DEFINE_AUDITED(admin_delete_account,
+                         "com.atproto.admin.deleteAccount")

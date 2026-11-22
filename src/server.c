@@ -398,6 +398,16 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     }
     free(reports_path);
 
+    /* Open the admin audit trail before any admin route can be called. */
+    char *audit_path = join_path(config->data_directory, "admin_audit.sqlite3");
+    if (!audit_path ||
+        metalbear_admin_audit_open(audit_path, &server->audit) != WF_OK) {
+        LOG_ERROR("cannot open admin audit store");
+        free(audit_path);
+        goto fail;
+    }
+    free(audit_path);
+
     /* Open this server's label store (the labeler's own records). */
     char *labels_path = join_path(config->data_directory, "labels.sqlite3");
     if (!labels_path ||
@@ -798,49 +808,49 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         /* Admin endpoints (refpds PDS_ADMIN_PASSWORD, Basic auth) */
         wf_xrpc_server_register_query(
             server->xrpc, "com.atproto.admin.getAccountInfo",
-            admin_get_account_info, server) != WF_OK ||
+            admin_get_account_info_audited, server) != WF_OK ||
         wf_xrpc_server_register_query(
             server->xrpc, "com.atproto.admin.getSubjectStatus",
-            admin_get_subject_status, server) != WF_OK ||
+            admin_get_subject_status_audited, server) != WF_OK ||
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.updateSubjectStatus",
-            admin_update_subject_status, server) != WF_OK ||
-        wf_xrpc_server_register_procedure(server->xrpc,
-                                          "com.atproto.admin.sendEmail",
-                                          admin_send_email, server) != WF_OK ||
+            admin_update_subject_status_audited, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(
+            server->xrpc, "com.atproto.admin.sendEmail",
+            admin_send_email_audited, server) != WF_OK ||
         wf_xrpc_server_register_query(
             server->xrpc, "com.atproto.admin.getAccountInfos",
-            admin_get_account_infos, server) != WF_OK ||
-        wf_xrpc_server_register_query(server->xrpc,
-                                      "com.atproto.admin.searchAccounts",
-                                      admin_search_accounts, server) != WF_OK ||
+            admin_get_account_infos_audited, server) != WF_OK ||
+        wf_xrpc_server_register_query(
+            server->xrpc, "com.atproto.admin.searchAccounts",
+            admin_search_accounts_audited, server) != WF_OK ||
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.updateAccountHandle",
-            admin_update_account_handle, server) != WF_OK ||
+            admin_update_account_handle_audited, server) != WF_OK ||
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.updateAccountSigningKey",
-            admin_update_account_signing_key, server) != WF_OK ||
+            admin_update_account_signing_key_audited, server) != WF_OK ||
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.updateAccountEmail",
-            admin_update_account_email, server) != WF_OK ||
+            admin_update_account_email_audited, server) != WF_OK ||
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.updateAccountPassword",
-            admin_update_account_password, server) != WF_OK ||
+            admin_update_account_password_audited, server) != WF_OK ||
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.enableAccountInvites",
-            admin_enable_account_invites, server) != WF_OK ||
+            admin_enable_account_invites_audited, server) != WF_OK ||
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.disableAccountInvites",
-            admin_disable_account_invites, server) != WF_OK ||
+            admin_disable_account_invites_audited, server) != WF_OK ||
         wf_xrpc_server_register_query(
             server->xrpc, "com.atproto.admin.getInviteCodes",
-            admin_get_invite_codes, server) != WF_OK ||
+            admin_get_invite_codes_audited, server) != WF_OK ||
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.disableInviteCodes",
-            admin_disable_invite_codes, server) != WF_OK ||
+            admin_disable_invite_codes_audited, server) != WF_OK ||
         wf_xrpc_server_register_procedure(
             server->xrpc, "com.atproto.admin.deleteAccount",
-            admin_delete_account, server) != WF_OK ||
+            admin_delete_account_audited, server) != WF_OK ||
         wf_xrpc_server_register_query(
             server->xrpc, "com.atproto.temp.exportAccountBundle",
             admin_export_account_bundle, server) != WF_OK ||
@@ -1165,6 +1175,7 @@ void metalbear_server_free(metalbear_server *server) {
     metalbear_update_watcher_free(server->update_watcher);
 #endif
     metalbear_report_store_free(server->reports);
+    metalbear_admin_audit_free(server->audit);
     metalbear_backup_schedule_free(server->backup_schedule);
     metalbear_label_store_free(server->labels);
     wf_rate_limiter_free(server->rate_limiter);
