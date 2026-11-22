@@ -15,6 +15,7 @@
 
 #include "server/includes.h"
 #include "metalbear/label/labels_routes.h"
+#include "metalbear/plc_publish.h"
 #include "ops/frontend_static.h"
 
 /* Logging lives in log.c so the daemon shares it: see metalbear/log.h. */
@@ -140,28 +141,21 @@ static wf_status plc_string_array_from_local(const cJSON *array, char ***out,
     return WF_OK;
 }
 
-bool metalbear_plc_update_signing_key(metalbear_server *server,
-                                      wf_xrpc_response *response,
-                                      const char *did,
-                                      const char *signing_key_didkey,
-                                      const char *log_name) {
-    if (wf_did_method_of(did) != WF_DID_METHOD_PLC) return true;
+wf_status metalbear_plc_publish_signing_key(metalbear_key_rotation *rotation,
+                                            const char *plc_url,
+                                            const char *did,
+                                            const char *signing_key_didkey) {
+    if (!rotation || !plc_url || !*plc_url || !did || !signing_key_didkey)
+        return WF_ERR_INVALID_ARG;
+    if (wf_did_method_of(did) != WF_DID_METHOD_PLC) return WF_OK;
     wf_signing_key rotation_key;
-    if (metalbear_key_rotation_current_key(server->plc_rotation,
-                                           &rotation_key) != WF_OK) {
-        wf_xrpc_response_set_error(response, 500, "InternalError",
-                                   "Could not load PLC rotation key");
-        return false;
-    }
-    wf_xrpc_client *plc_client = wf_xrpc_client_new(server->plc_url);
-    if (!plc_client) {
-        wf_xrpc_response_set_error(response, 500, "InternalError",
-                                   "Could not reach the PLC directory");
-        return false;
-    }
+    if (metalbear_key_rotation_current_key(rotation, &rotation_key) != WF_OK)
+        return WF_ERR_NOT_FOUND;
+    wf_xrpc_client *plc_client = wf_xrpc_client_new(plc_url);
+    if (!plc_client) return WF_ERR_ALLOC;
     char *prev = NULL, *last_json = NULL;
     wf_status status =
-        wf_plc_get_last_op(plc_client, server->plc_url, did, &prev, &last_json);
+        wf_plc_get_last_op(plc_client, plc_url, did, &prev, &last_json);
     char *unsigned_op = NULL, *signed_op = NULL;
     char **rotation_keys = NULL, **also_known_as = NULL;
     size_t rotation_keys_count = 0, also_known_as_count = 0;
@@ -224,7 +218,7 @@ bool metalbear_plc_update_signing_key(metalbear_server *server,
     if (status == WF_OK)
         status = wf_plc_operation_sign(unsigned_op, &rotation_key, &signed_op);
     if (status == WF_OK)
-        status = wf_plc_submit_operation_raw(server->plc_url, did, signed_op);
+        status = wf_plc_submit_operation_raw(plc_url, did, signed_op);
 
 done:
     cJSON_Delete(last_op);
@@ -237,14 +231,22 @@ done:
     wf_plc_operation_free(unsigned_op);
     wf_plc_operation_free(signed_op);
     wf_xrpc_client_free(plc_client);
-    if (status != WF_OK) {
-        LOG_ERROR("%s: PLC signing-key update failed for did=%s (status=%d)",
-                  log_name, did, status);
-        wf_xrpc_response_set_error(response, 500, "InternalError",
-                                   "Could not update PLC document");
-        return false;
-    }
-    return true;
+    return status;
+}
+
+bool metalbear_plc_update_signing_key(metalbear_server *server,
+                                      wf_xrpc_response *response,
+                                      const char *did,
+                                      const char *signing_key_didkey,
+                                      const char *log_name) {
+    wf_status status = metalbear_plc_publish_signing_key(
+        server->plc_rotation, server->plc_url, did, signing_key_didkey);
+    if (status == WF_OK) return true;
+    LOG_ERROR("%s: PLC signing-key update failed for did=%s (status=%d)",
+              log_name, did, status);
+    wf_xrpc_response_set_error(response, 500, "InternalError",
+                               "Could not update PLC document");
+    return false;
 }
 
 /* Signing key this account's DID document must advertise: the override set

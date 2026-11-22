@@ -820,3 +820,20 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_repo_car.cpp")
   add_executable(verify_repo_car tools/verify_repo_car.cpp)
   target_link_libraries(verify_repo_car PRIVATE OpenSSL::Crypto CURL::libcurl)
 endif()
+
+# Offline maintenance helper used by pdsadmin against a stopped data dir.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/metalbear_maint.c")
+  add_executable(metalbear-maint tools/metalbear_maint.c)
+  target_link_libraries(metalbear-maint PRIVATE metalbear_core)
+  target_include_directories(metalbear-maint
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  if(METALBEAR_BUILD_TESTS AND EXISTS
+     "${CMAKE_CURRENT_SOURCE_DIR}/test/pdsadmin/test_maintenance.sh")
+    add_test(
+      NAME metalbear_maintenance_commands
+      COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/test/pdsadmin/test_maintenance.sh")
+    set_tests_properties(
+      metalbear_maintenance_commands
+      PROPERTIES ENVIRONMENT "METALBEAR_MAINT_BIN=$<TARGET_FILE:metalbear-maint>")
+  endif()
+endif()

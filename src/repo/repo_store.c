@@ -2064,6 +2064,14 @@ wf_status metalbear_repo_store_verify_head(metalbear_repo_store *s,
     return st;
 }
 
+wf_status metalbear_repo_store_reindex(metalbear_repo_store *s) {
+    if (!s) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&s->mutex);
+    wf_status st = reindex_all(s);
+    pthread_mutex_unlock(&s->mutex);
+    return st;
+}
+
 /* ── listRecords (com.atproto.repo.listRecords) ──────────────────────── */
 
 static wf_status list_records_locked(metalbear_repo_store *s,

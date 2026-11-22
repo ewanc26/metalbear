@@ -325,6 +325,12 @@ elif [[ "${COMMAND}" == "request-crawl" ]]; then
   done
   echo "done"
 
+elif [[ "${COMMAND}" == "rotate-keys" || "${COMMAND}" == "rebuild-repo" || \
+       "${COMMAND}" == "sequencer-recover" || "${COMMAND}" == "publish-identity" ]]; then
+  # Offline maintenance: open the stores directly, never through the admin API.
+  exec "$(dirname "${BASH_SOURCE[0]}")/metalbear-maintenance.sh" \
+    "${COMMAND}" "$@"
+
 else
   cat <<'EOF'
 MetalBear admin CLI (mirrors refpds `pdsadmin`)
@@ -339,6 +345,13 @@ Usage:
   metalbear-admin create-invite-code [useCount]
   metalbear-admin request-crawl [RELAY HOST,...]
   metalbear-admin export-account <DID> <FILE.tar>
+  metalbear-admin rotate-keys <DID...>           Offline: republish repo keys
+  metalbear-admin rebuild-repo <DID>             Offline: verify + reindex
+  metalbear-admin sequencer-recover              Offline: heal firehose tail
+  metalbear-admin publish-identity <DID>         Offline: sequence #identity
+
+Offline commands require METALBEAR_DATA and a stopped instance; see
+docs/operator-commands.md.
 
 Configuration: sourced from METALBEAR_ENV_FILE (default ./metalbear.env)
 or the METALBEAR_* environment variables (METALBEAR_HOSTNAME,

@@ -557,7 +557,13 @@ The `pdsadmin/metalbear-admin.sh` script mirrors the reference PDS admin tooling
 ./pdsadmin/metalbear-admin.sh account reset-password did:plc:...
 ./pdsadmin/metalbear-admin.sh create-invite-code [useCount]
 ./pdsadmin/metalbear-admin.sh request-crawl [RELAY HOST,...]
+./pdsadmin/metalbear-admin.sh export-account <DID> <FILE.tar>
 ```
+
+For repairs that must touch a stopped instance's data directory,
+`metalbear-admin` also dispatches `rotate-keys`, `rebuild-repo`,
+`sequencer-recover` and `publish-identity`; see
+[docs/operator-commands.md](docs/operator-commands.md).
 
 ## Operational
 

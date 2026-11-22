@@ -301,6 +301,14 @@ wf_status metalbear_repo_store_verify_head(metalbear_repo_store *store,
                                            wf_commit *out_commit);
 
 /**
+ * Rebuild the derived record and blob indexes from the current head by
+ * walking its MST. Use after a crash or a direct block-store repair left the
+ * SQL indexes out of step with the CAR. The commits themselves are untouched;
+ * this does not reconstruct a damaged MST from records.
+ */
+wf_status metalbear_repo_store_reindex(metalbear_repo_store *store);
+
+/**
  * List records in a collection (com.atproto.repo.listRecords).
  *
  * Enumerates the `records` index. By default records are returned in
