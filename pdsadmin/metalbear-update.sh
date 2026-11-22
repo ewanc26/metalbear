@@ -28,9 +28,9 @@
 #      report the release's version before anything is touched.
 #   5. The service is stopped and every SQLite file (and the blob salt) in the
 #      data directory is copied to BACKUP_DIR, then the copy is verified. If the
-#      backup cannot be made there is no update: schema changes made by a newer
-#      binary cannot be undone without it, and MetalBear stores no schema
-#      version that would let this script tell which releases change the schema.
+#      backup cannot be made there is no update. Every database now records a
+#      schema version, so this script reports whether an update changes it, but
+#      a snapshot is still taken either way: rollback needs one.
 #   6. The previous binary and lexicons are kept as <name>.prev, the new ones
 #      are moved in, the service starts, and HEALTH_URL must answer within
 #      HEALTH_TIMEOUT seconds. If it does not, the previous binary and the data
@@ -172,7 +172,9 @@ backup_data() { # outfile
 	(cd "$DATA_DIR" && find . -type f \( -name '*.sqlite3' -o -name '*.sqlite3-wal' -o -name '*.sqlite3-shm' -o -name '.blobstore.salt' \) -print) >"$list"
 	grep -q '\.sqlite3$' "$list" || { rm -f "$list"; fail "no SQLite files under $DATA_DIR; wrong DATA_DIR? refusing"; }
 	local need_kb avail_kb
-	need_kb="$(cd "$DATA_DIR" && xargs -a "$list" du -k | awk '{s+=$1} END {print s*2+1024}')"
+	# Read paths one at a time: `xargs -a` is GNU-only, and plain `xargs`
+	# splits filenames containing spaces.
+	need_kb="$(cd "$DATA_DIR" && while IFS= read -r f; do du -k "$f"; done <"$list" | awk '{s+=$1} END {print s*2+1024}')"
 	avail_kb="$(df -Pk "$BACKUP_DIR" | awk 'NR==2 {print $4}')"
 	[ "$avail_kb" -ge "$need_kb" ] || { rm -f "$list"; fail "not enough space in $BACKUP_DIR (need ~${need_kb} KiB, have ${avail_kb} KiB)"; }
 	tar -C "$DATA_DIR" -cf "$out" -T "$list"
