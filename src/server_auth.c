@@ -585,8 +585,13 @@ static wf_status authenticate_request(wf_xrpc_request *req, void *ctx) {
     /* Admin endpoints (refpds PDS_ADMIN_PASSWORD) are gated by HTTP Basic
      * `admin:<password>`, not bearer tokens. Reject honestly when no
      * password is configured or the credential is missing/wrong. */
-    if (is_admin_route(req->nsid))
-        return admin_authenticated(server, req) ? WF_OK : WF_ERR_PERMISSION;
+    if (is_admin_route(req->nsid)) {
+        if (admin_authenticated(server, req)) return WF_OK;
+        /* Refused calls never reach an audited handler, so record them
+         * here: a full trail includes failed authentication attempts. */
+        admin_audit_record(server, req->nsid, req, "denied");
+        return WF_ERR_PERMISSION;
+    }
     if (is_public_route(req->nsid)) {
         /*
          * An unavailable account's repo is not readable. Resolve which account

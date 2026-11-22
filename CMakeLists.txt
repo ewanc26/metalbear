@@ -205,6 +205,7 @@ set(METALBEAR_CORE_SOURCES
   src/server_guards.c
   src/server_identity.c
   src/admin/admin_routes.c
+  src/admin/audit.c
   src/identity/identity_routes.c
   src/session/session_routes.c
   src/account/account_routes.c
@@ -361,6 +362,14 @@ if(METALBEAR_BUILD_TESTS)
   target_include_directories(test_metalbear_admin_search
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_admin_search COMMAND test_metalbear_admin_search)
+
+  add_executable(test_metalbear_admin_audit test/test_admin_audit.c)
+  target_link_libraries(test_metalbear_admin_audit
+                        PRIVATE metalbear_core SQLite3::SQLite3)
+  target_include_directories(test_metalbear_admin_audit
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
+                                     "${METALBEAR_WOLFRAM_ROOT}/test")
+  add_test(NAME metalbear_admin_audit COMMAND test_metalbear_admin_audit)
 
   add_executable(test_metalbear_auth test/test_auth.c)
   target_link_libraries(test_metalbear_auth PRIVATE metalbear_core)
