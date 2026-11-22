@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "metalbear/admission.h"
 #include "metalbear/config_file.h"
 #include "metalbear/server.h"
 #include "metalbear/log.h"
@@ -298,6 +299,25 @@ int main(int argc, char **argv) {
     if (invite_required_text && (strcmp(invite_required_text, "0") == 0 ||
                                  strcmp(invite_required_text, "false") == 0))
         config.invite_required = false;
+    /* Per-domain admission overrides (issue #163). */
+    {
+        const char *v = getenv("METALBEAR_ADMISSION_DEFAULT");
+        if (v && v[0]) config.admission_default = v;
+        v = getenv("METALBEAR_ADMISSION_OPEN_DOMAINS");
+        if (v) config.admission_open_domains = v;
+        v = getenv("METALBEAR_ADMISSION_INVITE_DOMAINS");
+        if (v) config.admission_invite_domains = v;
+        v = getenv("METALBEAR_ADMISSION_CLOSED_DOMAINS");
+        if (v) config.admission_closed_domains = v;
+        char err[256] = {0};
+        if (!metalbear_admission_config_valid(
+                config.admission_default, config.admission_open_domains,
+                config.admission_invite_domains,
+                config.admission_closed_domains, err, sizeof(err))) {
+            fprintf(stderr, "MetalBear [ERROR] %s\n", err);
+            return 2;
+        }
+    }
     const char *accepting_imports_text = getenv("METALBEAR_ACCEPTING_IMPORTS");
     if (accepting_imports_text &&
         (strcmp(accepting_imports_text, "0") == 0 ||

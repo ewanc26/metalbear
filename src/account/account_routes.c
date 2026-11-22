@@ -221,10 +221,20 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
               handle->valuestring, email->valuestring,
               cJSON_IsString(did) && did->valuestring[0] ? did->valuestring
                                                          : "(auto)");
-    /* Invite-gated signups (refpds PDS_INVITE_REQUIRED): when enabled,
-     * reject account creation unless a non-empty invite code is supplied
-     * and the code has remaining uses. */
-    if (server->invite_required) {
+    /* Per-domain admission (issue #163): a closed domain is refused before
+     * any invite code is consumed, an invite domain runs the legacy gate
+     * below, and an open domain skips it. The fallback comes from the legacy
+     * invite_required setting when no domain matches. */
+    metalbear_admission_mode admission = metalbear_admission_for_handle(
+        handle->valuestring, server->admission_default_mode,
+        server->admission_open_domains, server->admission_invite_domains,
+        server->admission_closed_domains);
+    if (admission == METALBEAR_ADMISSION_CLOSED) {
+        wf_xrpc_response_set_error(response, 400, "UnsupportedDomain",
+                                   "signups are closed for this domain");
+        return WF_OK;
+    }
+    if (admission == METALBEAR_ADMISSION_INVITE) {
         cJSON *invite = request->params ? cJSON_GetObjectItemCaseSensitive(
                                               request->params, "inviteCode")
                                         : NULL;

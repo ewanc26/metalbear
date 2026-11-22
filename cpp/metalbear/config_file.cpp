@@ -135,6 +135,11 @@ static std::string unescape_basic(const std::string &v) {
     INT("accounts.max_resident_accounts", max_resident_accounts)               \
     NONNEG("accounts.deletion_hold_seconds", deletion_hold_seconds)            \
                                                                                \
+    STR("admission.default", admission_default)                                \
+    ARR("admission.open_domains", admission_open_domains)                      \
+    ARR("admission.invite_domains", admission_invite_domains)                  \
+    ARR("admission.closed_domains", admission_closed_domains)                  \
+                                                                               \
     INT("limits.rate_limit", rate_limit)                                       \
     INT("limits.rate_limit_window_seconds", rate_limit_window)                 \
     INT("limits.blob_upload_bytes", blob_upload_limit)                         \

@@ -225,6 +225,11 @@ port        = 2583
 admin_password  = "..."
 invite_required = true
 
+[admission]                        # per-domain signup policy
+default         = "invite"         # open | invite | closed
+open_domains    = [".open.example.com"]
+closed_domains  = [".closed.example.com"]
+
 [limits]
 rate_limit                = 3000   # per client, per window
 rate_limit_window_seconds = 60
@@ -233,6 +238,11 @@ rate_limit_window_seconds = 60
 crawlers     = ["https://bsky.network"]
 ping_seconds = 20                  # keepalive; must beat the proxy idle timeout
 ```
+
+`admission` overrides the global `invite_required` for handles under a listed
+domain. Domains are dotted suffixes, the longest match wins, and a closed
+domain is refused with `400 UnsupportedDomain`. When no domain matches, the
+`default` applies; if `default` is also unset, `invite_required` is used.
 
 The same settings in YAML — a deliberate subset (2-space indent, no block
 sequences or multi-line scalars; see `config_file.h`), not the full spec:

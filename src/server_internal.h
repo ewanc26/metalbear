@@ -21,6 +21,7 @@
 #ifdef METALBEAR_MODULE_EMAIL
 #include "metalbear/email.h"
 #endif
+#include "metalbear/admission.h"
 #include "metalbear/label/label_store.h"
 #include "metalbear/moderation/report.h"
 #ifdef METALBEAR_MODULE_UPDATE_WATCHER
@@ -147,6 +148,12 @@ struct metalbear_server {
     char *admin_password; /* may be NULL => admin endpoints 401 */
     char *crawlers;       /* comma-separated relay hosts, may be NULL */
     bool invite_required;
+    /* Per-domain signup policy; the mode is the resolved fallback and the
+     * strings are comma-separated leading-dot suffixes (issue #163). */
+    metalbear_admission_mode admission_default_mode;
+    char *admission_open_domains;
+    char *admission_invite_domains;
+    char *admission_closed_domains;
     int64_t blob_upload_limit; /* 0 => unlimited */
     bool accepting_imports;    /* gates com.atproto.repo.importRepo */
     int64_t max_import_size;   /* 0 => unlimited; caps importRepo's CAR body */

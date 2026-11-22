@@ -155,6 +155,21 @@ static bool copy_config(metalbear_server *server,
     if (config->crawlers && config->crawlers[0])
         server->crawlers = strdup(config->crawlers);
     server->invite_required = config->invite_required;
+    server->admission_default_mode = config->invite_required
+                                         ? METALBEAR_ADMISSION_INVITE
+                                         : METALBEAR_ADMISSION_OPEN;
+    if (config->admission_default &&
+        !metalbear_admission_parse_mode(config->admission_default,
+                                        &server->admission_default_mode))
+        return false;
+    if (config->admission_open_domains && config->admission_open_domains[0])
+        server->admission_open_domains = strdup(config->admission_open_domains);
+    if (config->admission_invite_domains && config->admission_invite_domains[0])
+        server->admission_invite_domains =
+            strdup(config->admission_invite_domains);
+    if (config->admission_closed_domains && config->admission_closed_domains[0])
+        server->admission_closed_domains =
+            strdup(config->admission_closed_domains);
     server->blob_upload_limit = config->blob_upload_limit;
     server->accepting_imports = config->accepting_imports;
     server->max_import_size = config->max_import_size;
@@ -1134,6 +1149,9 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->frontend_dir);
     free(server->admin_password);
     free(server->crawlers);
+    free(server->admission_open_domains);
+    free(server->admission_invite_domains);
+    free(server->admission_closed_domains);
     free(server->plc_url);
     free(server->appview_url);
     free(server->appview_did);

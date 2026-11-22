@@ -169,6 +169,7 @@ target_compile_options(cjson PRIVATE -Wno-keyword-macro)
 
 # Core sources always compiled regardless of module selection.
 set(METALBEAR_CORE_SOURCES
+  src/account/admission.c
   src/ops/metrics.c
   cpp/metalbear/account_registry.cpp
   src/account/account_context.c
@@ -534,6 +535,10 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_audit_moderation
            COMMAND test_metalbear_audit_moderation)
+
+  add_executable(test_metalbear_admission test/test_admission.c)
+  target_link_libraries(test_metalbear_admission PRIVATE metalbear_core)
+  add_test(NAME metalbear_admission COMMAND test_metalbear_admission)
 
   add_executable(test_metalbear_audit_account test/test_audit_account.c)
   target_link_libraries(test_metalbear_audit_account
