@@ -648,9 +648,8 @@ wf_status update_handle(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     /* Same reserved-label check as signup and the reference's shared
-     * ensureHandleServiceConstraints. */
-    if (metalbear_handle_is_reserved(handle->valuestring,
-                                     server->user_domain)) {
+     * ensureHandleServiceConstraints, including dynamic admin reservations. */
+    if (handle_is_reserved_now(server, handle->valuestring)) {
         wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
                                    "Reserved handle");
         return WF_OK;

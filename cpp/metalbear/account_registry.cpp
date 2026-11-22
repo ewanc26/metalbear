@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <string>
 
 struct sqlite3_deleter {
     void operator()(sqlite3 *db) const noexcept {
@@ -100,7 +101,16 @@ wf_status metalbear_account_registry_open(const char *path,
                      "uri TEXT,"
                      "blob_cid TEXT,"
                      "takedown_ref TEXT NOT NULL,"
-                     "created_at TEXT NOT NULL);",
+                     "created_at TEXT NOT NULL);"
+                     /* Handle reservations made through the temporary signup
+                      * helper routes. `expires_at` is compared as text against
+                      * the same RFC-3339 UTC shape SQLite's strftime emits;
+                      * NOCASE keeps the column case-insensitive even if a
+                      * client sends mixed case. */
+                     "CREATE TABLE IF NOT EXISTS reserved_handle("
+                     "handle TEXT PRIMARY KEY COLLATE NOCASE,"
+                     "created_at TEXT NOT NULL,"
+                     "expires_at TEXT NOT NULL);",
                      nullptr, nullptr, nullptr) != SQLITE_OK) {
         metalbear_account_registry_free(reg);
         return WF_ERR_INTERNAL;
@@ -236,6 +246,100 @@ static wf_status read_entry(sqlite3_stmt *stmt, metalbear_account_entry *out) {
         return WF_ERR_ALLOC;
     }
     return WF_OK;
+}
+
+/* Handles are stored lower case (the handle syntax itself is lower case, but
+ * the NOCASE column keeps accidental mixed-case rows from the old manual
+ * workflow from being treated as distinct reservations). */
+static std::string reserved_handle_key(const char *handle) {
+    std::string key(handle ? handle : "");
+    for (char &c : key)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    return key;
+}
+
+wf_status
+metalbear_account_registry_reserve_handle(metalbear_account_registry *registry,
+                                          const char *handle, int ttl_seconds,
+                                          bool *out_reserved) {
+    if (out_reserved) *out_reserved = false;
+    if (!registry || !registry->db || !handle || !*handle)
+        return WF_ERR_INTERNAL;
+    const std::string key = reserved_handle_key(handle);
+    /* Let SQLite do the UTC arithmetic: every other timestamp in this store
+     * uses the same `strftime` shape, and a negative TTL writes a row that is
+     * already expired (used by the offline tests to cover expiry). Building
+     * the modifier in C keeps negative TTLs valid ("-1 seconds", not the
+     * "+-1 seconds" a hard-coded '+' would produce). */
+    char modifier[32];
+    std::snprintf(modifier, sizeof(modifier), "%+d seconds", ttl_seconds);
+    pthread_mutex_lock(&registry->mutex);
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(
+            registry->db.get(),
+            "INSERT INTO reserved_handle (handle, created_at, expires_at) "
+            "VALUES (?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), "
+            "strftime('%Y-%m-%dT%H:%M:%fZ','now', ?)) "
+            "ON CONFLICT(handle) DO UPDATE SET created_at = "
+            "excluded.created_at, expires_at = excluded.expires_at;",
+            -1, &stmt, NULL) != SQLITE_OK) {
+        pthread_mutex_unlock(&registry->mutex);
+        return WF_ERR_INTERNAL;
+    }
+    bool ok = sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT) ==
+                  SQLITE_OK &&
+              sqlite3_bind_text(stmt, 2, modifier, -1, SQLITE_TRANSIENT) ==
+                  SQLITE_OK &&
+              sqlite3_step(stmt) == SQLITE_DONE;
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&registry->mutex);
+    if (!ok) return WF_ERR_INTERNAL;
+    if (out_reserved) *out_reserved = ttl_seconds >= 0;
+    return WF_OK;
+}
+
+wf_status metalbear_account_registry_is_handle_reserved(
+    metalbear_account_registry *registry, const char *handle,
+    bool *out_reserved) {
+    if (out_reserved) *out_reserved = false;
+    if (!registry || !registry->db || !handle || !*handle)
+        return WF_ERR_INTERNAL;
+    const std::string key = reserved_handle_key(handle);
+    pthread_mutex_lock(&registry->mutex);
+    /* Prune expired rows lazily: no timer thread, and every availability
+     * check refreshes the table. */
+    sqlite3_stmt *prune = NULL;
+    if (sqlite3_prepare_v2(registry->db.get(),
+                           "DELETE FROM reserved_handle WHERE expires_at <= "
+                           "strftime('%Y-%m-%dT%H:%M:%fZ', 'now');",
+                           -1, &prune, NULL) != SQLITE_OK) {
+        pthread_mutex_unlock(&registry->mutex);
+        return WF_ERR_INTERNAL;
+    }
+    bool pruned = sqlite3_step(prune) == SQLITE_DONE;
+    sqlite3_finalize(prune);
+    if (!pruned) {
+        pthread_mutex_unlock(&registry->mutex);
+        return WF_ERR_INTERNAL;
+    }
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(registry->db.get(),
+                           "SELECT 1 FROM reserved_handle WHERE handle = ?;",
+                           -1, &stmt, NULL) != SQLITE_OK) {
+        pthread_mutex_unlock(&registry->mutex);
+        return WF_ERR_INTERNAL;
+    }
+    bool ok = sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT) ==
+              SQLITE_OK;
+    if (ok) {
+        int rc = sqlite3_step(stmt);
+        ok = rc == SQLITE_DONE || rc == SQLITE_ROW;
+        if (out_reserved && rc == SQLITE_ROW) *out_reserved = true;
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&registry->mutex);
+    return ok ? WF_OK : WF_ERR_INTERNAL;
 }
 
 wf_status metalbear_account_registry_add(metalbear_account_registry *registry,

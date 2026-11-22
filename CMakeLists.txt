@@ -744,6 +744,16 @@ if(METALBEAR_BUILD_TESTS)
   add_test(NAME metalbear_reserved_handles
            COMMAND test_metalbear_reserved_handles)
 
+  add_executable(test_metalbear_handle_availability
+                 test/test_handle_availability.c)
+  target_link_libraries(test_metalbear_handle_availability
+                        PRIVATE metalbear_core)
+  target_include_directories(
+    test_metalbear_handle_availability PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
+                                               "${METALBEAR_WOLFRAM_ROOT}/test")
+  add_test(NAME metalbear_handle_availability
+           COMMAND test_metalbear_handle_availability)
+
   add_executable(test_metalbear_schema_version test/test_schema_version.c)
   target_link_libraries(test_metalbear_schema_version
                         PRIVATE metalbear_core SQLite3::SQLite3)

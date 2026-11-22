@@ -7,6 +7,14 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- `com.atproto.temp.checkHandleAvailability` answers signup clients with the lexicon's tagged available/unavailable result, including suggestions; the admin-only `com.atproto.temp.addReservedHandle` holds a handle for 24 hours. Dynamic reservations are enforced at signup, `com.atproto.identity.updateHandle` and the admin handle override. ([#155](https://github.com/ewanc26/metalbear/issues/155))
+
+### Changed
+
+- Account databases gain a `reserved_handle` table and use schema version 3. Expired reservations are pruned when availability is next checked, so no timer is needed. ([#155](https://github.com/ewanc26/metalbear/issues/155))
+
 ### Fixed
 
 - `metalbear-update.sh apply` now sizes the data snapshot on macOS as well as Linux: the old `xargs -a` flag is GNU-only, and the replacement also handles SQLite filenames containing spaces. ([#197](https://github.com/ewanc26/metalbear/issues/197))

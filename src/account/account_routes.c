@@ -295,9 +295,9 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     /* Reference ensureHandleServiceConstraints (handle/index.ts): a
-     * reserved service label is a HandleNotAvailable, not InvalidHandle. */
-    if (metalbear_handle_is_reserved(handle->valuestring,
-                                     server->user_domain)) {
+     * reserved service label is a HandleNotAvailable, not InvalidHandle.
+     * Dynamic reservations from addReservedHandle share that answer. */
+    if (handle_is_reserved_now(server, handle->valuestring)) {
         wf_xrpc_response_set_error(response, 400, "HandleNotAvailable",
                                    "Reserved handle");
         return WF_OK;
@@ -1274,6 +1274,138 @@ wf_status check_signup_queue(void *ctx, const wf_xrpc_request *request,
         cJSON_Delete(root);
         return WF_ERR_ALLOC;
     }
+    return set_json(response, root);
+}
+
+/* ---- com.atproto.temp.checkHandleAvailability / addReservedHandle -------
+ * Temporary signup helpers. The query answers with the lexicon's result
+ * union; the procedure stores a fixed-TTL reservation in the account store
+ * so a client can hold a handle while it walks account creation. */
+
+/* Minimal RFC 5322-ish address check, matching the deliberately shallow
+ * format:email validation in the lexicon. */
+static bool is_valid_email(const char *email) {
+    if (!email || !*email) return false;
+    const char *at = strchr(email, '@');
+    if (!at || at == email || at[1] == '\0') return false;
+    if (strchr(at + 1, '@') != NULL) return false;
+    const char *dot = strrchr(at + 1, '.');
+    return dot && dot != at + 1 && dot[1] != '\0';
+}
+
+/* Build the reference's random_digits suggestions: the requested label with
+ * a short numeric suffix, under this server's user domain. */
+static void add_unavailable_suggestions(cJSON *result, metalbear_server *server,
+                                        const char *handle) {
+    cJSON *suggestions = cJSON_CreateArray();
+    if (!suggestions) return;
+    const char *domain =
+        server && server->user_domain ? server->user_domain : "";
+    char label[32] = {0};
+    if (handle && *handle) {
+        const char *dot = strchr(handle, '.');
+        size_t label_length = dot ? (size_t)(dot - handle) : strlen(handle);
+        if (label_length > sizeof(label) - 8) label_length = sizeof(label) - 8;
+        memcpy(label, handle, label_length);
+    }
+    char candidate[256];
+    for (unsigned int suffix = 1; suffix <= 5; ++suffix) {
+        int written = snprintf(candidate, sizeof(candidate), "%s%u%s", label,
+                               suffix, domain);
+        if (written < 0 || (size_t)written >= sizeof(candidate)) break;
+        cJSON *entry = cJSON_CreateObject();
+        if (!entry) break;
+        cJSON_AddStringToObject(entry, "handle", candidate);
+        cJSON_AddStringToObject(entry, "method", "random_digits");
+        cJSON_AddItemToArray(suggestions, entry);
+    }
+    cJSON_AddItemToObject(result, "suggestions", suggestions);
+}
+
+wf_status check_handle_availability(void *ctx, const wf_xrpc_request *request,
+                                    wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *handle_item =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "handle")
+            : NULL;
+    if (!cJSON_IsString(handle_item) || !handle_item->valuestring[0]) {
+        wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                   "handle is required");
+        return WF_OK;
+    }
+    const char *handle = handle_item->valuestring;
+
+    cJSON *email =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "email")
+            : NULL;
+    if (email && !cJSON_IsNull(email)) {
+        if (!cJSON_IsString(email) || !is_valid_email(email->valuestring)) {
+            wf_xrpc_response_set_error(response, 400, "InvalidEmail",
+                                       "email is not a valid address");
+            return WF_OK;
+        }
+    }
+    cJSON *birth_date =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "birthDate")
+            : NULL;
+    if (birth_date && !cJSON_IsNull(birth_date)) {
+        if (!cJSON_IsString(birth_date) ||
+            !wf_syntax_datetime_is_valid(birth_date->valuestring)) {
+            wf_xrpc_response_set_error(response, 400, "InvalidRequest",
+                                       "birthDate is not a valid date-time");
+            return WF_OK;
+        }
+    }
+
+    bool available = handle_is_available_for_signup(server, handle, NULL);
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return WF_ERR_ALLOC;
+    cJSON_AddStringToObject(root, "handle", handle);
+    cJSON *result = cJSON_CreateObject();
+    if (!result) {
+        cJSON_Delete(root);
+        return WF_ERR_ALLOC;
+    }
+    if (available) {
+        cJSON_AddStringToObject(
+            result, "$type",
+            "com.atproto.temp.checkHandleAvailability#resultAvailable");
+    } else {
+        cJSON_AddStringToObject(
+            result, "$type",
+            "com.atproto.temp.checkHandleAvailability#resultUnavailable");
+        add_unavailable_suggestions(result, server, handle);
+    }
+    cJSON_AddItemToObject(root, "result", result);
+    return set_json(response, root);
+}
+
+wf_status add_reserved_handle(void *ctx, const wf_xrpc_request *request,
+                              wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    cJSON *handle_item =
+        request->params
+            ? cJSON_GetObjectItemCaseSensitive(request->params, "handle")
+            : NULL;
+    if (!cJSON_IsString(handle_item) || !handle_item->valuestring[0] ||
+        !handle_syntax_and_domain_valid(server, handle_item->valuestring)) {
+        wf_xrpc_response_set_error(
+            response, 400, "InvalidRequest",
+            "handle is required and must be a valid signup handle");
+        return WF_OK;
+    }
+    if (!server->registry ||
+        metalbear_account_registry_reserve_handle(
+            server->registry, handle_item->valuestring,
+            METALBEAR_RESERVED_HANDLE_TTL_SECONDS, NULL) != WF_OK) {
+        wf_xrpc_response_set_error(response, 500, "InternalServerError",
+                                   "could not reserve handle");
+        return WF_OK;
+    }
+    cJSON *root = cJSON_CreateObject();
     return set_json(response, root);
 }
 
