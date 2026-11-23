@@ -33,6 +33,7 @@
 #include "metalbear/server.h"
 #include "metalbear/server_drain.h"
 #include "metalbear/log.h"
+#include "metalbear/notify.h"
 #include "metalbear/ops/metrics.h"
 #include "metalbear/account/account.h"
 #include "metalbear/account/account_registry.h"
@@ -1017,6 +1018,15 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         LOG_ERROR("cannot initialise notification channels");
         goto fail;
     }
+    /* The same operator name and logo the browser sees sign transactional
+     * mail too (issue #260). Unset fields leave both body and webhook payload
+     * exactly as they were. */
+    if (metalbear_notifier_set_branding(server->notifier,
+                                        server->branding_service_name,
+                                        server->branding_logo_url) != WF_OK) {
+        LOG_ERROR("cannot apply operator branding to notifications");
+        goto fail;
+    }
 #ifdef METALBEAR_MODULE_EMAIL
     if (server->email) {
         metalbear_notify_channel channel;
@@ -1098,6 +1108,17 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     COPY_OPT(instance_description);
     COPY_OPT(privacy_policy_url);
     COPY_OPT(terms_of_service_url);
+    COPY_OPT(branding_service_name);
+    COPY_OPT(branding_logo_url);
+    COPY_OPT(branding_primary_color);
+    COPY_OPT(branding_primary_hover_color);
+    COPY_OPT(branding_error_color);
+    COPY_OPT(branding_warning_color);
+    COPY_OPT(branding_info_color);
+    COPY_OPT(branding_success_color);
+    COPY_OPT(branding_background_light_url);
+    COPY_OPT(branding_background_dark_url);
+    COPY_OPT(branding_home_url);
 #undef COPY_OPT
     server->development = config->development;
     server->public_status = config->public_status;
@@ -1290,6 +1311,17 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->data_directory);
     free(server->account_email);
     free(server->operator_email);
+    free(server->branding_service_name);
+    free(server->branding_logo_url);
+    free(server->branding_primary_color);
+    free(server->branding_primary_hover_color);
+    free(server->branding_error_color);
+    free(server->branding_warning_color);
+    free(server->branding_info_color);
+    free(server->branding_success_color);
+    free(server->branding_background_light_url);
+    free(server->branding_background_dark_url);
+    free(server->branding_home_url);
     free(server->frontend_dir);
     free(server->admin_password);
     free(server->crawlers);

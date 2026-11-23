@@ -56,6 +56,15 @@ typedef struct metalbear_notifier metalbear_notifier;
 wf_status metalbear_notifier_new(metalbear_notifier **out);
 void metalbear_notifier_free(metalbear_notifier *notifier);
 
+/*
+ * Attach operator branding to the notification bodies (issue #260). Both may
+ * be NULL; with neither set, the built-in message bodies are byte-for-byte
+ * what they were before branding existed. Values are copied.
+ */
+wf_status metalbear_notifier_set_branding(metalbear_notifier *notifier,
+                                          const char *service_name,
+                                          const char *logo_url);
+
 /* Adds a channel by value; the notifier owns the context through its free
  * callback. Returns false when the fixed channel table is full. */
 bool metalbear_notifier_add(metalbear_notifier *notifier,

@@ -612,6 +612,7 @@ For repairs that must touch a stopped instance's data directory,
 - Per-IP token-bucket rate limiting (100 requests/60 seconds default)
 - Configurable listen address and port
 - Optional notifications for account operations through a channel interface (email and a JSON webhook); see [docs/notifications.md](docs/notifications.md)
+- Optional operator branding for the web UI and transactional email, published to the static frontend at runtime through `/operator.json`; see [docs/branding.md](docs/branding.md)
 - A labeler for its own account takedowns, served from `com.atproto.label.queryLabels`; see [docs/labeler.md](docs/labeler.md) for what it does not do
 - Automatic firehose event retention
 - Dynamic landing page listing hosted accounts and version: at `/`, or at `/landing` when the built frontend is served at `/` (see [Frontend](#frontend))

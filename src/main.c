@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "metalbear/admission.h"
+#include "metalbear/branding.h"
 #include "metalbear/config_file.h"
 #include "metalbear/server.h"
 #include "metalbear/log.h"
@@ -233,6 +234,20 @@ int main(int argc, char **argv) {
     ENV_STR("METALBEAR_DESCRIPTION", instance_description);
     ENV_STR("METALBEAR_PRIVACY_POLICY", privacy_policy_url);
     ENV_STR("METALBEAR_TERMS_OF_SERVICE", terms_of_service_url);
+    ENV_STR("METALBEAR_BRANDING_SERVICE_NAME", branding_service_name);
+    ENV_STR("METALBEAR_BRANDING_LOGO_URL", branding_logo_url);
+    ENV_STR("METALBEAR_BRANDING_PRIMARY_COLOR", branding_primary_color);
+    ENV_STR("METALBEAR_BRANDING_PRIMARY_HOVER_COLOR",
+            branding_primary_hover_color);
+    ENV_STR("METALBEAR_BRANDING_ERROR_COLOR", branding_error_color);
+    ENV_STR("METALBEAR_BRANDING_WARNING_COLOR", branding_warning_color);
+    ENV_STR("METALBEAR_BRANDING_INFO_COLOR", branding_info_color);
+    ENV_STR("METALBEAR_BRANDING_SUCCESS_COLOR", branding_success_color);
+    ENV_STR("METALBEAR_BRANDING_BACKGROUND_LIGHT_URL",
+            branding_background_light_url);
+    ENV_STR("METALBEAR_BRANDING_BACKGROUND_DARK_URL",
+            branding_background_dark_url);
+    ENV_STR("METALBEAR_BRANDING_HOME_URL", branding_home_url);
     ENV_STR("METALBEAR_SMTP_HOST", smtp_host);
     ENV_STR("METALBEAR_SMTP_USERNAME", smtp_username);
     ENV_STR("METALBEAR_SMTP_PASSWORD", smtp_password);
@@ -309,6 +324,33 @@ int main(int argc, char **argv) {
                                                   err, sizeof(err))) {
             fprintf(stderr, "MetalBear [ERROR] %s\n", err);
             return 2;
+        }
+    }
+    /* Branding values reach a browser verbatim, so a config file may only use
+     * the small colour and URL grammars the frontend can render safely. */
+    {
+        const char *const colors[] = {
+            config.branding_primary_color, config.branding_primary_hover_color,
+            config.branding_error_color,   config.branding_warning_color,
+            config.branding_info_color,    config.branding_success_color};
+        for (size_t i = 0; i < sizeof(colors) / sizeof(colors[0]); i++) {
+            if (!metalbear_branding_color_valid(colors[i])) {
+                fprintf(stderr,
+                        "MetalBear [ERROR] branding colours must be #RGB or "
+                        "#RRGGBB\n");
+                return 2;
+            }
+        }
+        const char *const urls[] = {
+            config.branding_logo_url, config.branding_background_light_url,
+            config.branding_background_dark_url, config.branding_home_url};
+        for (size_t i = 0; i < sizeof(urls) / sizeof(urls[0]); i++) {
+            if (!metalbear_branding_url_valid(urls[i])) {
+                fprintf(stderr,
+                        "MetalBear [ERROR] branding URLs must be a / path or "
+                        "an http(s) URL\n");
+                return 2;
+            }
         }
     }
     {

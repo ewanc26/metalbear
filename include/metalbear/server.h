@@ -180,6 +180,31 @@ typedef struct metalbear_config {
     const char *instance_description;
     const char *privacy_policy_url;
     const char *terms_of_service_url;
+    /*
+     * Operator branding for the user-facing screens (issue #260). Every field
+     * is optional: empty means "use MetalBear's built-in default", so an
+     * operator who sets nothing sees exactly the appearance this server has
+     * always had. The values are published in /operator.json under `branding`
+     * with those defaults resolved, because the frontend is static and has to
+     * learn them at runtime. `on_primary_color` is derived from primary_color
+     * by the server so every client picks the same accessible text colour.
+     *
+     * home_url fills the footer's home link; the other footer links reuse the
+     * operator.* support/policy fields above. Colours must be #RGB or #RRGGBB
+     * and URLs must be relative or http(s); the loader refuses anything else
+     * so a config file cannot inject CSS into a page.
+     */
+    const char *branding_service_name;
+    const char *branding_logo_url;
+    const char *branding_primary_color;
+    const char *branding_primary_hover_color;
+    const char *branding_error_color;
+    const char *branding_warning_color;
+    const char *branding_info_color;
+    const char *branding_success_color;
+    const char *branding_background_light_url;
+    const char *branding_background_dark_url;
+    const char *branding_home_url;
     /* Marks a testing instance, so the landing page can say plainly that the
      * accounts on it are not people. */
     bool development;

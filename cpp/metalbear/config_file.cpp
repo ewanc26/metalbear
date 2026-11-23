@@ -178,6 +178,17 @@ static std::string unescape_basic(const std::string &v) {
     STR("operator.privacy_policy", privacy_policy_url)                         \
     STR("operator.terms_of_service", terms_of_service_url)                     \
     BOOL("operator.development", development)                                  \
+    STR("branding.service_name", branding_service_name)                        \
+    STR("branding.logo_url", branding_logo_url)                                \
+    STR("branding.primary_color", branding_primary_color)                      \
+    STR("branding.primary_hover_color", branding_primary_hover_color)          \
+    STR("branding.error_color", branding_error_color)                          \
+    STR("branding.warning_color", branding_warning_color)                      \
+    STR("branding.info_color", branding_info_color)                            \
+    STR("branding.success_color", branding_success_color)                      \
+    STR("branding.background_light_url", branding_background_light_url)        \
+    STR("branding.background_dark_url", branding_background_dark_url)          \
+    STR("branding.home_url", branding_home_url)                                \
                                                                                \
     STR("appview.url", appview_url)                                            \
     STR("appview.did", appview_did)                                            \

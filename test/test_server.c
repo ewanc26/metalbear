@@ -473,6 +473,20 @@ int main(void) {
         /* No account exists until one is created below: the server has no
          * configured account to be "the" account any more. */
         .invite_required = false,
+        /* Operator branding (issue #260) has to survive config -> server ->
+         * /operator.json -> browser. These values are deliberately distinct
+         * from the built-in defaults so a missing copy is visible. */
+        .branding_service_name = "Bear Hosting",
+        .branding_logo_url = "/logo-test.svg",
+        .branding_primary_color = "#123abc",
+        .branding_primary_hover_color = "#abc",
+        .branding_error_color = "#f00",
+        .branding_warning_color = "#ff0",
+        .branding_info_color = "#00f",
+        .branding_success_color = "#0f0",
+        .branding_background_light_url = "/light-test.webp",
+        .branding_background_dark_url = "/dark-test.webp",
+        .branding_home_url = "https://example.com",
         /* The rate limiter is not under test here; the suite issues more than
          * the 100-request default within the first window, which later starves
          * unrelated endpoints (resolveHandle) into 429s. */
@@ -826,6 +840,49 @@ int main(void) {
             cJSON_GetObjectItemCaseSensitive(software, "releaseStage");
         CHECK(cJSON_IsString(stage) &&
               strcmp(stage->valuestring, METALBEAR_RELEASE_STAGE) == 0);
+        /* Operator branding reaches the static frontend through this object,
+         * with the accessible on-primary text colour resolved server-side. */
+        cJSON *branding = cJSON_GetObjectItemCaseSensitive(op, "branding");
+        CHECK(cJSON_IsObject(branding));
+        if (branding) {
+            cJSON *name =
+                cJSON_GetObjectItemCaseSensitive(branding, "serviceName");
+            CHECK(cJSON_IsString(name) &&
+                  strcmp(name->valuestring, "Bear Hosting") == 0);
+            cJSON *logo = cJSON_GetObjectItemCaseSensitive(branding, "logoUrl");
+            CHECK(cJSON_IsString(logo) &&
+                  strcmp(logo->valuestring, "/logo-test.svg") == 0);
+            cJSON *colors =
+                cJSON_GetObjectItemCaseSensitive(branding, "colors");
+            CHECK(cJSON_IsObject(colors));
+            if (colors) {
+                cJSON *primary =
+                    cJSON_GetObjectItemCaseSensitive(colors, "primary");
+                CHECK(cJSON_IsString(primary) &&
+                      strcmp(primary->valuestring, "#123abc") == 0);
+                cJSON *on_primary =
+                    cJSON_GetObjectItemCaseSensitive(colors, "onPrimary");
+                CHECK(cJSON_IsString(on_primary) &&
+                      strcmp(on_primary->valuestring, "#ffffff") == 0);
+            }
+            cJSON *background =
+                cJSON_GetObjectItemCaseSensitive(branding, "background");
+            CHECK(cJSON_IsObject(background));
+            if (background) {
+                cJSON *light =
+                    cJSON_GetObjectItemCaseSensitive(background, "lightUrl");
+                CHECK(cJSON_IsString(light) &&
+                      strcmp(light->valuestring, "/light-test.webp") == 0);
+            }
+            cJSON *links = cJSON_GetObjectItemCaseSensitive(branding, "links");
+            CHECK(cJSON_IsObject(links));
+            if (links) {
+                cJSON *home =
+                    cJSON_GetObjectItemCaseSensitive(links, "homeUrl");
+                CHECK(cJSON_IsString(home) &&
+                      strcmp(home->valuestring, "https://example.com") == 0);
+            }
+        }
         cJSON *capabilities =
             cJSON_GetObjectItemCaseSensitive(op, "capabilities");
         CHECK(cJSON_IsObject(capabilities));

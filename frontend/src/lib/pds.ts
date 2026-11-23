@@ -46,7 +46,31 @@ export interface RepoInfo {
 
 export type RegistrationMode = 'open' | 'invite' | 'closed';
 
+/** Operator branding published by /operator.json (issue #260). Colours are
+ * already validated and default-resolved by the server. */
+export interface Branding {
+	serviceName: string;
+	logoUrl: string;
+	colors: {
+		primary: string;
+		primaryHover: string;
+		onPrimary: string;
+		error: string;
+		warning: string;
+		info: string;
+		success: string;
+	};
+	background: { lightUrl: string; darkUrl: string };
+	links: {
+		homeUrl: string;
+		supportUrl?: string;
+		privacyPolicy?: string;
+		termsOfService?: string;
+	};
+}
+
 export interface OperatorInfo {
+	branding?: Branding;
 	operator?: { name?: string; email?: string; url?: string; supportUrl?: string };
 	software?: {
 		name?: string;

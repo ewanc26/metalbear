@@ -51,6 +51,24 @@ description = "A personal AT Protocol server."
 # mistakes the accounts on it for people.
 development = false
 
+# Optional operator branding for the landing, login, consent, account and admin
+# screens, and for transactional emails. Every value is optional: leaving them
+# out keeps the built-in MetalBear look exactly. Published to the browser via
+# /operator.json. Colours must be #RGB or #RRGGBB; URLs must be /-relative or
+# http(s), with no quotes, spaces or parentheses. See docs/branding.md.
+[branding]
+# service_name = "Your PDS"
+# logo_url = "/logo.svg"
+# primary_color = "#059669"
+# primary_hover_color = "#10b981"
+# error_color = "#ef4444"
+# warning_color = "#f59e0b"
+# info_color = "#3b82f6"
+# success_color = "#10b981"
+# background_light_url = "/background-light.webp"
+# background_dark_url = "/background-dark.webp"
+# home_url = "/"
+
 [identity]
 plc_url = "https://plc.directory"
 
