@@ -5,6 +5,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -103,6 +104,31 @@ bool metalbear_account_invites_enabled(metalbear_account_store *store);
 /* Set whether the account may receive new invite codes. */
 wf_status metalbear_account_set_invites_enabled(metalbear_account_store *store,
                                                 bool enabled);
+/*
+ * Per-account storage quotas and current usage, both in bytes. A quota of 0
+ * means unlimited (the default). `blob` selects blob bytes; false selects
+ * durable repo block bytes. reserve_bytes atomically checks that adding
+ * `amount` stays within the quota (and does not overflow) before recording
+ * it, returning WF_ERR_RATE_LIMIT when it would not. release_bytes clamps at
+ * zero. set_usage is for reconciliation after GC and for initialising a store
+ * that predates the usage columns. All of these serialise on the account
+ * store's own mutex, so callers need no extra lock.
+ */
+wf_status metalbear_account_get_quotas(metalbear_account_store *store,
+                                       uint64_t *out_repo_bytes,
+                                       uint64_t *out_blob_bytes);
+wf_status metalbear_account_set_quotas(metalbear_account_store *store,
+                                       uint64_t repo_bytes,
+                                       uint64_t blob_bytes);
+wf_status metalbear_account_get_usage(metalbear_account_store *store,
+                                      uint64_t *out_repo_bytes,
+                                      uint64_t *out_blob_bytes);
+wf_status metalbear_account_set_usage(metalbear_account_store *store, bool blob,
+                                      uint64_t used);
+wf_status metalbear_account_reserve_bytes(metalbear_account_store *store,
+                                          bool blob, uint64_t amount);
+wf_status metalbear_account_release_bytes(metalbear_account_store *store,
+                                          bool blob, uint64_t amount);
 /* Hash a password with scrypt for storage. Caller must free the result. */
 char *metalbear_account_hash_password(const char *password);
 

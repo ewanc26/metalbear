@@ -26,6 +26,9 @@ struct metalbear_account_cache {
     char *data_directory;
     /* Borrowed: the PDS-wide event log every cached account publishes into. */
     metalbear_sequencer *sequencer;
+    /* Operator defaults applied when a context is first opened. */
+    uint64_t repo_quota_bytes;
+    uint64_t blob_quota_bytes;
     pthread_mutex_t lock;
     struct cache_entry {
         char *did;
@@ -73,6 +76,14 @@ metalbear_account_cache_new(const char *service_did, const char *public_url,
 void metalbear_account_cache_set_sequencer(metalbear_account_cache *cache,
                                            metalbear_sequencer *sequencer) {
     if (cache) cache->sequencer = sequencer;
+}
+
+void metalbear_account_cache_set_quota_defaults(metalbear_account_cache *cache,
+                                                uint64_t repo_bytes,
+                                                uint64_t blob_bytes) {
+    if (!cache) return;
+    cache->repo_quota_bytes = repo_bytes;
+    cache->blob_quota_bytes = blob_bytes;
 }
 
 void metalbear_account_cache_set_max_resident(metalbear_account_cache *cache,
@@ -193,6 +204,8 @@ metalbear_account_cache_get(metalbear_account_cache *cache,
         entry->data_directory, NULL, NULL, cache->sequencer, &ctx);
     metalbear_account_entry_free(entry);
     if (status != WF_OK || !ctx) return NULL;
+    (void)metalbear_account_context_apply_quota_defaults(
+        ctx, cache->repo_quota_bytes, cache->blob_quota_bytes);
 
     pthread_mutex_lock(&cache->lock);
     /* Re-check after re-acquiring the lock in case another thread won. */

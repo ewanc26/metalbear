@@ -53,6 +53,8 @@ struct metalbear_repo_store {
     char *rev_override;
     metalbear_repo_store_event_cb event_cb;
     void *event_ctx;
+    /* Borrowed account store used for per-account byte quotas (issue #152). */
+    metalbear_account_store *quota_account;
     pthread_mutex_t mutex; /* guards db, car, head, persisted_blocks */
 };
 

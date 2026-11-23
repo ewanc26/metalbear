@@ -56,6 +56,7 @@ extern "C" {
 #endif
 
 typedef struct metalbear_blob_store metalbear_blob_store;
+typedef struct metalbear_account_store metalbear_account_store;
 
 /**
  * Create a blob store.
@@ -68,6 +69,16 @@ metalbear_blob_store *metalbear_blob_store_new(const char *path);
 /** Free the store. File-backed blobs are left on disk (caller removes `path`).
  */
 void metalbear_blob_store_free(metalbear_blob_store *store);
+
+/*
+ * Attach the account store that owns this blob store's byte quota (borrowed;
+ * the account context owns it and must outlive the blob store). Setting it
+ * initialises usage from the blobs already on disk, so an upgraded host cannot
+ * fill its quota twice. NULL disables quota enforcement. Puts return
+ * WF_ERR_RATE_LIMIT when the new bytes would exceed the account's quota.
+ */
+void metalbear_blob_store_set_quota_account(metalbear_blob_store *store,
+                                            metalbear_account_store *account);
 
 /**
  * Enable at-rest encryption of the file-backed blob payloads.

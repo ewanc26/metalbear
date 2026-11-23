@@ -111,6 +111,12 @@ rate_limit_window_seconds = 60
 # disk-exhaustion lever; the reference uses 5 MB.
 blob_upload_bytes = 5242880
 
+# Per-account storage quotas in bytes. 0 (the default) means unlimited; an
+# account with an explicit quota set through the account store keeps it.
+# These are enforced on repo commits and blob uploads.
+repo_bytes = 0
+blob_bytes = 0
+
 [firehose]
 # Relays told about new data via requestCrawl on write. Without any, a quiet
 # host is never crawled and never federates.

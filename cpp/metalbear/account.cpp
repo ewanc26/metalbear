@@ -3,6 +3,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <cstdint>
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
@@ -84,7 +85,11 @@ wf_status metalbear_account_store_open(const char *path,
         "email TEXT,email_confirmed INTEGER NOT NULL DEFAULT 0,"
         "deactivated_at TEXT,delete_after TEXT,"
         "invites_enabled INTEGER NOT NULL DEFAULT 1,"
-        "signing_key_didkey TEXT);"
+        "signing_key_didkey TEXT,"
+        "repo_bytes_quota INTEGER NOT NULL DEFAULT 0,"
+        "blob_bytes_quota INTEGER NOT NULL DEFAULT 0,"
+        "repo_bytes_used INTEGER NOT NULL DEFAULT 0,"
+        "blob_bytes_used INTEGER NOT NULL DEFAULT 0);"
         "INSERT OR IGNORE INTO account_state(id,active) VALUES(0,1);"
         "CREATE TABLE IF NOT EXISTS credentials("
         "id INTEGER PRIMARY KEY CHECK(id=0),salt BLOB NOT NULL,"
@@ -157,6 +162,29 @@ wf_status metalbear_account_store_open(const char *path,
         return WF_ERR_INTERNAL;
     }
     if (err) sqlite3_free(err);
+    /* Per-account byte quotas and usage (issue #152). An older binary can
+     * still open the file, but without these columns it cannot account for
+     * what it writes, so the migration runs before either store starts. */
+    const char *quota_columns[] = {
+        "ALTER TABLE account_state ADD COLUMN repo_bytes_quota INTEGER NOT "
+        "NULL DEFAULT 0;",
+        "ALTER TABLE account_state ADD COLUMN blob_bytes_quota INTEGER NOT "
+        "NULL DEFAULT 0;",
+        "ALTER TABLE account_state ADD COLUMN repo_bytes_used INTEGER NOT "
+        "NULL DEFAULT 0;",
+        "ALTER TABLE account_state ADD COLUMN blob_bytes_used INTEGER NOT "
+        "NULL DEFAULT 0;",
+    };
+    for (const char *migration : quota_columns) {
+        err = nullptr;
+        sqlite3_exec(store->db.get(), migration, nullptr, nullptr, &err);
+        if (err && !std::strstr(err, "duplicate column name")) {
+            sqlite3_free(err);
+            metalbear_account_store_free(store);
+            return WF_ERR_INTERNAL;
+        }
+        if (err) sqlite3_free(err);
+    }
     sqlite3_stmt *stmt = nullptr;
     int has_credentials = 0;
     if (sqlite3_prepare_v2(store->db.get(),
@@ -836,6 +864,140 @@ wf_status metalbear_account_set_invites_enabled(metalbear_account_store *store,
         if (sqlite3_step(stmt) == SQLITE_DONE) status = WF_OK;
     }
     sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+/* Read one integer column from the single account_state row. Caller holds
+ * store->mutex. Missing row or negative stored value is a corrupt account
+ * file, not a quota of zero. */
+static wf_status account_bytes_read_locked(metalbear_account_store *store,
+                                           const char *column, uint64_t *out) {
+    sqlite3_stmt *stmt = nullptr;
+    char sql[160];
+    std::snprintf(sql, sizeof(sql), "SELECT %s FROM account_state WHERE id=0;",
+                  column);
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db.get(), sql, -1, &stmt, nullptr) ==
+            SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW) {
+        sqlite3_int64 value = sqlite3_column_int64(stmt, 0);
+        if (value >= 0) {
+            *out = static_cast<uint64_t>(value);
+            status = WF_OK;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return status;
+}
+
+static wf_status account_bytes_write_locked(metalbear_account_store *store,
+                                            const char *column,
+                                            uint64_t value) {
+    if (value > static_cast<uint64_t>(INT64_MAX)) return WF_ERR_RATE_LIMIT;
+    sqlite3_stmt *stmt = nullptr;
+    char sql[160];
+    std::snprintf(sql, sizeof(sql), "UPDATE account_state SET %s=? WHERE id=0;",
+                  column);
+    wf_status status = WF_ERR_INTERNAL;
+    if (sqlite3_prepare_v2(store->db.get(), sql, -1, &stmt, nullptr) ==
+        SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(value));
+        if (sqlite3_step(stmt) == SQLITE_DONE) status = WF_OK;
+    }
+    sqlite3_finalize(stmt);
+    return status;
+}
+
+wf_status metalbear_account_get_quotas(metalbear_account_store *store,
+                                       uint64_t *out_repo_bytes,
+                                       uint64_t *out_blob_bytes) {
+    if (!store || !out_repo_bytes || !out_blob_bytes) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    wf_status status =
+        account_bytes_read_locked(store, "repo_bytes_quota", out_repo_bytes);
+    if (status == WF_OK)
+        status = account_bytes_read_locked(store, "blob_bytes_quota",
+                                           out_blob_bytes);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status metalbear_account_set_quotas(metalbear_account_store *store,
+                                       uint64_t repo_bytes,
+                                       uint64_t blob_bytes) {
+    if (!store) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    wf_status status =
+        account_bytes_write_locked(store, "repo_bytes_quota", repo_bytes);
+    if (status == WF_OK)
+        status =
+            account_bytes_write_locked(store, "blob_bytes_quota", blob_bytes);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status metalbear_account_get_usage(metalbear_account_store *store,
+                                      uint64_t *out_repo_bytes,
+                                      uint64_t *out_blob_bytes) {
+    if (!store || !out_repo_bytes || !out_blob_bytes) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    wf_status status =
+        account_bytes_read_locked(store, "repo_bytes_used", out_repo_bytes);
+    if (status == WF_OK)
+        status =
+            account_bytes_read_locked(store, "blob_bytes_used", out_blob_bytes);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status metalbear_account_set_usage(metalbear_account_store *store, bool blob,
+                                      uint64_t used) {
+    if (!store) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    wf_status status = account_bytes_write_locked(
+        store, blob ? "blob_bytes_used" : "repo_bytes_used", used);
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status metalbear_account_reserve_bytes(metalbear_account_store *store,
+                                          bool blob, uint64_t amount) {
+    if (!store) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    uint64_t used = 0, quota = 0;
+    wf_status status = account_bytes_read_locked(
+        store, blob ? "blob_bytes_used" : "repo_bytes_used", &used);
+    if (status == WF_OK)
+        status = account_bytes_read_locked(
+            store, blob ? "blob_bytes_quota" : "repo_bytes_quota", &quota);
+    if (status == WF_OK) {
+        if (!amount) {
+            status = WF_OK;
+        } else if (amount > UINT64_MAX - used ||
+                   (quota && (used >= quota || amount > quota - used))) {
+            status = WF_ERR_RATE_LIMIT;
+        } else {
+            status = account_bytes_write_locked(
+                store, blob ? "blob_bytes_used" : "repo_bytes_used",
+                used + amount);
+        }
+    }
+    pthread_mutex_unlock(&store->mutex);
+    return status;
+}
+
+wf_status metalbear_account_release_bytes(metalbear_account_store *store,
+                                          bool blob, uint64_t amount) {
+    if (!store) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    uint64_t used = 0;
+    wf_status status = account_bytes_read_locked(
+        store, blob ? "blob_bytes_used" : "repo_bytes_used", &used);
+    if (status == WF_OK)
+        status = account_bytes_write_locked(
+            store, blob ? "blob_bytes_used" : "repo_bytes_used",
+            amount >= used ? 0 : used - amount);
     pthread_mutex_unlock(&store->mutex);
     return status;
 }

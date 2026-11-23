@@ -144,6 +144,8 @@ static std::string unescape_basic(const std::string &v) {
     INT("limits.rate_limit", rate_limit)                                       \
     INT("limits.rate_limit_window_seconds", rate_limit_window)                 \
     INT("limits.blob_upload_bytes", blob_upload_limit)                         \
+    NONNEG("limits.repo_bytes", repo_byte_quota)                               \
+    NONNEG("limits.blob_bytes", blob_byte_quota)                               \
     INT("limits.max_import_bytes", max_import_size)                            \
                                                                                \
     BOOL("repo.accepting_imports", accepting_imports)                          \

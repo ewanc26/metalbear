@@ -100,6 +100,11 @@ wf_status metalbear_account_context_open_shared(
     if (metalbear_account_store_open(account_path, password ? password : "",
                                      &ctx->account) != WF_OK)
         goto cleanup;
+    /* One account, one usage record: both durable stores account their bytes
+     * against the same store this context owns. The setters seed usage from
+     * what is already on disk before any further write can happen. */
+    metalbear_repo_store_set_quota_account(ctx->repo, ctx->account);
+    metalbear_blob_store_set_quota_account(ctx->blobs, ctx->account);
     if (sequencer) {
         ctx->sequencer = sequencer; /* borrowed: the PDS-wide log */
         ctx->owns_sequencer = false;
@@ -152,6 +157,18 @@ cleanup:
 #endif
     if (status != WF_OK) metalbear_account_context_close(ctx);
     return status;
+}
+
+wf_status metalbear_account_context_apply_quota_defaults(
+    metalbear_account_context *ctx, uint64_t repo_bytes, uint64_t blob_bytes) {
+    if (!ctx || !ctx->account) return WF_ERR_INVALID_ARG;
+    uint64_t repo = 0, blob = 0;
+    wf_status st = metalbear_account_get_quotas(ctx->account, &repo, &blob);
+    if (st != WF_OK) return st;
+    if (repo_bytes && !repo) repo = repo_bytes;
+    if (blob_bytes && !blob) blob = blob_bytes;
+    if (!repo && !blob) return WF_OK;
+    return metalbear_account_set_quotas(ctx->account, repo, blob);
 }
 
 void metalbear_account_context_close(metalbear_account_context *ctx) {

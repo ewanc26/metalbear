@@ -353,6 +353,8 @@ invite_required = ${INVITE_REQUIRED}
 rate_limit                = 3000
 rate_limit_window_seconds = 60
 blob_upload_bytes         = 5242880
+repo_bytes                = 0
+blob_bytes                = 0
 
 ${FIREHOSE_TOML}
 

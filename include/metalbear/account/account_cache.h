@@ -43,6 +43,15 @@ void metalbear_account_cache_set_sequencer(metalbear_account_cache *cache,
                                            metalbear_sequencer *sequencer);
 
 /*
+ * Default per-account storage quotas applied to every context this cache
+ * opens (0 = unlimited). Call before the first get; each context's own
+ * persisted quota wins when already set.
+ */
+void metalbear_account_cache_set_quota_defaults(metalbear_account_cache *cache,
+                                                uint64_t repo_bytes,
+                                                uint64_t blob_bytes);
+
+/*
  * Configure the resident budget: the maximum number of idle (fully released)
  * account contexts the cache will keep open at once. When the idle count
  * exceeds `max_resident`, the least-recently-used idle contexts are closed

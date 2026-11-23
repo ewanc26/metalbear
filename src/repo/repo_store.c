@@ -20,6 +20,7 @@
 #include "metalbear/schema_version.h"
 #include "repo_store_internal.h"
 
+#include "metalbear/account/account.h"
 #include "metalbear/repo/blob_store.h"
 
 #include "wolfram/repo/cbor.h"
@@ -1066,6 +1067,135 @@ wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store,
     return WF_OK;
 }
 
+/* ------------------------------------------------------------------ */
+/* Per-account byte quotas (issue #152)                                */
+/* ------------------------------------------------------------------ */
+
+/* Deep-copy the in-memory CAR so a write can be rehearsed without touching
+ * the store. A failed rehearsal must leave no block behind: the real commit
+ * only starts once the quota check has passed. */
+static wf_status clone_car(const wf_car *src, wf_car *out) {
+    memset(out, 0, sizeof(*out));
+    if (src->root_count) {
+        out->roots = calloc(src->root_count, sizeof(*out->roots));
+        if (!out->roots) return WF_ERR_ALLOC;
+        memcpy(out->roots, src->roots, src->root_count * sizeof(*out->roots));
+        out->root_count = src->root_count;
+    }
+    if (src->block_count) {
+        out->blocks = calloc(src->block_count, sizeof(*out->blocks));
+        if (!out->blocks) {
+            wf_car_free(out);
+            return WF_ERR_ALLOC;
+        }
+        out->block_count = src->block_count;
+        for (size_t i = 0; i < src->block_count; i++) {
+            const wf_car_block *b = &src->blocks[i];
+            out->blocks[i].cid = b->cid;
+            out->blocks[i].data_len = b->data_len;
+            if (b->data_len) {
+                out->blocks[i].data = malloc(b->data_len);
+                if (!out->blocks[i].data) {
+                    wf_car_free(out);
+                    return WF_ERR_ALLOC;
+                }
+                memcpy(out->blocks[i].data, b->data, b->data_len);
+            }
+        }
+    }
+    return WF_OK;
+}
+
+/* Durable repo bytes are SUM(length(data)) over the blocks table. Deletes do
+ * not reclaim bytes until GC, so any block the rehearsal adds that is not
+ * already in the live CAR is a real increase in durable usage. */
+static wf_status quota_delta_locked(metalbear_repo_store *s,
+                                    const wf_car *trial, uint64_t *out) {
+    uint64_t delta = 0;
+    for (size_t i = 0; i < trial->block_count; i++) {
+        if (wf_car_find_block(&s->car, &trial->blocks[i].cid)) continue;
+        if (trial->blocks[i].data_len > UINT64_MAX - delta)
+            return WF_ERR_RATE_LIMIT;
+        delta += trial->blocks[i].data_len;
+    }
+    *out = delta;
+    return WF_OK;
+}
+
+typedef wf_status (*repo_mutate_fn)(wf_car *car, void *ctx, wf_cid *out_commit);
+
+static wf_status quota_preflight_locked(metalbear_repo_store *s,
+                                        repo_mutate_fn mutate, void *ctx,
+                                        uint64_t *out_reserved) {
+    *out_reserved = 0;
+    if (!s->quota_account) return WF_OK;
+
+    wf_car trial;
+    wf_status st = clone_car(&s->car, &trial);
+    if (st != WF_OK) return st;
+    wf_cid trial_commit = {{0}, 0};
+    st = mutate(&trial, ctx, &trial_commit);
+    uint64_t delta = 0;
+    if (st == WF_OK) st = quota_delta_locked(s, &trial, &delta);
+    wf_car_free(&trial);
+    if (st != WF_OK) return st;
+    if (!delta) return WF_OK;
+
+    st = metalbear_account_reserve_bytes(s->quota_account, false, delta);
+    if (st != WF_OK) return st;
+    *out_reserved = delta;
+    return WF_OK;
+}
+
+static void quota_release(metalbear_repo_store *s, uint64_t reserved) {
+    if (s->quota_account && reserved)
+        (void)metalbear_account_release_bytes(s->quota_account, false,
+                                              reserved);
+}
+
+static wf_status quota_commit_persist(metalbear_repo_store *s,
+                                      const wf_cid *new_head,
+                                      uint64_t reserved) {
+    wf_status st = commit_persist(s, new_head);
+    if (st != WF_OK) quota_release(s, reserved);
+    return st;
+}
+
+static wf_status sync_quota_usage_locked(metalbear_repo_store *s) {
+    if (!s->quota_account) return WF_OK;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db,
+                           "SELECT COALESCE(SUM(length(data)),0) FROM blocks;",
+                           -1, &stmt, NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    wf_status st = WF_ERR_INTERNAL;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        sqlite3_int64 used = sqlite3_column_int64(stmt, 0);
+        if (used >= 0)
+            st = metalbear_account_set_usage(s->quota_account, false,
+                                             (uint64_t)used);
+    }
+    sqlite3_finalize(stmt);
+    return st;
+}
+
+void metalbear_repo_store_set_quota_account(metalbear_repo_store *store,
+                                            metalbear_account_store *account) {
+    if (!store) return;
+    pthread_mutex_lock(&store->mutex);
+    store->quota_account = account;
+    if (account) (void)sync_quota_usage_locked(store);
+    pthread_mutex_unlock(&store->mutex);
+}
+
+wf_status metalbear_repo_store_sync_quota_usage(metalbear_repo_store *store) {
+    if (!store) return WF_ERR_INVALID_ARG;
+    pthread_mutex_lock(&store->mutex);
+    wf_status st = sync_quota_usage_locked(store);
+    pthread_mutex_unlock(&store->mutex);
+    return st;
+}
+
 wf_status
 metalbear_repo_store_get_stats(metalbear_repo_store *store,
                                metalbear_repo_store_stats *out_stats) {
@@ -1217,6 +1347,10 @@ out_rollback:
     /* Every surviving block is still in the database. */
     store->persisted_blocks = kept;
     if (out_removed_blocks) *out_removed_blocks = removed;
+    /* GC is the only path that shrinks durable repo bytes. Reconcile the
+     * account counter with the post-GC block table; a failure here is
+     * recoverable because open() re-derives usage from the same table. */
+    (void)sync_quota_usage_locked(store);
     goto out_reachable;
 
 out_compact:
@@ -1479,6 +1613,79 @@ static wf_status create_record_with_backlink_cleanup(
 /* Write / read operations                                             */
 /* ------------------------------------------------------------------ */
 
+/* Rehearsal context for each write primitive. The quota check runs the exact
+ * same Wolfram mutation on a copy of the CAR, so the byte delta cannot drift
+ * from what the real write will persist. */
+typedef struct {
+    const wf_cid *prev;
+    const char *did;
+    const char *collection;
+    const char *rkey;
+    const unsigned char *cbor;
+    size_t cbor_len;
+    const wf_signing_key *key;
+    wf_cid out_record;
+} create_mutate_ctx;
+
+static wf_status mutate_create(wf_car *car, void *p, wf_cid *out_commit) {
+    create_mutate_ctx *c = p;
+    return wf_repo_create_record(car, c->prev, c->did, c->collection, c->rkey,
+                                 c->cbor, c->cbor_len, c->key, out_commit,
+                                 &c->out_record);
+}
+
+typedef struct {
+    bool update;
+    const wf_cid *head;
+    const char *did;
+    const char *collection;
+    const char *rkey;
+    const unsigned char *cbor;
+    size_t cbor_len;
+    const wf_signing_key *key;
+    wf_cid out_record;
+} put_mutate_ctx;
+
+static wf_status mutate_put(wf_car *car, void *p, wf_cid *out_commit) {
+    put_mutate_ctx *c = p;
+    if (c->update)
+        return wf_repo_update_record(car, c->head, c->did, c->collection,
+                                     c->rkey, c->cbor, c->cbor_len, c->key,
+                                     out_commit, &c->out_record);
+    const wf_cid *prev = c->head->len ? c->head : NULL;
+    return wf_repo_create_record(car, prev, c->did, c->collection, c->rkey,
+                                 c->cbor, c->cbor_len, c->key, out_commit,
+                                 &c->out_record);
+}
+
+typedef struct {
+    const wf_cid *head;
+    const char *did;
+    const char *collection;
+    const char *rkey;
+    const wf_signing_key *key;
+} delete_mutate_ctx;
+
+static wf_status mutate_delete(wf_car *car, void *p, wf_cid *out_commit) {
+    delete_mutate_ctx *c = p;
+    return wf_repo_delete_record(car, c->head, c->did, c->collection, c->rkey,
+                                 c->key, out_commit);
+}
+
+typedef struct {
+    const wf_cid *prev;
+    const char *did;
+    wf_repo_write *batch;
+    size_t count;
+    const wf_signing_key *key;
+} apply_mutate_ctx;
+
+static wf_status mutate_apply(wf_car *car, void *p, wf_cid *out_commit) {
+    apply_mutate_ctx *c = p;
+    return wf_repo_apply_writes(car, c->prev, c->did, c->batch, c->count,
+                                c->key, out_commit);
+}
+
 static wf_status create_record_locked(metalbear_repo_store *s,
                                       const char *collection,
                                       const char *rkey_or_null,
@@ -1554,12 +1761,23 @@ static wf_status create_record_locked(metalbear_repo_store *s,
     wf_cid out_commit = {{0}, 0}, out_record = {{0}, 0};
     wf_cid old_head = s->head;
     const wf_cid *prev = s->head.len ? &s->head : NULL;
-    st = wf_repo_create_record(&s->car, prev, s->did, collection, rkey, cbor,
-                               cbor_len, &s->key, &out_commit, &out_record);
+    create_mutate_ctx mutate = {prev, s->did,   collection, rkey,
+                                cbor, cbor_len, &s->key,    out_record};
+    uint64_t reserved = 0;
+    st = quota_preflight_locked(s, mutate_create, &mutate, &reserved);
+    if (st != WF_OK) {
+        free(cbor);
+        return st;
+    }
+    st = mutate_create(&s->car, &mutate, &out_commit);
     free(cbor);
-    if (st != WF_OK) return st;
+    if (st != WF_OK) {
+        quota_release(s, reserved);
+        return st;
+    }
+    out_record = mutate.out_record;
 
-    st = commit_persist(s, &out_commit);
+    st = quota_commit_persist(s, &out_commit, reserved);
     if (st != WF_OK) return st;
 
     *out_uri = make_uri(s->did, collection, rkey);
@@ -1667,20 +1885,23 @@ static wf_status put_record_locked(metalbear_repo_store *s,
         }
     }
 
-    if (exists) {
-        st = wf_repo_update_record(&s->car, &s->head, s->did, collection, rkey,
-                                   cbor, cbor_len, &s->key, &out_commit,
-                                   &out_record);
-    } else {
-        const wf_cid *prev = s->head.len ? &s->head : NULL;
-        st =
-            wf_repo_create_record(&s->car, prev, s->did, collection, rkey, cbor,
-                                  cbor_len, &s->key, &out_commit, &out_record);
+    put_mutate_ctx mutate = {exists, &s->head, s->did,  collection, rkey,
+                             cbor,   cbor_len, &s->key, out_record};
+    uint64_t reserved = 0;
+    st = quota_preflight_locked(s, mutate_put, &mutate, &reserved);
+    if (st != WF_OK) {
+        free(cbor);
+        return st;
     }
+    st = mutate_put(&s->car, &mutate, &out_commit);
     free(cbor);
-    if (st != WF_OK) return st;
+    if (st != WF_OK) {
+        quota_release(s, reserved);
+        return st;
+    }
+    out_record = mutate.out_record;
 
-    st = commit_persist(s, &out_commit);
+    st = quota_commit_persist(s, &out_commit, reserved);
     if (st != WF_OK) return st;
 
     *out_uri = make_uri(s->did, collection, rkey);
@@ -1747,10 +1968,16 @@ static wf_status delete_record_locked(metalbear_repo_store *s,
 
     wf_cid out_commit = {{0}, 0};
     wf_cid old_head = s->head;
-    st = wf_repo_delete_record(&s->car, &s->head, s->did, collection, rkey,
-                               &s->key, &out_commit);
+    delete_mutate_ctx mutate = {&s->head, s->did, collection, rkey, &s->key};
+    uint64_t reserved = 0;
+    st = quota_preflight_locked(s, mutate_delete, &mutate, &reserved);
     if (st != WF_OK) return st;
-    st = commit_persist(s, &out_commit);
+    st = mutate_delete(&s->car, &mutate, &out_commit);
+    if (st != WF_OK) {
+        quota_release(s, reserved);
+        return st;
+    }
+    st = quota_commit_persist(s, &out_commit, reserved);
     if (st != WF_OK) return st;
     index_delete_record(s, collection, rkey);
     emit_commit_event(s, &old_head, "delete", collection, rkey, NULL, &ex_cid);
@@ -1967,10 +2194,16 @@ apply_writes_locked(metalbear_repo_store *s, const char *writes_json,
     wf_cid old_head = s->head;
     wf_cid new_commit = {{0}, 0};
     const wf_cid *prev = s->head.len ? &s->head : NULL;
-    st = wf_repo_apply_writes(&s->car, prev, s->did, batch, staged, &s->key,
-                              &new_commit);
+    apply_mutate_ctx mutate = {prev, s->did, batch, staged, &s->key};
+    uint64_t reserved = 0;
+    st = quota_preflight_locked(s, mutate_apply, &mutate, &reserved);
     if (st != WF_OK) goto done;
-    st = commit_persist(s, &new_commit);
+    st = mutate_apply(&s->car, &mutate, &new_commit);
+    if (st != WF_OK) {
+        quota_release(s, reserved);
+        goto done;
+    }
+    st = quota_commit_persist(s, &new_commit, reserved);
     if (st != WF_OK) goto done;
 
     /* The commit is durable; now bring the record index in line with it and

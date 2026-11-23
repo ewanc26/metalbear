@@ -165,6 +165,8 @@ struct metalbear_server {
     char *admission_invite_domains;
     char *admission_closed_domains;
     int64_t blob_upload_limit; /* 0 => unlimited */
+    int64_t repo_byte_quota;   /* default per-account repo bytes; 0 unlimited */
+    int64_t blob_byte_quota;   /* default per-account blob bytes; 0 unlimited */
     bool accepting_imports;    /* gates com.atproto.repo.importRepo */
     int64_t max_import_size;   /* 0 => unlimited; caps importRepo's CAR body */
     char *plc_url;             /* PLC directory URL or NULL */
