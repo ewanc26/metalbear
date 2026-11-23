@@ -24,6 +24,9 @@ typedef enum {
 bool metalbear_admission_parse_mode(const char *text,
                                     metalbear_admission_mode *out);
 
+/* Stable lowercase name for a mode, for config echoes and public metadata. */
+const char *metalbear_admission_mode_name(metalbear_admission_mode mode);
+
 /* Validate a whole policy: known mode, dotted domains, no domain in two
  * lists. Writes a short reason into err when returning false. */
 bool metalbear_admission_config_valid(const char *default_mode,

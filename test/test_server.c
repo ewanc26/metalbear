@@ -343,6 +343,118 @@ static void test_config_resident_budget(void) {
     rmtree(directory);
 }
 
+/* The bundled signup page has to know whether registration is open, invite
+ * only or closed. That policy is MetalBear-specific, so it is advertised in
+ * /operator.json and mirrored by describeServer's lexicon field. Probe all
+ * three modes against real HTTP, not just the parser, so a mismatch between
+ * the two endpoints cannot ship. */
+static void test_registration_metadata(const char *admission_default,
+                                       const char *expected_mode,
+                                       bool expected_invite) {
+    char directory[] = "/tmp/metalbear-registration-XXXXXX";
+    CHECK(mkdtemp(directory) != NULL);
+    metalbear_config config = {
+        .listen_address = "127.0.0.1",
+        .port = 0,
+        .thread_count = 2,
+        .data_directory = directory,
+        .service_did = "did:web:pds.example.com",
+        .user_domain = ".example.com",
+        .admin_password = "secret-admin",
+        .invite_required = false,
+        .admission_default = admission_default,
+        .rate_limit = 10000,
+    };
+    metalbear_server *server = metalbear_server_start(&config);
+    CHECK(server != NULL);
+    if (!server) {
+        rmtree(directory);
+        return;
+    }
+
+    char base[80];
+    snprintf(base, sizeof(base), "http://127.0.0.1:%u",
+             (unsigned)metalbear_server_port(server));
+    wf_xrpc_client *client = wf_xrpc_client_new(base);
+    CHECK(client != NULL);
+    if (!client) {
+        metalbear_server_free(server);
+        rmtree(directory);
+        return;
+    }
+
+    wf_response response = {0};
+    char op_url[160];
+    snprintf(op_url, sizeof(op_url), "%s/operator.json", base);
+    CHECK(wf_http_get(client, op_url, &response) == WF_OK);
+    CHECK(response.status == 200);
+    cJSON *op = json_response(&response);
+    CHECK(op != NULL);
+    if (op) {
+        cJSON *registration =
+            cJSON_GetObjectItemCaseSensitive(op, "registration");
+        CHECK(cJSON_IsObject(registration));
+        if (registration) {
+            cJSON *mode =
+                cJSON_GetObjectItemCaseSensitive(registration, "mode");
+            CHECK(cJSON_IsString(mode) &&
+                  strcmp(mode->valuestring, expected_mode) == 0);
+            cJSON *invite = cJSON_GetObjectItemCaseSensitive(
+                registration, "inviteCodeRequired");
+            CHECK(cJSON_IsBool(invite) &&
+                  cJSON_IsTrue(invite) == expected_invite);
+            cJSON *closed =
+                cJSON_GetObjectItemCaseSensitive(registration, "closed");
+            CHECK(cJSON_IsBool(closed) &&
+                  cJSON_IsTrue(closed) ==
+                      (strcmp(expected_mode, "closed") == 0));
+        }
+        cJSON *caps = cJSON_GetObjectItemCaseSensitive(op, "capabilities");
+        CHECK(cJSON_IsObject(caps));
+        if (caps) {
+            CHECK(cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(
+                caps, "emailVerificationAvailable")));
+        }
+        cJSON_Delete(op);
+    }
+    wf_response_free(&response);
+
+    CHECK(wf_xrpc_query(client, "com.atproto.server.describeServer", NULL,
+                        &response) == WF_OK);
+    CHECK(response.status == 200);
+    cJSON *described = json_response(&response);
+    CHECK(described != NULL);
+    if (described) {
+        cJSON *invite =
+            cJSON_GetObjectItemCaseSensitive(described, "inviteCodeRequired");
+        CHECK(cJSON_IsBool(invite) && cJSON_IsTrue(invite) == expected_invite);
+        cJSON_Delete(described);
+    }
+    wf_response_free(&response);
+
+    /* The server, not the form, is the authority: no invite code in invite
+     * mode and no signup at all in closed mode. Open mode is exercised by the
+     * main server test and conformance suite, so it needs no forced failure. */
+    if (strcmp(expected_mode, "invite") == 0 ||
+        strcmp(expected_mode, "closed") == 0) {
+        CHECK(
+            wf_xrpc_procedure(client, "com.atproto.server.createAccount",
+                              "{\"handle\":\"probe.example.com\","
+                              "\"email\":\"probe@example.com\","
+                              "\"password\":\"correct horse battery staple\"}",
+                              &response) == WF_ERR_HTTP);
+        if (strcmp(expected_mode, "invite") == 0)
+            CHECK(body_contains(&response, "InvalidInviteCode"));
+        else
+            CHECK(body_contains(&response, "UnsupportedDomain"));
+        wf_response_free(&response);
+    }
+
+    wf_xrpc_client_free(client);
+    metalbear_server_free(server);
+    rmtree(directory);
+}
+
 int main(void) {
     char directory[] = "/tmp/metalbear-test-XXXXXX";
     CHECK(mkdtemp(directory) != NULL);
@@ -3116,6 +3228,9 @@ int main(void) {
     }
 
     test_config_resident_budget();
+    test_registration_metadata("open", "open", false);
+    test_registration_metadata("invite", "invite", true);
+    test_registration_metadata("closed", "closed", false);
 
     char path[512];
     if (blob_cid) {

@@ -257,7 +257,9 @@ ping_seconds = 20                  # keepalive; must beat the proxy idle timeout
 `admission` overrides the global `invite_required` for handles under a listed
 domain. Domains are dotted suffixes, the longest match wins, and a closed
 domain is refused with `400 UnsupportedDomain`. When no domain matches, the
-`default` applies; if `default` is also unset, `invite_required` is used.
+`default` applies; if `default` is also unset, `invite_required` is used. The
+bundled frontend advertises the effective mode in `/operator.json` and shapes
+its `/signup` form from it; `createAccount` remains the authority.
 
 The same settings in YAML — a deliberate subset (2-space indent, no block
 sequences or multi-line scalars; see `config_file.h`), not the full spec:
@@ -697,6 +699,22 @@ set that variable to `/usr/local/share/metalbear/frontend`, so the frontend is
 at `/` and the C landing page is at `/landing`. Without the variable, the C
 landing page stays at `/` and no frontend is served. A directory that does not
 exist stops startup.
+
+### Signup
+
+`/signup` is a prerendered page that reads the public registration policy from
+`/operator.json` and the user domains from `describeServer` in the browser. It
+offers `open`, `invite` and `closed` modes from `[admission]`: closed servers
+show no form, invite-only servers ask for a code, and open servers do not. The
+handle field calls `checkHandleAvailability` for local rules and suggestions,
+then `resolveHandle` to catch a handle claimed elsewhere; `HandleNotFound`
+means available. The server remains authoritative at `createAccount`.
+
+A successful signup signs the browser in and links to `/account`. Verification
+mail is only requested when `/operator.json` reports
+`capabilities.emailVerificationAvailable`; otherwise the account page offers to
+confirm the address later. The landing and admin pages link to `/signup` while
+registration is available.
 
 ### Repo browser
 

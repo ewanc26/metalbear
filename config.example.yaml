@@ -93,7 +93,9 @@ repo:
 # matches; when omitted it falls back to accounts.invite_required above.
 # Domains are handle suffixes including the leading dot; the longest match
 # wins. An invite code is consumed only for `invite` domains. A `closed`
-# domain is refused with 400 UnsupportedDomain.
+# domain is refused with 400 UnsupportedDomain. The bundled frontend reads the
+# effective mode from /operator.json and shows or hides its /signup form; the
+# server still enforces admission at createAccount.
 admission:
   default: "invite"   # open | invite | closed
   # open_domains: [".open.example.com"]

@@ -37,6 +37,8 @@ export interface RepoInfo {
 	status?: string;
 }
 
+export type RegistrationMode = 'open' | 'invite' | 'closed';
+
 export interface OperatorInfo {
 	operator?: { name?: string; email?: string; url?: string; supportUrl?: string };
 	software?: {
@@ -63,6 +65,18 @@ export interface OperatorInfo {
 		multipartVideoUpload?: boolean;
 		maxVideoBytes?: number;
 		videoPartBytes?: number;
+		/** False on builds without SMTP or with no mail transport configured. */
+		emailVerificationAvailable?: boolean;
+	};
+	/**
+	 * MetalBear-specific public signup policy (issue #258). Absent on older
+	 * servers, in which case callers fall back to describeServer's lexicon
+	 * field. The server remains authoritative either way.
+	 */
+	registration?: {
+		mode?: RegistrationMode;
+		inviteCodeRequired?: boolean;
+		closed?: boolean;
 	};
 	description?: string;
 	development?: boolean;
@@ -75,6 +89,33 @@ export interface RelayStatus {
 	known: boolean | null;
 	seq: number | null;
 	status: string | null;
+}
+
+export interface CreateAccountInput {
+	handle: string;
+	email: string;
+	password: string;
+	inviteCode?: string;
+}
+
+/** createAccount returns a session, but not the active flag the store wants. */
+export interface CreateAccountResponse {
+	accessJwt: string;
+	refreshJwt: string;
+	handle: string;
+	did: string;
+	didDoc?: Record<string, unknown>;
+	emailAuthFactor?: boolean;
+}
+
+export interface HandleSuggestion {
+	handle: string;
+	method: string;
+}
+
+export interface HandleAvailability {
+	available: boolean;
+	suggestions: HandleSuggestion[];
 }
 
 export interface SessionResponse {
@@ -834,9 +875,12 @@ export async function adminSetAccountInvitesEnabled(did: string, enabled: boolea
 }
 
 /* Public, unauthenticated -- lets the admin lookup form accept a handle in
- * addition to a raw DID. */
+ * addition to a raw DID, and the signup form distinguish a genuinely free
+ * handle (HandleNotFound) from a network or configuration failure. */
 export async function resolveHandle(handle: string): Promise<string> {
-	const { did } = await xrpc<{ did: string }>('com.atproto.identity.resolveHandle', { handle });
+	const { did } = await xrpcResult<{ did: string }>('com.atproto.identity.resolveHandle', {
+		handle
+	});
 	return did;
 }
 
@@ -876,6 +920,57 @@ export async function xrpcResult<T>(path: string, params?: Record<string, string
 		throw new XrpcError(path, res.status, code, message);
 	}
 	return res.json() as Promise<T>;
+}
+
+/* Like xrpcPostPlain(), but preserves the XRPC error code. createAccount must
+ * not attach a stale session, so this is deliberately not xrpcPost(). */
+async function xrpcPostPlainResult<T>(path: string, body: unknown): Promise<T> {
+	const res = await fetch(new URL(`/xrpc/${path}`, window.location.origin), {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', accept: 'application/json' },
+		body: JSON.stringify(body)
+	});
+	if (!res.ok) {
+		let code = '';
+		let message = '';
+		try {
+			const error = await res.json();
+			if (typeof error?.error === 'string') code = error.error;
+			if (typeof error?.message === 'string') message = error.message;
+		} catch {
+			/* A non-JSON error still carries its HTTP status. */
+		}
+		throw new XrpcError(path, res.status, code, message);
+	}
+	return res.json() as Promise<T>;
+}
+
+/* ---- Public signup (issue #258) ---- */
+
+export function createAccount(input: CreateAccountInput): Promise<CreateAccountResponse> {
+	return xrpcPostPlainResult<CreateAccountResponse>('com.atproto.server.createAccount', input);
+}
+
+/**
+ * MetalBear's own preflight check: exact host-label rules, reserved names and
+ * local conflicts, plus suggestions when the handle is unavailable. resolveHandle
+ * is still called by the form afterwards to catch handles in use elsewhere.
+ */
+export async function checkHandleAvailability(
+	handle: string,
+	email?: string
+): Promise<HandleAvailability> {
+	const body = await xrpcResult<{
+		handle: string;
+		result: { $type: string; suggestions?: HandleSuggestion[] };
+	}>('com.atproto.temp.checkHandleAvailability', {
+		handle,
+		...(email ? { email } : {})
+	});
+	return {
+		available: body.result.$type === 'com.atproto.temp.checkHandleAvailability#resultAvailable',
+		suggestions: body.result.suggestions ?? []
+	};
 }
 
 export interface RepoStatus {
