@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { authorizeInfo, deviceSessions } from '$lib/pds';
-	import type { AuthorizeInfo, AuthorizeInfoError } from '$lib/pds';
-	import { humanizeScopes } from '$lib/oauthScopes';
+	import { authorizeInfo, deviceSessions } from '#lib/pds.ts';
+	import type { AuthorizeInfo, AuthorizeInfoError } from '#lib/pds.ts';
+	import { humanizeScopes } from '#lib/oauthScopes.ts';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import AuthShell from '$lib/components/AuthShell.svelte';
-	import RedirectingView from '$lib/components/RedirectingView.svelte';
+	import AuthShell from '#lib/components/AuthShell.svelte';
+	import RedirectingView from '#lib/components/RedirectingView.svelte';
 
 	let clientId: string = $state('');
 	let requestUri: string = $state('');
@@ -56,10 +56,10 @@
 	}
 
 	onMount(async () => {
-		clientId = $page.url.searchParams.get('client_id') ?? '';
-		requestUri = $page.url.searchParams.get('request_uri') ?? '';
-		loginHint = $page.url.searchParams.get('login_hint') ?? '';
-		redirectUri = $page.url.searchParams.get('redirect_uri') ?? '';
+		clientId = page.url.searchParams.get('client_id') ?? '';
+		requestUri = page.url.searchParams.get('request_uri') ?? '';
+		loginHint = page.url.searchParams.get('login_hint') ?? '';
+		redirectUri = page.url.searchParams.get('redirect_uri') ?? '';
 
 		if (!clientId || !requestUri) {
 			loading = false;

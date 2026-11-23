@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { auth } from '$lib/stores/auth';
-	import { getSession, requestPlcOperationSignature } from '$lib/pds';
-	import type { SessionResponse } from '$lib/pds';
+	import { auth } from '#lib/stores/auth.ts';
+	import { getSession, requestPlcOperationSignature } from '#lib/pds.ts';
+	import type { SessionResponse } from '#lib/pds.ts';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
-	let session = $state<import('$lib/stores/auth').Session | null>(null);
+	let session = $state<import('#lib/stores/auth.ts').Session | null>(null);
 	let current = $state<SessionResponse | null>(null);
 	let loading = $state(true);
 	let loadError = $state('');
@@ -89,8 +89,8 @@
 				1. Create the account on your new server
 			</h2>
 			<p class="text-sm text-slate-400">
-				On the destination PDS, create an account using your existing DID above (not a fresh
-				one). It starts out deactivated there until identity is fully moved over in step 3.
+				On the destination PDS, create an account using your existing DID above (not a fresh one).
+				It starts out deactivated there until identity is fully moved over in step 3.
 			</p>
 		</section>
 
@@ -116,8 +116,8 @@
 			</h2>
 			<p class="mb-4 text-sm text-slate-400">
 				This is the step that actually moves your account: a signed operation updating where your
-				DID says you're hosted. This server has to co-sign it, which needs a one-time token sent
-				to your email.
+				DID says you're hosted. This server has to co-sign it, which needs a one-time token sent to
+				your email.
 			</p>
 			{#if tokenSent}
 				<p
@@ -148,23 +148,22 @@
 				4. Finish up
 			</h2>
 			<p class="text-sm text-slate-400">
-				Once the new server confirms your identity has moved, activate your account there. Then
-				come back here and deactivate this one from the
+				Once the new server confirms your identity has moved, activate your account there. Then come
+				back here and deactivate this one from the
 				<a href="/account/danger-zone" class="text-emerald-500 hover:text-emerald-400"
 					>danger zone →</a
 				>
-				— your repo stays intact in case anything needs to be re-checked, but the network will
-				route to your new server.
+				— your repo stays intact in case anything needs to be re-checked, but the network will route to
+				your new server.
 			</p>
 		</section>
 
 		<section class="rounded-lg border border-slate-800 bg-slate-900/30 p-6">
 			<h2 class="mb-4 text-sm font-semibold tracking-widest text-slate-500 uppercase">Tooling</h2>
 			<p class="text-sm text-slate-400">
-				Steps 1–3 involve calls to both servers (creating the account, importing the repo and
-				blobs, and exchanging the signed operation) that aren't safe to automate from a page like
-				this one, since the exact operation content depends on keys only the destination server
-				has. Bluesky's
+				Steps 1–3 involve calls to both servers (creating the account, importing the repo and blobs,
+				and exchanging the signed operation) that aren't safe to automate from a page like this one,
+				since the exact operation content depends on keys only the destination server has. Bluesky's
 				<a
 					href="https://github.com/bluesky-social/goat"
 					target="_blank"
@@ -172,8 +171,8 @@
 					class="text-emerald-500 hover:text-emerald-400">goat</a
 				>
 				command-line tool has a dedicated <code class="text-slate-300">account migrate</code> command
-				that automates this entire sequence end to end and is the recommended way to actually run
-				the migration.
+				that automates this entire sequence end to end and is the recommended way to actually run the
+				migration.
 			</p>
 		</section>
 	{/if}

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { requestPasswordReset, resetPassword } from '$lib/pds';
-	import AuthShell from '$lib/components/AuthShell.svelte';
+	import { requestPasswordReset, resetPassword } from '#lib/pds.ts';
+	import AuthShell from '#lib/components/AuthShell.svelte';
 
 	type Step = 'request' | 'confirm' | 'done';
 

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import BearLogo from '$lib/components/BearLogo.svelte';
+	import BearLogo from '#lib/components/BearLogo.svelte';
 	import {
 		describeServer,
 		listRepos,
@@ -11,7 +11,7 @@
 		type RepoInfo,
 		type RelayStatus,
 		type OperatorInfo
-	} from '$lib/pds';
+	} from '#lib/pds.ts';
 
 	let version = $state<string | null>(null);
 	let server = $state<ServerInfo | null>(null);

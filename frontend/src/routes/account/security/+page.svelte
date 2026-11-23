@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { auth } from '$lib/stores/auth';
+	import { auth } from '#lib/stores/auth.ts';
 	import {
 		getSession,
 		requestPasswordReset,
@@ -13,14 +13,14 @@
 		passkeyRegisterOptions,
 		passkeyRegisterVerify,
 		passkeyRemove
-	} from '$lib/pds';
-	import type { SessionResponse, PasskeyInfo } from '$lib/pds';
-	import { createPasskey, isWebAuthnSupported } from '$lib/webauthn';
-	import { formatDate } from '$lib/format';
+	} from '#lib/pds.ts';
+	import type { SessionResponse, PasskeyInfo } from '#lib/pds.ts';
+	import { createPasskey, isWebAuthnSupported } from '#lib/webauthn.ts';
+	import { formatDate } from '#lib/format.ts';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
-	let session = $state<import('$lib/stores/auth').Session | null>(null);
+	let session = $state<import('#lib/stores/auth.ts').Session | null>(null);
 	let current = $state<SessionResponse | null>(null);
 	let loading = $state(true);
 	let loadError = $state('');

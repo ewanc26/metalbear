@@ -1,13 +1,13 @@
 <script lang="ts">
-	import { auth } from '$lib/stores/auth';
-	import { listGrants, revokeGrant } from '$lib/pds';
-	import type { GrantInfo } from '$lib/pds';
-	import { humanizeScopes } from '$lib/oauthScopes';
-	import { formatDate } from '$lib/format';
+	import { auth } from '#lib/stores/auth.ts';
+	import { listGrants, revokeGrant } from '#lib/pds.ts';
+	import type { GrantInfo } from '#lib/pds.ts';
+	import { humanizeScopes } from '#lib/oauthScopes.ts';
+	import { formatDate } from '#lib/format.ts';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
-	let session = $state<import('$lib/stores/auth').Session | null>(null);
+	let session = $state<import('#lib/stores/auth.ts').Session | null>(null);
 	let grants = $state<GrantInfo[]>([]);
 	let error = $state('');
 	let loading = $state(true);
