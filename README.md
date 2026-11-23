@@ -233,6 +233,8 @@ closed_domains  = [".closed.example.com"]
 [limits]
 rate_limit                = 3000   # per client, per window
 rate_limit_window_seconds = 60
+repo_bytes                = 0      # per-account quota; 0 = unlimited
+blob_bytes                = 0      # per-account quota; 0 = unlimited
 
 [firehose]
 crawlers     = ["https://bsky.network"]
@@ -260,6 +262,8 @@ accounts:
 limits:
   rate_limit: 3000   # per client, per window
   rate_limit_window_seconds: 60
+  repo_bytes: 0      # per-account quota; 0 = unlimited
+  blob_bytes: 0      # per-account quota; 0 = unlimited
 
 firehose:
   crawlers: ["https://bsky.network"]
@@ -271,6 +275,15 @@ and describe the identical deployment — the two dialects share one field
 table in `config_file.cpp` so they cannot silently drift apart. Unknown keys
 are an error with a line number rather than a silent no-op — a configuration
 file that is half-read is worse than one that refuses to load.
+
+`limits.repo_bytes` and `limits.blob_bytes` are per-account byte quotas. Both
+default to 0 (unlimited). When set, they are defaults for accounts that have no
+quota recorded yet: a quota set directly on an account wins over the global
+value. Repo writes that would add durable block bytes past the quota and blob
+uploads that would add bytes past it are refused, while re-uploading an
+identical CID costs nothing. Deleting a record does not reclaim repo bytes
+until repo GC runs; a completed GC reconciles the counter. Operators can also
+set `METALBEAR_REPO_BYTES` and `METALBEAR_BLOB_BYTES` in the environment.
 
 ### Handle resolution
 

@@ -55,6 +55,8 @@ static void test_reads_every_type(void) {
         "\n"
         "[limits]\n"
         "rate_limit = 2500\n"
+        "repo_bytes = 134217728\n"
+        "blob_bytes = 268435456\n"
         "\n"
         "[firehose]\n"
         "crawlers = [\"https://a.example\", \"https://b.example\"]\n");
@@ -74,6 +76,8 @@ static void test_reads_every_type(void) {
     CHECK(cfg.deletion_hold_seconds == 86400);
     CHECK(cfg.repo_gc_interval_seconds == 86400);
     CHECK(cfg.rate_limit == 2500);
+    CHECK(cfg.repo_byte_quota == 134217728);
+    CHECK(cfg.blob_byte_quota == 268435456);
     /* An array becomes the comma-separated form used everywhere else, rather
      * than a second representation of one setting. */
     CHECK(cfg.crawlers &&
@@ -129,6 +133,8 @@ static void test_rejects_bad_input(void) {
         {"bad boolean", "[accounts]\ninvite_required = yes\n"},
         {"out-of-range port", "[server]\nport = 70000\n"},
         {"unterminated section", "[server\nport = 1\n"},
+        {"negative repo quota", "[limits]\nrepo_bytes = -1\n"},
+        {"negative blob quota", "[limits]\nblob_bytes = -1\n"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         char *path = write_temp(cases[i][1]);

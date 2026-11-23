@@ -65,6 +65,8 @@ static void test_reads_every_type(void) {
         "\n"
         "limits:\n"
         "  rate_limit: 2500\n"
+        "  repo_bytes: 134217728\n"
+        "  blob_bytes: 268435456\n"
         "\n"
         "firehose:\n"
         "  crawlers: [\"https://a.example\", \"https://b.example\"]\n");
@@ -86,6 +88,8 @@ static void test_reads_every_type(void) {
     CHECK(cfg.deletion_hold_seconds == 86400);
     CHECK(cfg.repo_gc_interval_seconds == 86400);
     CHECK(cfg.rate_limit == 2500);
+    CHECK(cfg.repo_byte_quota == 134217728);
+    CHECK(cfg.blob_byte_quota == 268435456);
     CHECK(cfg.crawlers &&
           strcmp(cfg.crawlers, "https://a.example,https://b.example") == 0);
     metalbear_config_file_free(owner);
@@ -186,6 +190,8 @@ static void test_rejects_bad_input(void) {
         {"4-space indent", "server:\n    port: 8080\n"},
         {"tab indent", "server:\n\tport: 8080\n"},
         {"section header with value", "server: oops\n  port: 8080\n"},
+        {"negative repo quota", "limits:\n  repo_bytes: -1\n"},
+        {"negative blob quota", "limits:\n  blob_bytes: -1\n"},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         char *path = write_temp(cases[i][1]);

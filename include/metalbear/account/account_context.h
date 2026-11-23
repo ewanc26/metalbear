@@ -95,6 +95,17 @@ wf_status metalbear_account_context_open_shared(
     const wf_signing_key *signing_key, metalbear_sequencer *sequencer,
     metalbear_account_context **out);
 
+/*
+ * Apply the operator's configured per-account byte quotas (0 = unlimited) to
+ * this context's account store. A non-zero configured value fills in an
+ * account that has no quota yet; an existing per-account setting always wins,
+ * so an operator can tighten or relax one account without a global restart
+ * changing it. Called by the account cache when it opens a context; standalone
+ * callers can use it too, before any writes.
+ */
+wf_status metalbear_account_context_apply_quota_defaults(
+    metalbear_account_context *ctx, uint64_t repo_bytes, uint64_t blob_bytes);
+
 /* Free every store in the context and the context itself. Safe with NULL. */
 void metalbear_account_context_close(metalbear_account_context *ctx);
 

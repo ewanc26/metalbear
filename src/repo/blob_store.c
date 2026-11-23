@@ -5,6 +5,7 @@
  * PDS would. See blob_store.h for ownership and mode semantics.
  */
 
+#include "metalbear/account/account.h"
 #include "metalbear/repo/blob_store.h"
 
 #include "wolfram/tid.h"
@@ -40,7 +41,9 @@ struct metalbear_blob_store {
     bool file_backed;
     char *dir;                 /* owned base directory (file-backed only) */
     metalbear_blob_node *head; /* in-memory index; source of truth */
-    pthread_mutex_t mutex;     /* guards head and all node mutations */
+    /* Borrowed account store used for per-account byte quotas (issue #152). */
+    metalbear_account_store *quota_account;
+    pthread_mutex_t mutex; /* guards head and all node mutations */
 #ifdef METALBEAR_BUILD_BLOB_CRYPTO
     unsigned char key[crypto_secretbox_KEYBYTES]; /* derived secret-box key */
     int has_key;   /* non-zero once a passphrase has been set this open */
@@ -632,6 +635,55 @@ void metalbear_blob_store_free(metalbear_blob_store *store) {
     free(store);
 }
 
+/* ------------------------------------------------------------------ */
+/* Per-account byte quotas (issue #152)                                */
+/* ------------------------------------------------------------------ */
+
+void metalbear_blob_store_set_quota_account(metalbear_blob_store *store,
+                                            metalbear_account_store *account) {
+    if (!store) return;
+    pthread_mutex_lock(&store->mutex);
+    store->quota_account = account;
+    if (account) {
+        uint64_t used = 0;
+        for (metalbear_blob_node *n = store->head; n; n = n->next) {
+            if (n->len > UINT64_MAX - used) {
+                used = UINT64_MAX;
+                break;
+            }
+            used += n->len;
+        }
+        (void)metalbear_account_set_usage(account, true, used);
+    }
+    pthread_mutex_unlock(&store->mutex);
+}
+
+static wf_status quota_reserve_locked(metalbear_blob_store *store,
+                                      uint64_t grow, uint64_t *out_reserved) {
+    *out_reserved = 0;
+    if (!store->quota_account || !grow) return WF_OK;
+    wf_status st =
+        metalbear_account_reserve_bytes(store->quota_account, true, grow);
+    if (st == WF_OK) *out_reserved = grow;
+    return st;
+}
+
+static void quota_release_locked(metalbear_blob_store *store,
+                                 uint64_t reserved) {
+    if (store->quota_account && reserved)
+        (void)metalbear_account_release_bytes(store->quota_account, true,
+                                              reserved);
+}
+
+/* The caller has already taken the store mutex. `old_len` is the payload
+ * length being replaced, or zero for a new CID. */
+static void quota_usage_delta(const metalbear_blob_node *node, size_t new_len,
+                              uint64_t *out_grow, uint64_t *out_shrink) {
+    uint64_t old_len = node ? node->len : 0;
+    *out_grow = new_len > old_len ? (uint64_t)new_len - old_len : 0;
+    *out_shrink = new_len < old_len ? old_len - (uint64_t)new_len : 0;
+}
+
 wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
                                    const char *mime_type,
                                    const unsigned char *data, size_t len) {
@@ -655,10 +707,21 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
     }
 
     pthread_mutex_lock(&store->mutex);
+    uint64_t grow = 0, shrink = 0, reserved = 0;
+    quota_usage_delta(blob_node_find(store, cid), len, &grow, &shrink);
+    wf_status quota_st = quota_reserve_locked(store, grow, &reserved);
+    if (quota_st != WF_OK) {
+        free(data_copy);
+        free(cid_copy);
+        free(mime_copy);
+        pthread_mutex_unlock(&store->mutex);
+        return quota_st;
+    }
     if (store->file_backed) {
         wf_status st =
             blob_write_backing_files(store, cid, mime_type, data, len);
         if (st != WF_OK) {
+            quota_release_locked(store, reserved);
             free(data_copy);
             free(cid_copy);
             free(mime_copy);
@@ -683,6 +746,7 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
                 blob_tid_now(n->rev);
                 persist_rev(store, n);
             }
+            quota_release_locked(store, shrink);
             pthread_mutex_unlock(&store->mutex);
             return WF_OK;
         }
@@ -700,6 +764,7 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
             free(datap);
             free(mimep);
         }
+        quota_release_locked(store, reserved);
         pthread_mutex_unlock(&store->mutex);
         return WF_ERR_ALLOC;
     }
@@ -738,6 +803,15 @@ wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
     }
 
     pthread_mutex_lock(&store->mutex);
+    uint64_t grow = 0, shrink = 0, reserved = 0;
+    quota_usage_delta(blob_node_find(store, cid), expected_len, &grow, &shrink);
+    wf_status quota_st = quota_reserve_locked(store, grow, &reserved);
+    if (quota_st != WF_OK) {
+        free(cid_copy);
+        free(mime_copy);
+        pthread_mutex_unlock(&store->mutex);
+        return quota_st;
+    }
     char *datap = blob_path(store->dir, cid);
     char *mimep = blob_sidecar_path(store->dir, cid, ".mime");
     char *data_tmp = blob_sidecar_path(store->dir, cid, ".tmp");
@@ -804,6 +878,7 @@ wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
             }
         }
     }
+    quota_release_locked(store, st == WF_OK ? shrink : reserved);
     free(datap);
     free(mimep);
     free(data_tmp);
@@ -943,7 +1018,9 @@ static wf_status blob_store_delete_locked(metalbear_blob_store *store,
         }
 
         *link = node->next;
+        uint64_t released_len = node->len;
         blob_node_free(node);
+        quota_release_locked(store, released_len);
         (void)remove(data_trash);
         (void)remove(mime_trash);
         free(datap);
@@ -965,7 +1042,9 @@ static wf_status blob_store_delete_locked(metalbear_blob_store *store,
     }
 
     *link = node->next;
+    uint64_t released_len = node->len;
     blob_node_free(node);
+    quota_release_locked(store, released_len);
     return WF_OK;
 }
 

@@ -438,6 +438,10 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
         server->service_did, server->public_url, account_did,
         handle->valuestring, data_dir, password->valuestring,
         have_minted_key ? &minted_key : NULL, server->sequencer, &acct);
+    if (status == WF_OK)
+        (void)metalbear_account_context_apply_quota_defaults(
+            acct, (uint64_t)server->repo_byte_quota,
+            (uint64_t)server->blob_byte_quota);
     if (status != WF_OK) {
         free(account_did);
         free(data_dir);

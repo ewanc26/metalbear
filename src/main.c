@@ -241,6 +241,8 @@ int main(int argc, char **argv) {
     ENV_I64("METALBEAR_RATE_LIMIT", rate_limit);
     ENV_I64("METALBEAR_RATE_LIMIT_WINDOW", rate_limit_window);
     ENV_I64("METALBEAR_BLOB_UPLOAD_LIMIT", blob_upload_limit);
+    ENV_I64("METALBEAR_REPO_BYTES", repo_byte_quota);
+    ENV_I64("METALBEAR_BLOB_BYTES", blob_byte_quota);
     ENV_I64("METALBEAR_DRAIN_TIMEOUT_SECONDS", drain_timeout_seconds);
     ENV_I64("METALBEAR_MAX_IMPORT_SIZE", max_import_size);
     ENV_I64("METALBEAR_DELETION_HOLD_SECONDS", deletion_hold_seconds);
@@ -289,6 +291,12 @@ int main(int argc, char **argv) {
     }
     if (!config.user_domain) {
         LOG_ERROR("METALBEAR_USER_DOMAIN or server.user_domain is required");
+        return 2;
+    }
+    if (config.repo_byte_quota < 0 || config.blob_byte_quota < 0) {
+        LOG_ERROR("limits.repo_bytes and limits.blob_bytes "
+                  "(METALBEAR_REPO_BYTES / METALBEAR_BLOB_BYTES) must not be "
+                  "negative");
         return 2;
     }
     if (config.deletion_hold_seconds < 0) {

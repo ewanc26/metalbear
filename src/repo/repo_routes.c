@@ -1,6 +1,7 @@
 #include "repo_store_internal.h"
 #include "../server_internal.h"
 
+#include "metalbear/account/account.h"
 #include "metalbear/repo/blob_store.h"
 #include "metalbear/repo/explicit_slurs.h"
 
@@ -15,6 +16,7 @@
 #include <cJSON.h>
 #include <sqlite3.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -429,6 +431,13 @@ static void set_write_error(wf_xrpc_response *resp, wf_status st,
             wf_xrpc_response_set_error(resp, 400, "InvalidSwap",
                                        "swap CID did not match current value");
             return;
+        case WF_ERR_RATE_LIMIT: {
+            char message[192];
+            snprintf(message, sizeof(message),
+                     "%s: account storage quota exceeded", context);
+            wf_xrpc_response_set_error(resp, 400, "InvalidRequest", message);
+            return;
+        }
         default:
             wf_xrpc_response_set_error(resp, 400, "InvalidRequest", context);
             return;
@@ -1099,6 +1108,34 @@ static wf_status h_get_latest_commit(void *ctx, const wf_xrpc_request *req,
  * correct for wolfram's own generic CAR-diff semantics but would desync
  * s->car from the blocks table here -- see the merge loop's own comment.) */
 
+/* importRepo merges CAR blocks directly rather than going through the write
+ * primitives, so it needs its own quota check. Caller holds s->mutex. */
+static wf_status import_quota_reserve(metalbear_repo_store *s,
+                                      const wf_car *incoming,
+                                      uint64_t *out_reserved) {
+    *out_reserved = 0;
+    if (!s->quota_account) return WF_OK;
+    uint64_t delta = 0;
+    for (size_t i = 0; i < incoming->block_count; i++) {
+        if (wf_car_find_block(&s->car, &incoming->blocks[i].cid)) continue;
+        if (incoming->blocks[i].data_len > UINT64_MAX - delta)
+            return WF_ERR_RATE_LIMIT;
+        delta += incoming->blocks[i].data_len;
+    }
+    if (!delta) return WF_OK;
+    wf_status st =
+        metalbear_account_reserve_bytes(s->quota_account, false, delta);
+    if (st != WF_OK) return st;
+    *out_reserved = delta;
+    return WF_OK;
+}
+
+static void import_quota_release(metalbear_repo_store *s, uint64_t reserved) {
+    if (s->quota_account && reserved)
+        (void)metalbear_account_release_bytes(s->quota_account, false,
+                                              reserved);
+}
+
 static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
                                wf_xrpc_response *resp) {
     metalbear_pds_repo_bundle *b = (metalbear_pds_repo_bundle *)ctx;
@@ -1146,6 +1183,7 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
 
     wf_status st = WF_OK;
     bool locked = false;
+    uint64_t reserved = 0;
 
     pthread_mutex_lock(&s->mutex);
     locked = true;
@@ -1201,12 +1239,21 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
             st = WF_OK;
             goto cleanup;
         }
+        st = import_quota_reserve(s, &imported, &reserved);
+        if (st != WF_OK) {
+            wf_car_free(&imported);
+            wf_xrpc_response_set_error(resp, 400, "InvalidRequest",
+                                       "repo exceeds the account byte quota");
+            st = WF_OK;
+            goto cleanup;
+        }
         for (size_t i = 0; i < imported.block_count; i++) {
             if (wf_car_find_block(&s->car, &imported.blocks[i].cid)) continue;
             wf_car_block *nb =
                 realloc(s->car.blocks, (s->car.block_count + 1) * sizeof(*nb));
             if (!nb) {
                 wf_car_free(&imported);
+                import_quota_release(s, reserved);
                 st = WF_ERR_ALLOC;
                 goto cleanup;
             }
@@ -1217,6 +1264,7 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
             blk->data = blk->data_len ? malloc(blk->data_len) : NULL;
             if (blk->data_len && !blk->data) {
                 wf_car_free(&imported);
+                import_quota_release(s, reserved);
                 st = WF_ERR_ALLOC;
                 goto cleanup;
             }
@@ -1229,6 +1277,7 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
 
         st = commit_persist(s, &new_head);
         if (st != WF_OK) {
+            import_quota_release(s, reserved);
             wf_xrpc_response_set_error(resp, 500, "InternalError",
                                        "failed to persist imported repo");
             st = WF_OK;
@@ -1297,6 +1346,16 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
                 goto cleanup;
             }
 
+            st = import_quota_reserve(s, &diff.new_blocks, &reserved);
+            if (st != WF_OK) {
+                wf_repo_diff_free(&diff);
+                wf_xrpc_response_set_error(
+                    resp, 400, "InvalidRequest",
+                    "repo exceeds the account byte quota");
+                st = WF_OK;
+                goto cleanup;
+            }
+
             bool merge_failed = false;
             for (size_t i = 0; i < diff.new_blocks.block_count; i++) {
                 wf_car_block *nbk = &diff.new_blocks.blocks[i];
@@ -1322,12 +1381,14 @@ static wf_status h_import_repo(void *ctx, const wf_xrpc_request *req,
             wf_cid new_head = diff.commit.cid;
             wf_repo_diff_free(&diff);
             if (merge_failed) {
+                import_quota_release(s, reserved);
                 st = WF_ERR_ALLOC;
                 goto cleanup;
             }
 
             st = commit_persist(s, &new_head);
             if (st != WF_OK) {
+                import_quota_release(s, reserved);
                 wf_xrpc_response_set_error(resp, 500, "InternalError",
                                            "failed to persist imported repo");
                 st = WF_OK;
@@ -1444,6 +1505,8 @@ wf_status metalbear_repo_routes_dispatch(metalbear_repo_store *store,
 
     if (strcmp(nsid, "com.atproto.repo.createRecord") == 0)
         return h_create_record(&b, req, resp);
+    if (strcmp(nsid, "com.atproto.repo.applyWrites") == 0)
+        return h_apply_writes(&b, req, resp);
     if (strcmp(nsid, "com.atproto.repo.getRecord") == 0)
         return h_get_record(&b, req, resp);
     if (strcmp(nsid, "com.atproto.repo.listRecords") == 0)

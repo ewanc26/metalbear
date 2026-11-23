@@ -104,6 +104,12 @@ typedef struct metalbear_config {
     /* Maximum blob upload size in bytes (refpds PDS_BLOB_UPLOAD_LIMIT).
      * 0 => no limit. Enforced in the blob upload path. */
     int64_t blob_upload_limit;
+    /* Default per-account storage quotas in bytes (issue #152). 0 (the
+     * default) means unlimited. These fill in accounts with no stored quota;
+     * an existing per-account quota always wins. Enforced by the repo and
+     * blob stores against the account's own usage counter. */
+    int64_t repo_byte_quota;
+    int64_t blob_byte_quota;
     /* Whether com.atproto.repo.importRepo accepts requests at all (refpds
      * PDS_ACCEPTING_REPO_IMPORTS). Defaults true; an operator who wants the
      * bulk-replace path closed off entirely can disable it. */

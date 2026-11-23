@@ -49,8 +49,10 @@
 #include "wolfram/repo/commit.h"
 #include "wolfram/xrpc_server.h"
 
-/* Forward declaration; the resolver may resolve a blob store per request. */
+/* Forward declarations; the resolver may resolve a blob store per request,
+ * and quota accounting lives in the account store. */
 typedef struct metalbear_blob_store metalbear_blob_store;
+typedef struct metalbear_account_store metalbear_account_store;
 
 #ifdef __cplusplus
 extern "C" {
@@ -151,6 +153,22 @@ metalbear_repo_store_signing_key_did(const metalbear_repo_store *store);
 
 wf_status metalbear_repo_store_set_handle(metalbear_repo_store *store,
                                           const char *handle);
+
+/*
+ * Attach the account store that owns this repo's byte quota (borrowed; the
+ * account context owns it and must outlive the repo store). Setting it also
+ * initialises durable usage from the block table, so an upgraded host starts
+ * with an accurate counter instead of treating existing bytes as free.
+ * NULL disables quota enforcement (standalone stores and older callers).
+ */
+void metalbear_repo_store_set_quota_account(metalbear_repo_store *store,
+                                            metalbear_account_store *account);
+
+/*
+ * Recompute durable usage from the block table after a GC pass removed
+ * blocks. Only useful when a quota account is attached.
+ */
+wf_status metalbear_repo_store_sync_quota_usage(metalbear_repo_store *store);
 
 wf_status metalbear_repo_store_get_stats(metalbear_repo_store *store,
                                          metalbear_repo_store_stats *out_stats);

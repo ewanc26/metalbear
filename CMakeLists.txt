@@ -696,6 +696,14 @@ if(METALBEAR_BUILD_TESTS)
   add_test(NAME metalbear_repo_read_after_write
            COMMAND test_metalbear_repo_read_after_write)
 
+  add_executable(test_metalbear_account_quotas test/test_account_quotas.c)
+  target_link_libraries(test_metalbear_account_quotas PRIVATE metalbear_core
+                        SQLite::SQLite3)
+  target_include_directories(
+    test_metalbear_account_quotas PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
+                                        "${METALBEAR_WOLFRAM_ROOT}/test")
+  add_test(NAME metalbear_account_quotas COMMAND test_metalbear_account_quotas)
+
   add_executable(test_metalbear_repo_store_resolver
                  test/test_repo_store_resolver.c)
   target_link_libraries(test_metalbear_repo_store_resolver

@@ -280,11 +280,17 @@ wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
                                    "Blob has been takendown, cannot re-upload");
         return WF_OK;
     }
-    if (metalbear_blob_store_put(acct->blobs, cid_str, mime, request->body,
-                                 request->body_len) != WF_OK) {
+    wf_status put_st = metalbear_blob_store_put(
+        acct->blobs, cid_str, mime, request->body, request->body_len);
+    if (put_st != WF_OK) {
         free(cid_str);
-        wf_xrpc_response_set_error(response, 500, "InternalError",
-                                   "failed to store blob");
+        if (put_st == WF_ERR_RATE_LIMIT)
+            wf_xrpc_response_set_error(
+                response, 413, "BlobTooLarge",
+                "blob would exceed the account storage quota");
+        else
+            wf_xrpc_response_set_error(response, 500, "InternalError",
+                                       "failed to store blob");
         return WF_OK;
     }
     metalbear_metrics_inc(METALBEAR_METRIC_BLOBS_UPLOADED);

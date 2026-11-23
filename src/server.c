@@ -172,6 +172,8 @@ static bool copy_config(metalbear_server *server,
         server->admission_closed_domains =
             strdup(config->admission_closed_domains);
     server->blob_upload_limit = config->blob_upload_limit;
+    server->repo_byte_quota = config->repo_byte_quota;
+    server->blob_byte_quota = config->blob_byte_quota;
     server->drain_timeout_seconds = config->drain_timeout_seconds;
     server->accepting_imports = config->accepting_imports;
     server->max_import_size = config->max_import_size;
@@ -440,6 +442,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
      * reads. */
     metalbear_account_cache_set_sequencer(server->account_cache,
                                           server->sequencer);
+    metalbear_account_cache_set_quota_defaults(
+        server->account_cache, (uint64_t)server->repo_byte_quota,
+        (uint64_t)server->blob_byte_quota);
     /* Bound the resident account set for small hosts (e.g. a 256 MB Pi 1B).
      * The config file sets the deployment default; METALBEAR_MAX_RESIDENT_
      * ACCOUNTS overrides it at runtime. */
