@@ -46,3 +46,37 @@ harness always provides one.
 `conformance.yml` is a manually dispatched, advisory workflow for pointing the
 same checker at the dev instance. It is not part of the `CI gate`, so a failure
 there never blocks a merge.
+
+## Community compatibility
+
+`community-compat.yml` runs nightly and is also manually dispatchable. It is
+advisory for the same reason: it drives the public `bsky.app` UI, so an upstream
+page change can fail the run without saying anything about MetalBear. It builds
+the current tree, boots a throwaway loopback instance with the same identity
+semantics as `scripts/setup.sh --local` (no PLC writes), creates two accounts
+with generated passwords, and runs a pinned checkout of
+[`atproto-smoke`](https://github.com/aliceisjustplaying/atproto-smoke) against
+it. `tools/community-compat.sh` is the shared runner; `SUITE_DIR` points it at
+the external checkout. The summary, browser screenshots and server log are
+published as the `community-compat` artifact and in the job summary.
+
+The suite is pinned to `6669808cedbcf624c5e849ac05cf336c12e22953` so a failing
+nightly can be compared against a known checkout. Its current login flow depends
+on the live `bsky.app` page, so a green run also needs network access and an
+unchanged upstream login dialog. It does not create accounts itself and receives
+no credentials from the repository.
+
+`happyproto/pds-test` is deliberately not a matrix leg. It builds nightly
+container images of several PDS implementations; it is not a runnable suite, has
+no target-PDS argument or account scenarios, and has no licence file. Treating
+its Cocoon image as a MetalBear test would only assert that a different server
+starts.
+
+### Triage
+
+Every community-suite failure is recorded here as a bug, deferred, or a
+documented divergence; none is silently skipped.
+
+| Date | Failure | Classification | Reason |
+|---|---|---|---|
+| 2026-11-23 | `login` times out waiting for the `Bluesky Social` dialog text | Deferred (upstream UI drift) | The pinned suite's browser selector no longer matches the current public `bsky.app` login dialog. The local MetalBear started, served `/xrpc/_health`, and created both throwaway accounts with `did:key` identities before the browser step failed; no MetalBear assertion failed. |

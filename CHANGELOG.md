@@ -9,6 +9,7 @@ into the next version's. Releases made before it existed are described only by t
 
 ### Added
 
+- Nightly advisory community compatibility run of pinned `atproto-smoke` against a throwaway local-mode instance, with results and triage published in `docs/conformance.md`. ([#249](https://github.com/ewanc26/metalbear/issues/249))
 - Notification channel interface with email and JSON webhook channels, configured by `notify.webhook_url` / `notify.webhook_secret`; every configured channel receives account notifications and secrets are never logged. ([#132](https://github.com/ewanc26/metalbear/issues/132))
 
 ## [0.57.0] - 2026-11-23

@@ -1,0 +1,92 @@
+name: Community compatibility
+
+# Advisory only. The nightly job never gates a merge and is not in CI gate:
+# it depends on the public bsky.app UI and AppView, so upstream drift is
+# expected. Results are published as an artifact and a job summary, then
+# triaged in docs/conformance.md.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  atproto-smoke:
+    name: atproto-smoke against local MetalBear
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config libsqlite3-dev libcurl4-openssl-dev \
+            libssl-dev libsecp256k1-dev libmicrohttpd-dev libzstd-dev zlib1g-dev \
+            libc-ares-dev libidn2-dev libpcre2-dev
+
+      - name: Build MetalBear
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+
+      - name: Fetch pinned atproto-smoke
+        run: |
+          git clone https://github.com/aliceisjustplaying/atproto-smoke.git "$RUNNER_TEMP/atproto-smoke"
+          git -C "$RUNNER_TEMP/atproto-smoke" checkout 6669808cedbcf624c5e849ac05cf336c12e22953
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install suite dependencies
+        run: |
+          cd "$RUNNER_TEMP/atproto-smoke"
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+
+      - name: Run community compatibility suite
+        env:
+          SUITE_DIR: ${{ runner.temp }}/atproto-smoke
+          OUTPUT_DIR: ${{ github.workspace }}/build/community-compat
+        run: tools/community-compat.sh
+
+      - name: Publish results to the job summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          path = "build/community-compat/summary.json"
+          summary = os.environ["GITHUB_STEP_SUMMARY"]
+          if not os.path.exists(path):
+              with open(summary, "a", encoding="utf-8") as out:
+                  out.write("## Community compatibility\n\nNo suite summary was produced.\n")
+              raise SystemExit(0)
+
+          with open(path, encoding="utf-8") as src:
+              data = json.load(src)
+          with open(summary, "a", encoding="utf-8") as out:
+              out.write("## Community compatibility\n\n")
+              outcome = "passed" if data.get("ok") and not data.get("fatal") else "failed"
+              out.write("atproto-smoke %s against a local mode MetalBear.\n\n" % outcome)
+              for step in data.get("steps", []):
+                  out.write("- %s: %s\n" % (step.get("status"), step.get("name")))
+              if data.get("fatal"):
+                  out.write("\nFatal:\n\n```\n%s\n```\n" % data["fatal"])
+              out.write("\nFull results are in the `community-compat` artifact.\n")
+          PY
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: community-compat
+          path: build/community-compat
+          if-no-files-found: warn
+          retention-days: 14
