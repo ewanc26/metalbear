@@ -6,6 +6,25 @@ optional stack in `deploy/monitoring/` adds Prometheus, Grafana and a
 node-exporter around that endpoint for a self-hoster who does not already run
 them.
 
+## Public status panel
+
+An operator who wants a small, public "this instance is alive" panel can opt in
+with `[server] public_status = true` (or `METALBEAR_PUBLIC_STATUS=1`). That adds
+a `publicStatus` object to the otherwise public `GET /operator.json` and renders
+it on the landing page: uptime, worker count, resident memory, open file
+descriptors, load averages, disk/data/blob byte totals, aggregate repo/blob
+usage, firehose sequence and last-event age, and request totals.
+
+The flag is off by default. When off, the field is **absent**, not zeroed: a
+client cannot mistake an opted-out host for one with no activity. The snapshot
+is deliberately aggregate-only. There are no account DIDs, handles, emails,
+client addresses or raw request paths; route labels are NSIDs, and anything
+that looks like a path is folded into `other`. The fuller per-status view stays
+admin-gated at `/metrics`, including the per-account and per-route breakdowns
+that should not be published by a private host. Resource sampling is done on
+each request, which is fine for a small host but is not a replacement for the
+continuous series in Prometheus.
+
 ## Start the stack
 
 1. Put the admin password on the host in a file readable only by the operator,

@@ -60,6 +60,8 @@ struct metalbear_server {
     int64_t drain_timeout_seconds;
     /* When this process began serving, for the uptime gauge at /metrics. */
     time_t started_at;
+    /* Configured XRPC worker count, reported by the opt-in public status. */
+    unsigned int thread_count;
     /*
      * The server's own PLC rotation key and OAuth store.
      *
@@ -148,6 +150,9 @@ struct metalbear_server {
     char *privacy_policy_url;
     char *terms_of_service_url;
     bool development;
+    /* Opt-in public resource status (issue #267). Off unless explicitly set;
+     * gates every resource field in /operator.json and the landing panel. */
+    bool public_status;
     int64_t retention_max_age;
     int64_t retention_min_events;
     /* Scheduled backup timer, or NULL when backups are off. */

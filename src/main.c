@@ -295,6 +295,15 @@ int main(int argc, char **argv) {
         }
     }
     {
+        const char *v = getenv("METALBEAR_PUBLIC_STATUS");
+        if (v && v[0]) {
+            if (strcmp(v, "1") == 0 || strcmp(v, "true") == 0)
+                config.public_status = true;
+            else if (strcmp(v, "0") == 0 || strcmp(v, "false") == 0)
+                config.public_status = false;
+        }
+    }
+    {
         char err[256] = "";
         if (!metalbear_custom_domain_config_valid(config.allowed_custom_domains,
                                                   err, sizeof(err))) {

@@ -78,6 +78,44 @@ export interface OperatorInfo {
 		inviteCodeRequired?: boolean;
 		closed?: boolean;
 	};
+	/**
+	 * Opt-in aggregate resource status (issue #267). Absent unless the operator
+	 * enables [server] public_status / METALBEAR_PUBLIC_STATUS; never zeroed on
+	 * opted-out hosts. All values are host/process aggregates, never accounts.
+	 */
+	publicStatus?: {
+		uptimeSeconds?: number;
+		workerThreads?: number;
+		openFdCount?: number;
+		rssBytes?: number;
+		cpuLoad?: {
+			oneMinute?: number;
+			fiveMinute?: number;
+			fifteenMinute?: number;
+		};
+		disk?: {
+			filesystem?: {
+				totalBytes?: number;
+				usedBytes?: number;
+				availableBytes?: number;
+			};
+			dataDirectoryBytes?: number;
+			blobStoreBytes?: number;
+		};
+		storage?: {
+			repoBytes?: number;
+			blobBytes?: number;
+		};
+		firehose?: {
+			sequence?: number;
+			lastEventAgeSeconds?: number | null;
+		};
+		requests?: {
+			total?: number;
+			failed?: number;
+			byRoute?: Record<string, { requests?: number; errors?: number }>;
+		};
+	};
 	description?: string;
 	development?: boolean;
 }

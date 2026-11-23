@@ -1100,6 +1100,8 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     COPY_OPT(terms_of_service_url);
 #undef COPY_OPT
     server->development = config->development;
+    server->public_status = config->public_status;
+    server->thread_count = config->thread_count;
 
     /* Configure firehose retention */
     server->retention_max_age = config->retention_max_age_seconds > 0

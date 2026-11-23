@@ -44,6 +44,7 @@ static void test_reads_every_type(void) {
         "port = 8080\n"
         "threads = 6\n"
         "service_did = \"did:web:example.com\"\n"
+        "public_status = true\n"
         "\n"
         "[accounts]\n"
         "invite_required = false\n"
@@ -72,6 +73,7 @@ static void test_reads_every_type(void) {
     CHECK(cfg.service_did &&
           strcmp(cfg.service_did, "did:web:example.com") == 0);
     CHECK(cfg.invite_required == false);
+    CHECK(cfg.public_status == true);
     CHECK(cfg.max_resident_accounts == 7);
     CHECK(cfg.deletion_hold_seconds == 86400);
     CHECK(cfg.repo_gc_interval_seconds == 86400);

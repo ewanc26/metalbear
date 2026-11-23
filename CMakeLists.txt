@@ -218,6 +218,7 @@ set(METALBEAR_CORE_SOURCES
   src/repo/blob_lifecycle.c
   src/repo/blob_sweep.c
   src/ops/status.c
+  src/ops/public_status.c
   src/ops/frontend_static.c
   src/label/label_store.c
   src/label/labels_routes.c
@@ -342,6 +343,12 @@ if(METALBEAR_BUILD_TESTS)
   target_include_directories(test_metalbear
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_server COMMAND test_metalbear)
+
+  add_executable(test_metalbear_public_status test/test_public_status.c)
+  target_link_libraries(test_metalbear_public_status PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_public_status
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_public_status COMMAND test_metalbear_public_status)
 
   add_executable(test_metalbear_lexicon_resolve test/test_lexicon_resolve.c)
   target_link_libraries(test_metalbear_lexicon_resolve PRIVATE metalbear_core)

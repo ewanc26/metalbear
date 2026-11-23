@@ -43,6 +43,11 @@ void metalbear_sequencer_repo_event(const metalbear_repo_store_event *event,
 wf_status metalbear_sequencer_register(metalbear_sequencer *sequencer,
                                        wf_xrpc_server *server);
 int64_t metalbear_sequencer_current(metalbear_sequencer *sequencer);
+/*
+ * Unix time of the most recent event, or 0 when the log is empty. Used by the
+ * opt-in public status to publish cursor age without exposing event contents.
+ */
+int64_t metalbear_sequencer_last_event_epoch(metalbear_sequencer *sequencer);
 
 /* Heal a missing tail event after a crash or when adopting an existing repo. */
 wf_status metalbear_sequencer_reconcile_repo(metalbear_sequencer *sequencer,

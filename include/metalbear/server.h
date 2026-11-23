@@ -183,6 +183,14 @@ typedef struct metalbear_config {
     /* Marks a testing instance, so the landing page can say plainly that the
      * accounts on it are not people. */
     bool development;
+    /*
+     * Opt-in public resource status (issue #267). Off by default: /metrics is
+     * admin-gated because it publishes a private host's activity, and the
+     * landing panel has to follow the same reasoning. When true, aggregate
+     * resource figures are added to /operator.json and rendered on the
+     * landing page. No per-account identifiers are ever included.
+     */
+    bool public_status;
     /* PLC directory URL for did:plc account creation. NULL/empty => accounts
      * default to did:key instead of did:plc. */
     const char *plc_url;
