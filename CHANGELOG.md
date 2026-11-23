@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-11-23
+
 ### Added
 
 - Per-account repo and blob byte quotas, configurable with `limits.repo_bytes` / `limits.blob_bytes`, with usage tracked in the account store (schema version 6). ([#152](https://github.com/ewanc26/metalbear/issues/152))
