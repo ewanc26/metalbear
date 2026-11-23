@@ -191,6 +191,9 @@ static std::string unescape_basic(const std::string &v) {
     STR("smtp.from_name", from_name)                                           \
     BOOL("smtp.starttls", smtp_starttls)                                       \
                                                                                \
+    STR("notify.webhook_url", notify_webhook_url)                              \
+    STR("notify.webhook_secret", notify_webhook_secret)                        \
+                                                                               \
     BOOL("updates.check_enabled", update_check_enabled)                        \
     INT("updates.check_interval_seconds", update_check_interval)               \
     STR("updates.metalbear_repo", update_metalbear_repo)                       \

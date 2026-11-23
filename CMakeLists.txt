@@ -203,6 +203,7 @@ set(METALBEAR_CORE_SOURCES
   src/server_drain.c
   src/server_auth.c
   src/server_guards.c
+  src/notify.c
   src/server_identity.c
   src/admin/admin_routes.c
   src/admin/audit.c
@@ -599,6 +600,11 @@ if(METALBEAR_BUILD_TESTS)
     target_link_libraries(test_metalbear_email_internal PRIVATE metalbear_core)
     add_test(NAME metalbear_email_internal COMMAND test_metalbear_email_internal)
   endif()
+
+  add_executable(test_metalbear_notify_channels test/test_notify_channels.c)
+  target_link_libraries(test_metalbear_notify_channels PRIVATE metalbear_core
+                                                              Threads::Threads)
+  add_test(NAME metalbear_notify_channels COMMAND test_metalbear_notify_channels)
 
   if(METALBEAR_MODULE_EMAIL)
     add_executable(test_metalbear_account_email_send_failure

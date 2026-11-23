@@ -233,6 +233,8 @@ int main(int argc, char **argv) {
     ENV_STR("METALBEAR_SMTP_PASSWORD", smtp_password);
     ENV_STR("METALBEAR_FROM_ADDRESS", from_address);
     ENV_STR("METALBEAR_FROM_NAME", from_name);
+    ENV_STR("METALBEAR_NOTIFY_WEBHOOK_URL", notify_webhook_url);
+    ENV_STR("METALBEAR_NOTIFY_WEBHOOK_SECRET", notify_webhook_secret);
     ENV_STR("METALBEAR_DNS_PROVIDER", dns_provider);
     ENV_STR("METALBEAR_DNS_API_TOKEN", dns_api_token);
     ENV_STR("METALBEAR_DNS_ZONE_ID", dns_zone_id);

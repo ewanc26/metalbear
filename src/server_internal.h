@@ -21,6 +21,7 @@
 #ifdef METALBEAR_MODULE_EMAIL
 #include "metalbear/email.h"
 #endif
+#include "metalbear/notify.h"
 #include "metalbear/admission.h"
 #include "metalbear/admin/audit.h"
 #include "metalbear/label/label_store.h"
@@ -114,6 +115,9 @@ struct metalbear_server {
      * a route-specific limiter always takes precedence (see
      * wf_server_find_route_rate_limiter in xrpc_server.c). */
     wf_rate_limiter *rl_get_repo_5min;
+    /* Notification channels. Owned by the server; the email channel borrows
+     * `email` below and the webhook channel owns its own context. */
+    metalbear_notifier *notifier;
 #ifdef METALBEAR_MODULE_EMAIL
     metalbear_email *email;
 #endif

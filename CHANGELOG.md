@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- Notification channel interface with email and JSON webhook channels, configured by `notify.webhook_url` / `notify.webhook_secret`; every configured channel receives account notifications and secrets are never logged. ([#132](https://github.com/ewanc26/metalbear/issues/132))
+
 ## [0.57.0] - 2026-11-23
 
 ### Added
