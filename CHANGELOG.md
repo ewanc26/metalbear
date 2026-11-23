@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-11-23
+
 ### Added
 
 - Per-scope OAuth consent: the consent page lists each requested scope token with a plain-language description, lets users deselect optional permissions, and marks permissions that are new since the last grant. Required grants (`atproto`, `transition:*`, `identity:*` and their `include:` references) stay locked, the server rejects any approval that widens or drops a required scope, denial returns a real `error=access_denied` redirect built from the pushed request, and token responses report the narrowed `scope`. ([#261](https://github.com/ewanc26/metalbear/issues/261))
