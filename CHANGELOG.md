@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Fixed
+
+- The browser frontend builds again after the SvelteKit 3 bump, using its `#lib` subpath imports and `$app/state` page object. ([#255](https://github.com/ewanc26/metalbear/pull/255))
+
 ## [0.56.1] - 2026-11-22
 
 ### Fixed
