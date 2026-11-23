@@ -698,6 +698,19 @@ at `/` and the C landing page is at `/landing`. Without the variable, the C
 landing page stays at `/` and no frontend is served. A directory that does not
 exist stops startup.
 
+### Repo browser
+
+`/repo` is a read-only browser for public repositories on this instance. It is
+a prerendered page driven by query parameters (`/repo?did=…`), so it works when
+the frontend is served as static files. Search by handle or DID, then open a
+collection to page through its records, click a record for its raw JSON, CID
+and URI, or switch to the blob tab for CID, size, type and download links.
+Handle resolution uses the public `resolveHandle` endpoint; taken-down and
+deactivated accounts are reported by `getRepoStatus` without exposing their
+withheld records. Collection counts are a lower bound sampled from the first
+100 records because `describeRepo` does not publish totals. The admin lookup
+page and the landing page's hosted-repository list link straight into it.
+
 ## Build and test
 
 C is the default language. C++ is used where C is not enough: RAII for

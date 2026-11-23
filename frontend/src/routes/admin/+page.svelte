@@ -319,6 +319,12 @@
 						>
 							{account.invitesDisabled ? 'Enable invites' : 'Disable invites'}
 						</button>
+						<a
+							href={`/repo?did=${encodeURIComponent(account.did)}`}
+							class="rounded-lg border border-emerald-800/60 px-3 py-1.5 text-sm text-emerald-400 transition hover:border-emerald-600 hover:text-emerald-300"
+						>
+							Browse repo →
+						</a>
 					</div>
 
 					{#if actionError}
@@ -364,12 +370,20 @@
 									<span>{r.active ? 'active' : (r.status ?? 'inactive')}</span>
 								</div>
 							</div>
-							<button
-								onclick={() => handleBrowseLookup(r.did)}
-								class="shrink-0 text-sm text-emerald-500 hover:text-emerald-400"
-							>
-								Look up →
-							</button>
+							<div class="flex shrink-0 gap-3">
+								<a
+									href={`/repo?did=${encodeURIComponent(r.did)}`}
+									class="text-sm text-slate-400 hover:text-white"
+								>
+									Browse →
+								</a>
+								<button
+									onclick={() => handleBrowseLookup(r.did)}
+									class="text-sm text-emerald-500 hover:text-emerald-400"
+								>
+									Look up →
+								</button>
+							</div>
 						</li>
 					{/each}
 				</ul>
