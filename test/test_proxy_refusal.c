@@ -267,9 +267,21 @@ int main(void) {
             CHECK(bad_service.status == 403);
             wf_response_free(&bad_service);
 
+            /* A bare DID with no `#service` must be refused cleanly too: it
+             * is a real client shape, and the service-id alias lookup used
+             * on the allowlist path must not dereference a NULL id. */
+            CHECK(wf_xrpc_client_set_proxy(
+                      client, "did:web:labeler.example.com") == WF_OK);
+            wf_response bare_did = {0};
+            st = wf_xrpc_query(client, "chat.bsky.convo.listConvos", NULL,
+                               &bare_did);
+            CHECK(st == WF_ERR_HTTP);
+            CHECK(bare_did.status == 403);
+            wf_response_free(&bare_did);
+
             uint64_t after =
                 metalbear_metrics_get(METALBEAR_METRIC_PROXY_REFUSALS);
-            CHECK(after - before == 2);
+            CHECK(after - before == 3);
 
             /* The configured AppView DID is on the allowlist: its header maps
              * to appview_url without a did:web lookup and reaches the mock. */

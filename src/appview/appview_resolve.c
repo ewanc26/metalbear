@@ -19,6 +19,7 @@
  * service `#atproto_bsky_app` (and chat `#atproto_bsky_chat` vs `#bsky_chat`).
  * Accept both so an `atproto-proxy` header written for either era resolves. */
 static const char *service_id_alias(const char *id) {
+    if (!id) return NULL;
     static const struct {
         const char *a;
         const char *b;
