@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-11-23
+
 ### Added
 
 - Authenticated `atproto-proxy` forwarding for chat, labeler and Ozone routes: the destination DID and service id are resolved and validated against a default allowlist (Bluesky chat and labeler, the configured AppView and moderator service) plus `appview.proxy_destinations`, unknown destinations are refused with a counted 403, and `atproto-accept-labelers` is forwarded. Responses are relayed with the buffered adapter; true chunked/SSE streaming waits on an upstream Wolfram response-streaming primitive. ([#251](https://github.com/ewanc26/metalbear/issues/251))
