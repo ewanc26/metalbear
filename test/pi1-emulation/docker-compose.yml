@@ -1,0 +1,98 @@
+# Pi 1B/Zero-class resource-budget emulation for MetalBear.
+#
+# Runs the published container image under cgroup caps modelled on the
+# 256 MiB acceptance gates in docs/pi1-hardware-validation.md: idle RSS
+# <= 64 MiB, sampled peak RSS <= 128 MiB, <= 4 threads, <= 64 open FDs,
+# health within 15 s of start, no OOM or swap thrashing.
+#
+# This is a pre-flight harness, not hardware validation. No ARM1176 is
+# emulated anywhere in this file, the latency gates do not transfer, and
+# no result from it is ever Pi hardware evidence for #34.
+
+name: metalbear-pi1-emulation
+
+# The shared budget: a hard 256 MiB memory ceiling with no swap (a breach
+# is a loud OOM kill, matching the runbook's "no OOM or swap thrashing"
+# gate), a process ceiling with headroom over the <= 4 in-server threads
+# the runbook allows, and a file-descriptor ceiling.
+x-pi1-budget: &pi1-budget
+  mem_limit: 256m
+  memswap_limit: 256m
+  pids_limit: 32
+  ulimits:
+    nofile:
+      soft: 128
+      hard: 128
+  # Uncomment to soak-test under a deliberately slow single core. The Pi
+  # 1B/Zero clock itself is not emulated, latency gates transfer neither
+  # way, and numbers gathered with a throttle stay unlabeled as timing data:
+  # cpus: "0.25"
+
+# Disposable local-instance identity and limits, using the same
+# environment variables as the runbook in docs/pi1-hardware-validation.md.
+# The service DID and user domain are .invalid placeholders, so nothing
+# here can resolve, federate or claim a real handle. The admin password is
+# a published local-test value: the harness binds loopback only, and it
+# exists so /metrics (which is admin-gated by design) can be read during
+# a run.
+x-metalbear-config: &metalbear-config
+  METALBEAR_SERVICE_DID: did:web:pi1-emulation.invalid
+  METALBEAR_USER_DOMAIN: .pi1-emulation.invalid
+  METALBEAR_ADMIN_PASSWORD: pi1-emulation-only
+  METALBEAR_MAX_RESIDENT_ACCOUNTS: 16
+  METALBEAR_CONFIG: /etc/metalbear/pi1-emulation.toml
+  ## Single-user mode (#264) is not implemented yet; the harness is its
+  ## natural first test bed once it lands, so it is left here, inert:
+  # METALBEAR_SINGLE_USER: "1"
+
+x-healthcheck: &healthcheck
+  # The runbook gates on /xrpc/_health; busybox wget ships in the image.
+  test: ["CMD", "wget", "-q", "-T", "2", "-O", "/dev/null", "http://127.0.0.1:2583/xrpc/_health"]
+  interval: 5s
+  timeout: 3s
+  retries: 10
+  start_period: 15s
+
+services:
+  # Default profile: the smallest published image (~40 MB Alpine/musl) on
+  # the host's own architecture, under the Pi 1B/Zero budget cap.
+  metalbear:
+    <<: *pi1-budget
+    image: ghcr.io/ewanc26/metalbear:latest-alpine
+    container_name: pi1-metalbear
+    environment:
+      <<: *metalbear-config
+    ports:
+      - "127.0.0.1:25830:2583"
+    volumes:
+      - ./pi1-emulation.toml:/etc/metalbear/pi1-emulation.toml:ro
+      - pi1-data:/data
+    healthcheck: *healthcheck
+    # No restart policy on purpose: a crash or an OOM kill stops the
+    # container so the tester sees the failure instead of a retry loop
+    # quietly absorbing it.
+
+  # Optional profile: the same image under QEMU arm/v7 emulation. There is
+  # no ARMv6 image and this is not one; ARMv7 is the nearest published
+  # platform, and it exercises the musl/32-bit code paths, not the
+  # ARM1176 execution gate.
+  #   One-time setup: docker run --privileged --rm tonistiigi/binfmt --install arm
+  #   Run with:         docker compose --profile emulate-arm up
+  metalbear-arm:
+    <<: *pi1-budget
+    image: ghcr.io/ewanc26/metalbear:latest-alpine
+    platform: linux/arm/v7
+    profiles: ["emulate-arm"]
+    container_name: pi1-metalbear-arm
+    environment:
+      <<: *metalbear-config
+    ports:
+      - "127.0.0.1:25831:2583"
+    volumes:
+      - ./pi1-emulation.toml:/etc/metalbear/pi1-emulation.toml:ro
+      - pi1-arm-data:/data
+    healthcheck: *healthcheck
+
+volumes:
+  pi1-data:
+  pi1-arm-data:
