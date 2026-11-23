@@ -2,6 +2,7 @@
 #define METALBEAR_SERVER_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -9,6 +10,15 @@ extern "C" {
 #endif
 
 typedef struct metalbear_server metalbear_server;
+
+/*
+ * Validate handles.allowed_custom_domains. Entries are comma-separated dotted
+ * suffixes (".example.com"); an empty list is valid and allows any custom
+ * domain when handles.allow_custom_domains is on. Writes a short reason to err
+ * when returning false.
+ */
+bool metalbear_custom_domain_config_valid(const char *domains, char *err,
+                                          size_t err_len);
 
 typedef struct metalbear_config {
     const char *listen_address;
@@ -18,6 +28,16 @@ typedef struct metalbear_config {
     const char *service_did;
     const char *public_url; /* optional; derived from did:web when omitted */
     const char *user_domain;
+    /* Opt-in custom-domain handles (issue #250). When false, createAccount
+     * and updateHandle continue to accept only handles under user_domain.
+     * When true, a handle outside it must be proved by `_atproto.<handle>`
+     * TXT or HTTPS well-known resolution to the account's DID before any
+     * PLC operation is submitted. `allowed_custom_domains` is an optional
+     * comma-separated list of dotted suffixes (".example.com"); empty means
+     * any otherwise-valid custom domain. Host-zone DNS automation and
+     * reserved host labels never apply to these handles. */
+    bool allow_custom_domains;
+    const char *allowed_custom_domains;
     /*
      * Hex-encoded secp256k1 private key used to sign PLC operations
      * (refpds PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX).

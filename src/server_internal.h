@@ -162,6 +162,10 @@ struct metalbear_server {
     char *admin_password; /* may be NULL => admin endpoints 401 */
     char *crawlers;       /* comma-separated relay hosts, may be NULL */
     bool invite_required;
+    /* Opt-in custom-domain handles (issue #250). `allowed_custom_domains` is
+     * a comma-separated dotted-suffix allowlist; empty means any domain. */
+    bool allow_custom_domains;
+    char *allowed_custom_domains;
     /* Per-domain signup policy; the mode is the resolved fallback and the
      * strings are comma-separated leading-dot suffixes (issue #163). */
     metalbear_admission_mode admission_default_mode;
@@ -265,6 +269,37 @@ bool handle_syntax_and_domain_valid(metalbear_server *server,
 bool handle_is_reserved_now(metalbear_server *server, const char *handle);
 bool handle_is_available_for_signup(metalbear_server *server,
                                     const char *handle, const char *except_did);
+
+/* Domain policy shared by createAccount, updateHandle, the admin override and
+ * availability. Host-minted handles use `server->user_domain`; custom-domain
+ * handles are only considered when the opt-in is enabled and, when an
+ * allowlist is configured, the handle's dotted suffix matches it. */
+bool metalbear_handle_is_host_domain(const metalbear_server *server,
+                                     const char *handle);
+bool metalbear_handle_is_allowed_custom_domain(const metalbear_server *server,
+                                               const char *handle);
+bool metalbear_handle_domain_supported(const metalbear_server *server,
+                                       const char *handle);
+bool metalbear_handle_requires_ownership_verification(
+    const metalbear_server *server, const char *handle);
+
+/* Test-only resolver seam. NULL in production, where the implementation
+ * calls wf_handle_resolve. Tests substitute a deterministic DID resolver; the
+ * comparison against the account's expected DID stays in production code. */
+typedef wf_status (*metalbear_handle_resolver_fn)(const char *handle,
+                                                  const char *expected_did,
+                                                  char **out_did);
+extern metalbear_handle_resolver_fn metalbear_test_handle_resolver;
+wf_status metalbear_verify_handle_ownership(const metalbear_server *server,
+                                            const char *handle,
+                                            const char *expected_did);
+/* Shared response mapping: a custom handle that fails resolution is a clear
+ * 400 InvalidRequest and leaves the caller before any PLC write or local
+ * handle mutation. Host handles are a no-op. */
+bool metalbear_verify_handle_ownership_or_respond(metalbear_server *server,
+                                                  wf_xrpc_response *response,
+                                                  const char *handle,
+                                                  const char *expected_did);
 
 /* Serialize `root` (consumed) into `response` as the XRPC JSON body. */
 wf_status set_json(wf_xrpc_response *response, cJSON *root);

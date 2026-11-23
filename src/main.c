@@ -212,6 +212,7 @@ int main(int argc, char **argv) {
     ENV_STR("METALBEAR_MOD_SERVICE_DID", mod_service_did);
     ENV_STR("METALBEAR_PUBLIC_URL", public_url);
     ENV_STR("METALBEAR_USER_DOMAIN", user_domain);
+    ENV_STR("METALBEAR_ALLOWED_CUSTOM_DOMAINS", allowed_custom_domains);
     ENV_STR("METALBEAR_PLC_ROTATION_KEY", plc_rotation_key);
     ENV_STR("METALBEAR_PLC_URL", plc_url);
     ENV_STR("METALBEAR_ADMIN_PASSWORD", admin_password);
@@ -278,6 +279,23 @@ int main(int argc, char **argv) {
         const char *v = getenv("METALBEAR_DEVELOPMENT");
         if (v && (strcmp(v, "1") == 0 || strcmp(v, "true") == 0))
             config.development = true;
+    }
+    {
+        const char *v = getenv("METALBEAR_ALLOW_CUSTOM_DOMAINS");
+        if (v && v[0]) {
+            if (strcmp(v, "1") == 0 || strcmp(v, "true") == 0)
+                config.allow_custom_domains = true;
+            else if (strcmp(v, "0") == 0 || strcmp(v, "false") == 0)
+                config.allow_custom_domains = false;
+        }
+    }
+    {
+        char err[256] = "";
+        if (!metalbear_custom_domain_config_valid(config.allowed_custom_domains,
+                                                  err, sizeof(err))) {
+            fprintf(stderr, "MetalBear [ERROR] %s\n", err);
+            return 2;
+        }
     }
     {
         const char *v = getenv("METALBEAR_THREADS");

@@ -230,6 +230,10 @@ default         = "invite"         # open | invite | closed
 open_domains    = [".open.example.com"]
 closed_domains  = [".closed.example.com"]
 
+[handles]                          # opt-in custom-domain handles
+allow_custom_domains  = false      # verify DNS/well-known before any PLC write
+# allowed_custom_domains = [".example.net"]
+
 [limits]
 rate_limit                = 3000   # per client, per window
 rate_limit_window_seconds = 60
@@ -292,7 +296,11 @@ A handle is verified either over HTTPS at
 `_atproto.<handle>` holding `did=<did>`.
 
 Handle labels are limited to 3–18 characters under the configured user domain
-and may not use the reference PDS's reserved names; see [docs/handles.md](docs/handles.md).
+and may not use the reference PDS's reserved names. With `[handles]
+allow_custom_domains = true` a handle outside that domain is accepted when it
+already resolves to the account's DID; the domain owner publishes that record
+and MetalBear verifies it before any PLC write. See
+[docs/handles.md](docs/handles.md).
 
 A wildcard certificate covers **one** label. A host minting
 `alice.pds.example.com` under `*.example.com` therefore has no certificate for

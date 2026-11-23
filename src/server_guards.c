@@ -16,6 +16,7 @@
 #include "server/includes.h"
 
 #include "metalbear/handle/reserved.h"
+#include "wolfram/identity.h"
 
 /* Logging lives in log.c so the daemon shares it: see metalbear/log.h. */
 
@@ -72,26 +73,176 @@ bool query_param_bool(const cJSON *params, const char *name, bool fallback) {
     return fallback;
 }
 
+/* ---- Custom-domain handle policy (issue #250) -------------------------- */
+
+/* Walk a comma-separated dotted-suffix list, trimming blanks exactly as the
+ * admission lists do. The list is configuration, not account state. */
+static const char *next_custom_domain(const char *list, size_t *out_len) {
+    if (!list) {
+        *out_len = 0;
+        return NULL;
+    }
+    const char *p = list;
+    while (*p == ' ' || *p == '\t' || *p == ',') p++;
+    if (!*p) {
+        *out_len = 0;
+        return NULL;
+    }
+    const char *start = p;
+    while (*p && *p != ',') p++;
+    size_t len = (size_t)(p - start);
+    while (len && (start[len - 1] == ' ' || start[len - 1] == '\t')) len--;
+    if (!len) return next_custom_domain(p, out_len);
+    *out_len = len;
+    return start;
+}
+
+bool metalbear_custom_domain_config_valid(const char *domains, char *err,
+                                          size_t err_len) {
+    size_t len = 0;
+    const char *item = domains;
+    while ((item = next_custom_domain(item, &len)) != NULL) {
+        if (len < 2 || item[0] != '.') {
+            if (err && err_len)
+                snprintf(err, err_len,
+                         "handles.allowed_custom_domains entries must be "
+                         "domain suffixes starting with '.'");
+            return false;
+        }
+        for (size_t i = 0; i < len; i++) {
+            if (item[i] == ' ' || item[i] == '\t') {
+                if (err && err_len)
+                    snprintf(err, err_len,
+                             "handles.allowed_custom_domains entries must "
+                             "not contain whitespace");
+                return false;
+            }
+        }
+        item += len;
+    }
+    return true;
+}
+
+bool metalbear_handle_is_host_domain(const metalbear_server *server,
+                                     const char *handle) {
+    if (!server || !handle || !*handle) return false;
+    size_t handle_length = strlen(handle);
+    size_t domain_length =
+        server->user_domain ? strlen(server->user_domain) : 0;
+    return domain_length != 0 && handle_length > domain_length &&
+           strcmp(handle + handle_length - domain_length,
+                  server->user_domain) == 0;
+}
+
+bool metalbear_handle_is_allowed_custom_domain(const metalbear_server *server,
+                                               const char *handle) {
+    if (!server || !server->allow_custom_domains || !handle || !*handle)
+        return false;
+    if (wf_syntax_handle_validate(handle) != WF_OK) return false;
+    if (metalbear_handle_is_host_domain(server, handle)) return false;
+
+    const char *list = server->allowed_custom_domains;
+    if (!list || !*list) return true;
+    size_t handle_length = strlen(handle);
+    size_t len = 0;
+    const char *item = list;
+    while ((item = next_custom_domain(item, &len)) != NULL) {
+        /* The leading dot also prevents a bare suffix from matching the tail
+         * of a label (".example.com" cannot accept "notexample.com"). */
+        if (handle_length > len &&
+            strcmp(handle + handle_length - len, item) == 0)
+            return true;
+        item += len;
+    }
+    return false;
+}
+
+bool metalbear_handle_domain_supported(const metalbear_server *server,
+                                       const char *handle) {
+    return metalbear_handle_is_host_domain(server, handle) ||
+           metalbear_handle_is_allowed_custom_domain(server, handle);
+}
+
+bool metalbear_handle_requires_ownership_verification(
+    const metalbear_server *server, const char *handle) {
+    return metalbear_handle_is_allowed_custom_domain(server, handle);
+}
+
+/* Test-only seam: production always resolves through Wolfram. */
+metalbear_handle_resolver_fn metalbear_test_handle_resolver = NULL;
+
+wf_status metalbear_verify_handle_ownership(const metalbear_server *server,
+                                            const char *handle,
+                                            const char *expected_did) {
+    if (!server || !handle || !*handle || !expected_did || !*expected_did)
+        return WF_ERR_INVALID_ARG;
+    if (!metalbear_handle_requires_ownership_verification(server, handle))
+        return WF_OK;
+
+    char *resolved_did = NULL;
+    wf_status status = WF_OK;
+    if (metalbear_test_handle_resolver) {
+        status =
+            metalbear_test_handle_resolver(handle, expected_did, &resolved_did);
+    } else {
+        /* Handle resolution builds absolute DNS/well-known URLs, so only a
+         * live client object is needed; its base URL is never used here. */
+        wf_xrpc_client *client = wf_xrpc_client_new("https://localhost");
+        if (!client) return WF_ERR_ALLOC;
+        status = wf_handle_resolve(client, handle, &resolved_did);
+        wf_xrpc_client_free(client);
+    }
+    if (status != WF_OK) {
+        free(resolved_did);
+        return status;
+    }
+    if (!resolved_did || strcmp(resolved_did, expected_did) != 0) {
+        free(resolved_did);
+        return WF_ERR_VALIDATION;
+    }
+    free(resolved_did);
+    return WF_OK;
+}
+
+bool metalbear_verify_handle_ownership_or_respond(metalbear_server *server,
+                                                  wf_xrpc_response *response,
+                                                  const char *handle,
+                                                  const char *expected_did) {
+    if (!metalbear_handle_requires_ownership_verification(server, handle))
+        return true;
+    if (metalbear_verify_handle_ownership(server, handle, expected_did) ==
+        WF_OK)
+        return true;
+    wf_xrpc_response_set_error(
+        response, 400, "InvalidRequest",
+        "custom-domain handle did not resolve to this account's DID");
+    return false;
+}
+
 /* ---- Handle availability (com.atproto.temp.* and signup) --------------- */
 
 bool handle_syntax_and_domain_valid(metalbear_server *server,
                                     const char *handle) {
     if (!server || !handle || !*handle) return false;
     if (wf_syntax_handle_validate(handle) != WF_OK) return false;
-    size_t handle_length = strlen(handle);
-    size_t domain_length =
-        server->user_domain ? strlen(server->user_domain) : 0;
-    if (domain_length == 0 || handle_length <= domain_length) return false;
-    if (strcmp(handle + handle_length - domain_length, server->user_domain) !=
-        0)
-        return false;
-    size_t label_length = handle_length - domain_length;
-    return label_length >= 3 && label_length <= 18;
+    if (metalbear_handle_is_host_domain(server, handle)) {
+        /* The 3–18 label rule is a host-minted signup constraint, not an AT
+         * Protocol handle rule: custom domains can have any valid label. */
+        size_t handle_length = strlen(handle);
+        size_t label_length = handle_length - strlen(server->user_domain);
+        return label_length >= 3 && label_length <= 18;
+    }
+    return metalbear_handle_is_allowed_custom_domain(server, handle);
 }
 
 bool handle_is_reserved_now(metalbear_server *server, const char *handle) {
     if (!server || !handle || !*handle) return false;
-    if (metalbear_handle_is_reserved(handle, server->user_domain)) return true;
+    /* Static service labels protect the host's own zone only. A label such as
+     * `admin.example.net` is the domain owner's choice; it must prove control
+     * of the domain instead. Dynamic operator reservations stay global. */
+    if (metalbear_handle_is_host_domain(server, handle) &&
+        metalbear_handle_is_reserved(handle, server->user_domain))
+        return true;
     bool reserved = false;
     if (server->registry && metalbear_account_registry_is_handle_reserved(
                                 server->registry, handle, &reserved) == WF_OK)

@@ -100,6 +100,13 @@ admission:
   # invite_domains: [".invite.example.com"]
   # closed_domains: [".closed.example.com"]
 
+# Opt-in handles outside user_domain. A custom handle must resolve to the
+# account's DID before any PLC write; the domain owner publishes the record.
+# allowed_custom_domains is an optional suffix list; empty allows any domain.
+# handles:
+#   allow_custom_domains: false
+#   allowed_custom_domains: [".example.net", ".example.org"]
+
 limits:
   # Per-client request budget: requests per window. The historical 100/60 is under
   # two requests a second, which one AppView or a relay backfilling with getRepo

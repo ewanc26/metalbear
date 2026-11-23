@@ -156,6 +156,9 @@ static bool copy_config(metalbear_server *server,
     if (config->crawlers && config->crawlers[0])
         server->crawlers = strdup(config->crawlers);
     server->invite_required = config->invite_required;
+    server->allow_custom_domains = config->allow_custom_domains;
+    if (config->allowed_custom_domains && config->allowed_custom_domains[0])
+        server->allowed_custom_domains = strdup(config->allowed_custom_domains);
     server->admission_default_mode = config->invite_required
                                          ? METALBEAR_ADMISSION_INVITE
                                          : METALBEAR_ADMISSION_OPEN;
@@ -1235,6 +1238,7 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->admission_open_domains);
     free(server->admission_invite_domains);
     free(server->admission_closed_domains);
+    free(server->allowed_custom_domains);
     free(server->plc_url);
     free(server->appview_url);
     free(server->appview_did);
