@@ -219,6 +219,7 @@ set(METALBEAR_CORE_SOURCES
   src/repo/blob_sweep.c
   src/ops/status.c
   src/ops/public_status.c
+  src/branding.c
   src/ops/frontend_static.c
   src/label/label_store.c
   src/label/labels_routes.c
@@ -257,7 +258,7 @@ add_library(metalbear_core ${METALBEAR_CORE_SOURCES})
 target_include_directories(metalbear_core PUBLIC include
                            PUBLIC "${METALBEAR_CJSON_SOURCE_DIR}")
 target_link_libraries(metalbear_core PUBLIC wolfram cjson
-                      PRIVATE SQLite3::SQLite3 Threads::Threads PkgConfig::PCRE2)
+                      PRIVATE SQLite3::SQLite3 Threads::Threads PkgConfig::PCRE2 m)
 # PUBLIC so consumers — and the test targets, which assert what the running
 # server reports against what it was built as — see the version they link.
 target_compile_definitions(
@@ -520,6 +521,10 @@ if(METALBEAR_BUILD_TESTS)
   target_include_directories(test_metalbear_backup_schedule
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_backup_schedule COMMAND test_metalbear_backup_schedule)
+
+  add_executable(test_metalbear_branding test/test_branding.c)
+  target_link_libraries(test_metalbear_branding PRIVATE metalbear_core)
+  add_test(NAME metalbear_branding COMMAND test_metalbear_branding)
 
   add_executable(test_metalbear_twofactor_totp test/test_twofactor_totp.c)
   target_link_libraries(test_metalbear_twofactor_totp PRIVATE metalbear_core)

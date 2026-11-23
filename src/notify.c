@@ -12,6 +12,10 @@
 struct metalbear_notifier {
     size_t count;
     metalbear_notify_channel channels[METALBEAR_NOTIFY_MAX_CHANNELS];
+    /* Optional operator branding (issue #260). Both NULL means the original
+     * plain-text bodies, unchanged byte for byte. */
+    char *service_name;
+    char *logo_url;
 };
 
 wf_status metalbear_notifier_new(metalbear_notifier **out) {
@@ -29,7 +33,33 @@ void metalbear_notifier_free(metalbear_notifier *notifier) {
         if (notifier->channels[i].free && notifier->channels[i].ctx)
             notifier->channels[i].free(notifier->channels[i].ctx);
     }
+    free(notifier->service_name);
+    free(notifier->logo_url);
     free(notifier);
+}
+
+wf_status metalbear_notifier_set_branding(metalbear_notifier *notifier,
+                                          const char *service_name,
+                                          const char *logo_url) {
+    if (!notifier) return WF_ERR_INVALID_ARG;
+    char *name = NULL;
+    char *logo = NULL;
+    if (service_name && service_name[0]) {
+        name = strdup(service_name);
+        if (!name) return WF_ERR_ALLOC;
+    }
+    if (logo_url && logo_url[0]) {
+        logo = strdup(logo_url);
+        if (!logo) {
+            free(name);
+            return WF_ERR_ALLOC;
+        }
+    }
+    free(notifier->service_name);
+    free(notifier->logo_url);
+    notifier->service_name = name;
+    notifier->logo_url = logo;
+    return WF_OK;
 }
 
 bool metalbear_notifier_add(metalbear_notifier *notifier,
@@ -63,6 +93,22 @@ wf_status metalbear_notifier_send(metalbear_notifier *notifier,
  * These are byte-for-byte the strings the original email-only call sites
  * built. Keeping them here means an email channel, a webhook channel and a
  * future channel all report the same notification. */
+
+/* Operator branding is a short signature, not an HTML template: keeping the
+ * existing messages plain text means every mail transport renders them, and an
+ * unset branding config leaves the original body untouched. */
+static void append_branding(const metalbear_notifier *notifier, char *body,
+                            size_t body_len) {
+    if (!notifier || (!notifier->service_name && !notifier->logo_url)) return;
+    size_t used = strlen(body);
+    if (used + 1 >= body_len) return;
+    if (notifier->service_name)
+        snprintf(body + used, body_len - used, "--\n%s\n",
+                 notifier->service_name);
+    used = strlen(body);
+    if (notifier->logo_url && used + 1 < body_len)
+        snprintf(body + used, body_len - used, "%s\n", notifier->logo_url);
+}
 
 static void build_verification(const char *code, char *subject,
                                size_t subject_len, char *body,
@@ -109,6 +155,7 @@ wf_status metalbear_notify_send_verification(metalbear_notifier *notifier,
     char subject[256];
     char body[1024];
     build_verification(code, subject, sizeof(subject), body, sizeof(body));
+    append_branding(notifier, body, sizeof(body));
     metalbear_notification note = {.kind = METALBEAR_NOTIFY_VERIFICATION,
                                    .to_address = to_address,
                                    .account_did = account_did,
@@ -126,6 +173,7 @@ wf_status metalbear_notify_send_password_reset(metalbear_notifier *notifier,
     char subject[256];
     char body[1024];
     build_password_reset(token, subject, sizeof(subject), body, sizeof(body));
+    append_branding(notifier, body, sizeof(body));
     metalbear_notification note = {.kind = METALBEAR_NOTIFY_PASSWORD_RESET,
                                    .to_address = to_address,
                                    .account_did = account_did,
@@ -143,6 +191,7 @@ wf_status metalbear_notify_send_account_deletion(metalbear_notifier *notifier,
     char subject[256];
     char body[1024];
     build_account_deletion(code, subject, sizeof(subject), body, sizeof(body));
+    append_branding(notifier, body, sizeof(body));
     metalbear_notification note = {.kind = METALBEAR_NOTIFY_ACCOUNT_DELETION,
                                    .to_address = to_address,
                                    .account_did = account_did,

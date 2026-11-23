@@ -125,6 +125,52 @@ static void test_operator_email_override_is_distinct(void) {
     free(path);
 }
 
+/* Branding uses the same flat-key table as every other section (issue #260). */
+static void test_branding_keys(void) {
+    char *path = write_temp("[branding]\n"
+                            "service_name = \"Bear Hosting\"\n"
+                            "logo_url = \"/bear.svg\"\n"
+                            "primary_color = \"#123abc\"\n"
+                            "primary_hover_color = \"#ABC\"\n"
+                            "error_color = \"#f00\"\n"
+                            "warning_color = \"#ff0\"\n"
+                            "info_color = \"#00f\"\n"
+                            "success_color = \"#0f0\"\n"
+                            "background_light_url = \"/light.webp\"\n"
+                            "background_dark_url = \"/dark.webp\"\n"
+                            "home_url = \"https://example.com\"\n");
+    metalbear_config cfg = {0};
+    metalbear_config_file *owner = NULL;
+    char err[256] = "";
+    CHECK(metalbear_config_file_load(path, &cfg, &owner, err, sizeof(err)) ==
+          WF_OK);
+    CHECK(cfg.branding_service_name &&
+          strcmp(cfg.branding_service_name, "Bear Hosting") == 0);
+    CHECK(cfg.branding_logo_url &&
+          strcmp(cfg.branding_logo_url, "/bear.svg") == 0);
+    CHECK(cfg.branding_primary_color &&
+          strcmp(cfg.branding_primary_color, "#123abc") == 0);
+    CHECK(cfg.branding_primary_hover_color &&
+          strcmp(cfg.branding_primary_hover_color, "#ABC") == 0);
+    CHECK(cfg.branding_error_color &&
+          strcmp(cfg.branding_error_color, "#f00") == 0);
+    CHECK(cfg.branding_warning_color &&
+          strcmp(cfg.branding_warning_color, "#ff0") == 0);
+    CHECK(cfg.branding_info_color &&
+          strcmp(cfg.branding_info_color, "#00f") == 0);
+    CHECK(cfg.branding_success_color &&
+          strcmp(cfg.branding_success_color, "#0f0") == 0);
+    CHECK(cfg.branding_background_light_url &&
+          strcmp(cfg.branding_background_light_url, "/light.webp") == 0);
+    CHECK(cfg.branding_background_dark_url &&
+          strcmp(cfg.branding_background_dark_url, "/dark.webp") == 0);
+    CHECK(cfg.branding_home_url &&
+          strcmp(cfg.branding_home_url, "https://example.com") == 0);
+    metalbear_config_file_free(owner);
+    unlink(path);
+    free(path);
+}
+
 /* Each of these must fail loudly, naming the line. */
 static void test_rejects_bad_input(void) {
     const char *cases[][2] = {
@@ -199,6 +245,7 @@ int main(void) {
     test_reads_every_type();
     test_absent_settings_are_left_alone();
     test_operator_email_override_is_distinct();
+    test_branding_keys();
     test_rejects_bad_input();
     test_missing_file_is_reported();
     test_example_config_parses();

@@ -2,16 +2,30 @@
 	import './layout.css';
 	import favicon from '#lib/assets/favicon.svg';
 	import { page } from '$app/state';
+	import { onMount } from 'svelte';
 	import { auth } from '#lib/stores/auth.ts';
+	import { branding, DEFAULT_BRANDING, loadBranding } from '#lib/stores/branding.ts';
 	import { deleteSession } from '#lib/pds.ts';
+	import type { Branding } from '#lib/pds.ts';
 
 	let { children } = $props();
 
 	let session = $state<import('#lib/stores/auth.ts').Session | null>(null);
 	auth.subscribe((s) => (session = s));
+	let brand = $state<Branding>(DEFAULT_BRANDING);
+	branding.subscribe((b) => (brand = b));
+
+	onMount(() => {
+		/* Static prerender: learn the operator's palette and name from the
+		 * server at runtime, before applying them to the document. */
+		void loadBranding();
+	});
 
 	const pathname = $derived(page.url.pathname);
 	const isOAuthPage = $derived(pathname === '/login' || pathname.startsWith('/oauth/'));
+	$effect(() => {
+		document.body.dataset.authPage = isOAuthPage ? 'true' : 'false';
+	});
 
 	async function handleLogout() {
 		try {
@@ -30,7 +44,15 @@
 {#if !isOAuthPage}
 	<nav class="flex items-center justify-between border-b border-slate-800 px-6 py-3">
 		<div class="flex items-center gap-6">
-			<a href="/" class="text-sm font-semibold text-white hover:text-emerald-400"> MetalBear </a>
+			<a
+				href={brand.links.homeUrl}
+				class="flex items-center gap-2 text-sm font-semibold text-white hover:text-emerald-400"
+			>
+				{#if brand.logoUrl}
+					<img src={brand.logoUrl} alt="" class="h-6 w-6 rounded" />
+				{/if}
+				{brand.serviceName}
+			</a>
 		</div>
 
 		<div class="flex items-center gap-4">

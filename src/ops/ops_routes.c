@@ -10,6 +10,7 @@
 
 #include "ops_routes.h"
 #include "../server_internal.h"
+#include "metalbear/branding.h"
 #include "metalbear/ops/public_status.h"
 #include "metalbear/video_upload.h"
 
@@ -33,6 +34,88 @@ advertised_admission_mode(const metalbear_server *server) {
     return metalbear_admission_for_handle(
         probe, server->admission_default_mode, server->admission_open_domains,
         server->admission_invite_domains, server->admission_closed_domains);
+}
+
+/* Build the `branding` object for /operator.json (issue #260). Every value is
+ * resolved here, with MetalBear's built-in defaults, so the static frontend
+ * has one source of truth and needs no colour maths of its own. The caller
+ * owns the returned object. */
+static cJSON *branding_json(const metalbear_server *server) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON *colors = cJSON_CreateObject();
+    cJSON *background = cJSON_CreateObject();
+    cJSON *links = cJSON_CreateObject();
+    if (!root || !colors || !background || !links) goto fail;
+
+    cJSON_AddStringToObject(
+        root, "serviceName",
+        metalbear_branding_or_default(server->branding_service_name,
+                                      METALBEAR_BRANDING_DEFAULT_SERVICE_NAME));
+    cJSON_AddStringToObject(
+        root, "logoUrl",
+        server->branding_logo_url ? server->branding_logo_url : "");
+
+    const char *primary = metalbear_branding_or_default(
+        server->branding_primary_color, METALBEAR_BRANDING_DEFAULT_PRIMARY);
+    cJSON_AddStringToObject(colors, "primary", primary);
+    cJSON_AddStringToObject(colors, "primaryHover",
+                            metalbear_branding_or_default(
+                                server->branding_primary_hover_color,
+                                METALBEAR_BRANDING_DEFAULT_PRIMARY_HOVER));
+    cJSON_AddStringToObject(colors, "onPrimary",
+                            metalbear_branding_on_color(primary));
+    cJSON_AddStringToObject(
+        colors, "error",
+        metalbear_branding_or_default(server->branding_error_color,
+                                      METALBEAR_BRANDING_DEFAULT_ERROR));
+    cJSON_AddStringToObject(
+        colors, "warning",
+        metalbear_branding_or_default(server->branding_warning_color,
+                                      METALBEAR_BRANDING_DEFAULT_WARNING));
+    cJSON_AddStringToObject(
+        colors, "info",
+        metalbear_branding_or_default(server->branding_info_color,
+                                      METALBEAR_BRANDING_DEFAULT_INFO));
+    cJSON_AddStringToObject(
+        colors, "success",
+        metalbear_branding_or_default(server->branding_success_color,
+                                      METALBEAR_BRANDING_DEFAULT_SUCCESS));
+    cJSON_AddItemToObject(root, "colors", colors);
+    colors = NULL;
+
+    cJSON_AddStringToObject(background, "lightUrl",
+                            server->branding_background_light_url
+                                ? server->branding_background_light_url
+                                : "");
+    cJSON_AddStringToObject(background, "darkUrl",
+                            server->branding_background_dark_url
+                                ? server->branding_background_dark_url
+                                : "");
+    cJSON_AddItemToObject(root, "background", background);
+    background = NULL;
+
+    cJSON_AddStringToObject(
+        links, "homeUrl",
+        metalbear_branding_or_default(server->branding_home_url,
+                                      METALBEAR_BRANDING_DEFAULT_HOME_URL));
+    if (server->support_url && server->support_url[0])
+        cJSON_AddStringToObject(links, "supportUrl", server->support_url);
+    if (server->privacy_policy_url && server->privacy_policy_url[0])
+        cJSON_AddStringToObject(links, "privacyPolicy",
+                                server->privacy_policy_url);
+    if (server->terms_of_service_url && server->terms_of_service_url[0])
+        cJSON_AddStringToObject(links, "termsOfService",
+                                server->terms_of_service_url);
+    cJSON_AddItemToObject(root, "links", links);
+    links = NULL;
+    return root;
+
+fail:
+    cJSON_Delete(root);
+    cJSON_Delete(colors);
+    cJSON_Delete(background);
+    cJSON_Delete(links);
+    return NULL;
 }
 
 /* ---- com.atproto.server.describeServer (query) ---- */
@@ -189,6 +272,10 @@ wf_status operator_info(void *ctx, const wf_xrpc_request *request,
     if (server->instance_description)
         cJSON_AddStringToObject(root, "description",
                                 server->instance_description);
+    /* Operator branding for the user-facing screens (issue #260). Resolved
+     * defaults are published so the static frontend needs no colour maths. */
+    cJSON *branding = branding_json(server);
+    if (branding) cJSON_AddItemToObject(root, "branding", branding);
     /* A testing instance says so, so nobody mistakes its accounts for people.
      */
     cJSON_AddBoolToObject(root, "development", server->development);

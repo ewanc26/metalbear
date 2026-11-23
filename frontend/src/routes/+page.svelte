@@ -2,6 +2,8 @@
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import BearLogo from '#lib/components/BearLogo.svelte';
+	import BrandingFooter from '#lib/components/BrandingFooter.svelte';
+	import { branding, DEFAULT_BRANDING } from '#lib/stores/branding.ts';
 	import {
 		describeServer,
 		listRepos,
@@ -11,8 +13,12 @@
 		type ServerInfo,
 		type RepoInfo,
 		type RelayStatus,
-		type OperatorInfo
+		type OperatorInfo,
+		type Branding
 	} from '#lib/pds.ts';
+
+	let brand = $state<Branding>(DEFAULT_BRANDING);
+	branding.subscribe((value) => (brand = value));
 
 	let version = $state<string | null>(null);
 	let server = $state<ServerInfo | null>(null);
@@ -76,7 +82,7 @@
 </script>
 
 <svelte:head>
-	<title>MetalBear{hostname ? ` — ${hostname}` : ''}</title>
+	<title>{brand.serviceName}{hostname ? ` — ${hostname}` : ''}</title>
 	<meta
 		name="description"
 		content="A C23-first Personal Data Server for the AT Protocol with isolated C++ modules."
@@ -84,12 +90,22 @@
 </svelte:head>
 
 <main class="mx-auto max-w-4xl px-6 py-12 sm:py-16">
-	<BearLogo />
+	{#if brand.logoUrl}
+		<img src={brand.logoUrl} alt="" class="h-16 w-16 rounded" />
+	{:else}
+		<BearLogo />
+	{/if}
 
 	<header class="mb-10">
 		<div class="flex flex-wrap items-center gap-3">
 			<h1 class="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-				{info?.operator?.name ? `${info.operator.name}'s PDS` : 'Personal Data Server'}
+				{#if brand.serviceName !== DEFAULT_BRANDING.serviceName}
+					{brand.serviceName}
+				{:else if info?.operator?.name}
+					{info.operator.name}'s PDS
+				{:else}
+					Personal Data Server
+				{/if}
 			</h1>
 			{#if info?.development}
 				<!-- Say it plainly: the accounts here are tests, not people. -->
@@ -429,6 +445,7 @@
 		<p class="mt-4 text-xs text-slate-600">
 			Public endpoints are served under <code class="text-slate-500">/xrpc/</code>.
 		</p>
+		<div class="mt-4"><BrandingFooter /></div>
 		<div class="mt-6 space-y-1 text-xs text-slate-600">
 			<p>
 				MetalBear and Wolfram © Ewan Croft, licensed under the

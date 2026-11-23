@@ -333,8 +333,43 @@ static void test_webhook_delivery(void) {
     metalbear_notifier_free(notifier);
 }
 
+/* Operator branding (issue #260) signs the built-in bodies without changing
+ * them at all when no branding is configured. */
+static void test_branding_signature(void) {
+    metalbear_notifier *notifier = NULL;
+    CHECK(metalbear_notifier_new(&notifier) == WF_OK);
+    if (!notifier) return;
+
+    fake_ctx fake = {.result = WF_OK};
+    metalbear_notify_channel channel = {
+        .name = "fake", .send = fake_send, .free = NULL, .ctx = &fake};
+    CHECK(metalbear_notifier_add(notifier, &channel));
+
+    CHECK(metalbear_notify_send_password_reset(notifier, "alice@example.com",
+                                               "RESET456", NULL) == WF_OK);
+    CHECK(strstr(fake.body, "--\n") == NULL);
+
+    CHECK(metalbear_notifier_set_branding(notifier, "Bear Hosting",
+                                          "https://example.com/logo.svg") ==
+          WF_OK);
+    CHECK(metalbear_notify_send_verification(notifier, "alice@example.com",
+                                             "VERIFY123", NULL) == WF_OK);
+    CHECK(strstr(fake.body, "Your verification code is: VERIFY123") != NULL);
+    CHECK(strstr(fake.body, "--\nBear Hosting\n") != NULL);
+    CHECK(strstr(fake.body, "https://example.com/logo.svg") != NULL);
+
+    /* Clearing both fields restores the original body exactly. */
+    CHECK(metalbear_notifier_set_branding(notifier, NULL, NULL) == WF_OK);
+    CHECK(metalbear_notify_send_verification(notifier, "alice@example.com",
+                                             "VERIFY123", NULL) == WF_OK);
+    CHECK(strstr(fake.body, "--\n") == NULL);
+
+    metalbear_notifier_free(notifier);
+}
+
 int main(void) {
     test_dispatch_and_copy();
+    test_branding_signature();
     test_no_channels_is_noop();
     test_fanout_and_failure();
 #ifdef METALBEAR_MODULE_EMAIL

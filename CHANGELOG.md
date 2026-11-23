@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- Operator branding: optional `[branding]` settings and `METALBEAR_BRANDING_*` overrides for a service name, logo, primary/semantic colours, auth-screen backgrounds and a home link. The landing, login, consent, account and admin pages read the resolved values from `/operator.json` at runtime; defaults preserve the existing MetalBear look exactly, transactional emails carry the same name and logo, and `describeServer` keeps advertising the operator's policy links. ([#260](https://github.com/ewanc26/metalbear/issues/260))
+
 ## [0.60.0] - 2026-11-23
 
 ### Added

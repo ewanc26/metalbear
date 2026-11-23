@@ -4,12 +4,59 @@
 /*
  * Dark by default: this is a server landing page, and the palette carries over
  * from the static page it replaces (#0d1117 ground, green accent).
+ *
+ * The --mb-* variables are operator branding (issue #260). Their defaults are
+ * the exact colours Tailwind ships for the utilities this UI already uses, so
+ * a host with no [branding] config looks identical. loadBranding() overwrites
+ * them from /operator.json at runtime; the theme overrides below then carry
+ * the operator's palette into every page, including account and admin pages
+ * that never import a branding component of their own.
  */
 :root {
 	color-scheme: dark;
+	--mb-primary: #059669;
+	--mb-primary-hover: #10b981;
+	--mb-primary-soft: #34d399;
+	--mb-on-primary: #ffffff;
+	--mb-error: #ef4444;
+	--mb-warning: #f59e0b;
+	--mb-info: #3b82f6;
+	--mb-success: #10b981;
+	--mb-bg-light: none;
+	--mb-bg-dark: none;
+
+	/* Tailwind v4 generates these theme tokens; overriding them here changes
+	 * every emerald/red/amber/blue utility without touching each component. */
+	--color-emerald-400: var(--mb-primary-soft);
+	--color-emerald-500: var(--mb-primary-hover);
+	--color-emerald-600: var(--mb-primary);
+	--color-emerald-700: var(--mb-primary);
+	--color-red-400: var(--mb-error);
+	--color-red-500: var(--mb-error);
+	--color-red-600: var(--mb-error);
+	--color-amber-400: var(--mb-warning);
+	--color-amber-500: var(--mb-warning);
+	--color-amber-600: var(--mb-warning);
+	--color-blue-500: var(--mb-info);
+	--color-sky-500: var(--mb-info);
 }
 
 body {
 	background-color: #0d1117;
 	-webkit-font-smoothing: antialiased;
+}
+
+/* Auth screens get the operator's background, chosen by the OS preference like
+ * the reference PDS does. No image is configured by default. */
+body[data-auth-page='true'] {
+	background-image: var(--mb-bg-light);
+	background-position: center;
+	background-size: cover;
+	background-attachment: fixed;
+}
+
+@media (prefers-color-scheme: dark) {
+	body[data-auth-page='true'] {
+		background-image: var(--mb-bg-dark);
+	}
 }

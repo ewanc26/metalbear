@@ -149,6 +149,19 @@ struct metalbear_server {
     char *instance_description;
     char *privacy_policy_url;
     char *terms_of_service_url;
+    /* Operator branding (issue #260), copied from config. Empty fields are
+     * left NULL so the JSON helper can publish MetalBear's defaults. */
+    char *branding_service_name;
+    char *branding_logo_url;
+    char *branding_primary_color;
+    char *branding_primary_hover_color;
+    char *branding_error_color;
+    char *branding_warning_color;
+    char *branding_info_color;
+    char *branding_success_color;
+    char *branding_background_light_url;
+    char *branding_background_dark_url;
+    char *branding_home_url;
     bool development;
     /* Opt-in public resource status (issue #267). Off unless explicitly set;
      * gates every resource field in /operator.json and the landing panel. */
