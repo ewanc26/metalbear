@@ -628,20 +628,12 @@ wf_status update_handle(void *ctx, const wf_xrpc_request *request,
                                    "A valid handle is required");
         return WF_OK;
     }
-    size_t handle_length = strlen(handle->valuestring);
-    size_t domain_length =
-        server->user_domain ? strlen(server->user_domain) : 0;
     /* The updateHandle lexicon declares no errors array, so the error name
      * comes from the reference: normalizeAndValidateHandle reports a handle
-     * that is not on a domain the server will serve as UnsupportedDomain
-     * (account-manager.ts:206-210, "Not a supported handle domain"), and
-     * pds/tests/account.test.ts:343-348 asserts exactly that name. MetalBear
-     * only serves handles under its own configured domain (it does not offer
-     * the reference's external custom-domain resolution), so the same
-     * constraint uses the same name. */
-    if (domain_length == 0 || handle_length <= domain_length ||
-        strcmp(handle->valuestring + handle_length - domain_length,
-               server->user_domain) != 0) {
+     * that is not on a domain the server will serve as UnsupportedDomain.
+     * With the #250 opt-in a verified custom domain is served too; otherwise
+     * only the configured user_domain is accepted, as before. */
+    if (!metalbear_handle_domain_supported(server, handle->valuestring)) {
         wf_xrpc_response_set_error(
             response, 400, "InvalidHandle",
             "Handle must be under the configured domain");
@@ -676,6 +668,12 @@ wf_status update_handle(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     metalbear_account_entry_free(existing);
+    /* A custom-domain handle must resolve to this account's DID before any
+     * PLC write or local mutation. Host handles are a no-op, so the disabled
+     * configuration is byte-for-byte unchanged (issue #250). */
+    if (!metalbear_verify_handle_ownership_or_respond(
+            server, response, handle->valuestring, acct->did))
+        return WF_OK;
     /* For a did:plc account, the DID document's alsoKnownAs must be updated
      * to match -- otherwise bidirectional handle verification fails even
      * though DNS/local state agrees. Required, blocking, and ordered before

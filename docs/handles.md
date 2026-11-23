@@ -4,6 +4,30 @@ MetalBear accepts handles under the configured `user_domain` with a single
 3–18 character label, for example `alice.bear1.example.com` when the domain is
 `.bear1.example.com`. The label must also pass Wolfram's handle syntax rules.
 
+## Custom domains (opt-in)
+
+Handles outside `user_domain` are refused by default. Set
+`[handles] allow_custom_domains = true` (or
+`METALBEAR_ALLOW_CUSTOM_DOMAINS=1`) to accept them at `createAccount`,
+`com.atproto.identity.updateHandle` and `com.atproto.admin.updateAccountHandle`.
+A custom handle must already resolve through `_atproto.<handle>` DNS TXT or
+HTTPS well-known to the account's DID: MetalBear calls
+`wf_handle_resolve` and compares the answer with the DID before any PLC
+operation is submitted. A mismatch is refused with a 400 `InvalidRequest`;
+no PLC operation is written and no local handle is changed. The owner of the
+domain is responsible for publishing that record — MetalBear's DNS provider
+only ever manages handles under `user_domain`, and `/tls-check` and
+`describeServer.availableUserDomains` stay host-only.
+
+Host-only signup rules do not apply to a verified custom domain: the static
+reserved-label table and the 3–18 label length are checks on MetalBear's own
+zone, not on a domain someone else controls. Dynamic operator reservations
+still block a handle everywhere. Set `allowed_custom_domains` (or
+`METALBEAR_ALLOWED_CUSTOM_DOMAINS`) to a comma-separated list of dotted
+suffixes such as `.example.net` to limit which custom domains are accepted;
+an empty list allows any syntactically valid domain. Entries must start with
+`.` or the server refuses to start.
+
 Some labels are reserved, matching the reference PDS's
 `packages/pds/src/handle/reserved.ts`: atproto terms (`at`, `atp`, `plc`,
 `pds`, `did`, `repo`, `tid`, `nsid`, `xrpc`, `lex`, `lexicon`, `bsky`,

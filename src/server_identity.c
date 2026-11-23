@@ -36,6 +36,9 @@
  */
 void publish_handle_dns(metalbear_server *server, const char *handle,
                         const char *did) {
+    /* Custom-domain DNS belongs to the domain owner, never to the host's
+     * provider: only host-minted handles are published here (issue #250). */
+    if (!metalbear_handle_is_host_domain(server, handle)) return;
 #ifdef METALBEAR_MODULE_DNS
     if (!server->handle_dns || !handle || !did) return;
     if (metalbear_handle_dns_publish(server->handle_dns, handle, did) !=
@@ -58,6 +61,8 @@ void publish_handle_dns(metalbear_server *server, const char *handle,
 /* Drop `_atproto.<handle>`, if a provider is configured. Same rule: a stale
  * record is a smaller problem than a failed deletion, so this only logs. */
 void retract_handle_dns(metalbear_server *server, const char *handle) {
+    /* Mirror publication: a custom domain's records are not ours to remove. */
+    if (!metalbear_handle_is_host_domain(server, handle)) return;
 #ifdef METALBEAR_MODULE_DNS
     if (!server->handle_dns || !handle) return;
     if (metalbear_handle_dns_retract(server->handle_dns, handle) != WF_OK) {

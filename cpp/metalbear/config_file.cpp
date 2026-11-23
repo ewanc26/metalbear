@@ -141,6 +141,9 @@ static std::string unescape_basic(const std::string &v) {
     ARR("admission.invite_domains", admission_invite_domains)                  \
     ARR("admission.closed_domains", admission_closed_domains)                  \
                                                                                \
+    BOOL("handles.allow_custom_domains", allow_custom_domains)                 \
+    ARR("handles.allowed_custom_domains", allowed_custom_domains)              \
+                                                                               \
     INT("limits.rate_limit", rate_limit)                                       \
     INT("limits.rate_limit_window_seconds", rate_limit_window)                 \
     INT("limits.blob_upload_bytes", blob_upload_limit)                         \

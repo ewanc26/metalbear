@@ -859,6 +859,13 @@ wf_status admin_update_account_handle(void *ctx, const wf_xrpc_request *request,
             return WF_OK;
         }
     }
+    /* A custom-domain handle must resolve to the DID named by the admin
+     * before any PLC write or local mutation. Host handles are a no-op, so
+     * the disabled configuration keeps its current (ungated) behaviour —
+     * the admin override never had a domain gate (issue #250). */
+    if (!metalbear_verify_handle_ownership_or_respond(
+            server, response, handle->valuestring, did->valuestring))
+        return WF_OK;
     /* For a did:plc account, the DID document's alsoKnownAs must be updated
      * to match -- otherwise bidirectional handle verification fails even
      * though DNS/local state agrees. This is a required, blocking step

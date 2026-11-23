@@ -766,6 +766,15 @@ if(METALBEAR_BUILD_TESTS)
   add_test(NAME metalbear_handle_plc_update
           COMMAND test_metalbear_handle_plc_update)
 
+  add_executable(test_metalbear_custom_domain_handles
+                 test/test_custom_domain_handles.c)
+  target_link_libraries(test_metalbear_custom_domain_handles
+                        PRIVATE metalbear_core)
+  target_include_directories(test_metalbear_custom_domain_handles
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_custom_domain_handles
+          COMMAND test_metalbear_custom_domain_handles)
+
   add_executable(test_metalbear_admin_signing_key
                  test/test_admin_signing_key.c)
   target_link_libraries(test_metalbear_admin_signing_key

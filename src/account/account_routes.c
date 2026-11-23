@@ -22,15 +22,20 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Mint a did:plc for `handle` and return it (caller frees), writing the
- * account signing key the operation publishes into *out_signing_key. The
- * repo created for this DID must adopt that key: a repo signing with anything
- * else contradicts its own DID document, and relays reject it. */
-static char *mint_plc_did(metalbear_server *server, const char *handle,
-                          wf_signing_key *out_signing_key) {
+/* Prepare a did:plc for `handle`: generate the account signing key, build and
+ * sign the genesis operation, and compute its deterministic DID -- but do NOT
+ * submit it yet. Keeping preparation separate from submission lets
+ * create_account prove custom-domain ownership after the DID is known but
+ * before any PLC write (issue #250). The repo created for this DID must adopt
+ * *out_signing_key: a repo signing with anything else contradicts its own DID
+ * document, and relays reject it. Both out strings are owned by the caller. */
+static wf_status prepare_plc_did(metalbear_server *server, const char *handle,
+                                 char **out_did, char **out_signed_json,
+                                 wf_signing_key *out_signing_key) {
     cJSON *root = NULL;
     cJSON *verification = NULL;
     char *unsigned_json = NULL;
+    char *unsigned_with_key = NULL;
     char *signed_json = NULL;
     char *account_didkey = NULL;
     char *rotation_didkey = NULL;
@@ -38,6 +43,9 @@ static char *mint_plc_did(metalbear_server *server, const char *handle,
     wf_signing_key rotation_key;
     char *plc_did = NULL;
 
+    *out_did = NULL;
+    *out_signed_json = NULL;
+    if (out_signing_key) memset(out_signing_key, 0, sizeof(*out_signing_key));
     memset(&acct_key, 0, sizeof(acct_key));
     memset(&rotation_key, 0, sizeof(rotation_key));
 
@@ -111,7 +119,7 @@ static char *mint_plc_did(metalbear_server *server, const char *handle,
         LOG_ERROR("failed to add atproto verification method");
         goto fail;
     }
-    char *unsigned_with_key = cJSON_PrintUnformatted(root);
+    unsigned_with_key = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     root = NULL;
     if (!unsigned_with_key) {
@@ -133,35 +141,44 @@ static char *mint_plc_did(metalbear_server *server, const char *handle,
         goto fail;
     }
 
-    /* 7. Submit to the PLC directory; the response body is unused.
+    /* The computed DID and the signed operation are handed to the caller,
+     * which verifies custom-domain ownership before calling submit_plc_did.
      * The operation documents themselves are never logged: they carry the
      * account's rotation and signing did:keys and the signature over them, and
      * this runs at INFO on a server whose logs are routinely shipped
      * elsewhere. The DID and directory URL are enough to trace a submission. */
-    LOG_INFO("submitting PLC operation to %s for DID %s", server->plc_url,
-             plc_did);
-    if (wf_plc_submit_operation_raw(server->plc_url, plc_did, signed_json) !=
-        WF_OK) {
-        LOG_ERROR("failed to submit PLC operation to directory");
-        free(plc_did);
-        plc_did = NULL;
-        goto fail;
-    }
+    *out_did = plc_did;
+    *out_signed_json = signed_json;
+    if (out_signing_key) *out_signing_key = acct_key;
+    free(unsigned_json);
+    free(unsigned_with_key);
+    free(account_didkey);
+    free(rotation_didkey);
+    return WF_OK;
 
+fail:
     free(unsigned_json);
     free(unsigned_with_key);
     free(signed_json);
     free(account_didkey);
     free(rotation_didkey);
-    if (out_signing_key) *out_signing_key = acct_key;
-    return plc_did;
+    free(plc_did);
+    return WF_ERR_INTERNAL;
+}
 
-fail:
-    free(unsigned_json);
-    free(signed_json);
-    free(account_didkey);
-    free(rotation_didkey);
-    return NULL;
+/* Submit a prepared genesis operation to the PLC directory. The response body
+ * is unused; a failure is fatal to account creation because a DID whose
+ * genesis operation never reached the directory cannot resolve. Called only
+ * after custom-domain ownership has been verified. */
+static wf_status submit_plc_did(metalbear_server *server, const char *did,
+                                const char *signed_json) {
+    LOG_INFO("submitting PLC operation to %s for DID %s", server->plc_url, did);
+    if (wf_plc_submit_operation_raw(server->plc_url, did, signed_json) !=
+        WF_OK) {
+        LOG_ERROR("failed to submit PLC operation to directory");
+        return WF_ERR_NETWORK;
+    }
+    return WF_OK;
 }
 
 wf_status create_account(void *ctx, const wf_xrpc_request *request,
@@ -286,23 +303,24 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
 
-    /* Ensure handle uses the configured user domain (matches refpds behavior).
-     */
-    size_t handle_len = strlen(handle->valuestring);
-    size_t ud_len = server->user_domain ? strlen(server->user_domain) : 0;
-    if (ud_len == 0 || handle_len <= ud_len ||
-        strcmp(handle->valuestring + handle_len - ud_len,
-               server->user_domain) != 0) {
+    /* Domain policy (issue #250). The disabled configuration keeps the exact
+     * refpds host-domain behaviour below. With the opt-in, a verified custom
+     * domain is accepted too; ownership is checked before any PLC write. */
+    if (!metalbear_handle_domain_supported(server, handle->valuestring)) {
         wf_xrpc_response_set_error(response, 400, "UnsupportedDomain",
                                    "handle is not provided on this domain");
         return WF_OK;
     }
-    /* Enforce 3-18 character label before the domain. */
-    size_t label_len = handle_len - ud_len;
-    if (label_len < 3 || label_len > 18) {
-        wf_xrpc_response_set_error(response, 400, "InvalidHandle",
-                                   "handle too short or too long");
-        return WF_OK;
+    /* The 3-18 character label rule applies to host-minted handles only. */
+    if (metalbear_handle_is_host_domain(server, handle->valuestring)) {
+        size_t handle_len = strlen(handle->valuestring);
+        size_t ud_len = strlen(server->user_domain);
+        size_t label_len = handle_len - ud_len;
+        if (label_len < 3 || label_len > 18) {
+            wf_xrpc_response_set_error(response, 400, "InvalidHandle",
+                                       "handle too short or too long");
+            return WF_OK;
+        }
     }
     /* Reference ensureHandleServiceConstraints (handle/index.ts): a
      * reserved service label is a HandleNotAvailable, not InvalidHandle.
@@ -318,6 +336,9 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
      * server-side did:plc via PLC when configured; otherwise we mint a fresh
      * did:key so every account is independently addressable and isolated. */
     char *account_did = NULL;
+    /* A prepared PLC genesis operation, submitted only after custom-domain
+     * ownership has been proved against the DID it computes (issue #250). */
+    char *pending_plc_json = NULL;
     /* Set only when this server minted the DID, in which case the repo must be
      * created with the key that DID document publishes. */
     wf_signing_key minted_key;
@@ -385,15 +406,13 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
     } else if (server->plc_url && server->plc_url[0]) {
         LOG_DEBUG("create_account: minting PLC DID for handle=%s",
                   handle->valuestring);
-        account_did = mint_plc_did(server, handle->valuestring, &minted_key);
-        have_minted_key = account_did != NULL;
-        if (!account_did) {
+        if (prepare_plc_did(server, handle->valuestring, &account_did,
+                            &pending_plc_json, &minted_key) != WF_OK) {
             wf_xrpc_response_set_error(response, 500, "InternalError",
                                        "Could not mint PLC DID");
             return WF_OK;
         }
-        LOG_INFO("create_account: minted PLC DID=%s for handle=%s", account_did,
-                 handle->valuestring);
+        have_minted_key = true;
     } else if (!imported_did) {
         wf_signing_key key;
         if (wf_signing_key_generate(WF_KEY_TYPE_SECP256K1, &key) != WF_OK ||
@@ -406,6 +425,32 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
         have_minted_key = true;
         LOG_INFO("create_account: generated did:key=%s for handle=%s",
                  account_did, handle->valuestring);
+    }
+
+    /* Custom-domain ownership is proved before any PLC write or local state.
+     * For a freshly minted PLC DID the genesis operation is already prepared
+     * but not submitted; verification compares the handle's DNS/well-known
+     * answer to the DID it computed. A failure leaves no registry row, no
+     * account store and no PLC operation (issue #250). */
+    if (!metalbear_verify_handle_ownership_or_respond(
+            server, response, handle->valuestring, account_did)) {
+        free(pending_plc_json);
+        free(account_did);
+        return WF_OK;
+    }
+    if (pending_plc_json) {
+        wf_status submit_status =
+            submit_plc_did(server, account_did, pending_plc_json);
+        free(pending_plc_json);
+        pending_plc_json = NULL;
+        if (submit_status != WF_OK) {
+            free(account_did);
+            wf_xrpc_response_set_error(response, 500, "InternalError",
+                                       "Could not mint PLC DID");
+            return WF_OK;
+        }
+        LOG_INFO("create_account: minted PLC DID=%s for handle=%s", account_did,
+                 handle->valuestring);
     }
 
     /* Provision a dedicated, filesystem-isolated data directory for the
