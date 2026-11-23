@@ -191,6 +191,13 @@ typedef struct metalbear_config {
      * service-auth JWT minted from the PDS's repo key. */
     const char *appview_url;
     const char *appview_did;
+    /* Extra `atproto-proxy` destinations this PDS will forward to (issue
+     * #251), as a comma-separated list of `<did>` or `<did>#<service_id>`.
+     * The well-known Bluesky chat/labeler destinations, `appview_did` and
+     * `mod_service_did` are always allowed; this list only adds to them.
+     * A bare DID allows any known service id; a `#service_id` entry narrows
+     * it to that one service. Empty means no extras. */
+    const char *proxy_destinations;
     /* Moderator service (e.g. ozone) DID this PDS trusts to read another
      * account's preferences. When set, app.bsky.actor.getPreferences
      * additionally accepts a service JWT whose issuer is this DID (bare or

@@ -31,6 +31,9 @@ static const struct {
     [METALBEAR_METRIC_AUTH_REFUSED] =
         {"auth_refused_total",
          "Requests refused by the authentication callback."},
+    [METALBEAR_METRIC_PROXY_REFUSALS] =
+        {"proxy_refusals_total", "Requests refused because the atproto-proxy "
+                                 "destination was not allowed."},
     [METALBEAR_METRIC_ACCOUNTS_CREATED] = {"accounts_created_total",
                                            "Accounts created on this host."},
     [METALBEAR_METRIC_ACCOUNTS_DELETED] = {"accounts_deleted_total",

@@ -132,6 +132,7 @@ static const route_case ROUTES[] = {
     {"app.bsky.notification.listNotifications", 0, 1},
     {"chat.bsky.convo.getConvo", 0, 1},
     {"chat.bsky.convo.getConvos", 0, 1},
+    {"chat.bsky.convo.listConvos", 0, 1},
     {"chat.bsky.convo.getMessages", 0, 1},
     {"app.bsky.labeler.getServices", 0, 0},
     {"app.bsky.unspecced.getAgeAssuranceState", 0, 0},

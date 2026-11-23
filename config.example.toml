@@ -157,6 +157,11 @@ retention_min_events      = 1000
 [appview]
 url = "https://api.bsky.app"
 did = "did:web:api.bsky.app"
+# Extra atproto-proxy destinations to forward to, as comma-separated
+# `<did>` or `<did>#<service_id>` (e.g. a self-hosted labeler). The
+# well-known Bluesky chat/labeler destinations, this AppView DID and any
+# mod_service_did are always allowed; unknown destinations get a 403.
+# proxy_destinations = "did:web:labeler.example.com#atproto_labeler"
 
 # [dns]
 # Publishes the `_atproto` TXT records that make minted handles resolve.

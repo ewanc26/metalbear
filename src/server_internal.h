@@ -186,6 +186,9 @@ struct metalbear_server {
     char *plc_url;             /* PLC directory URL or NULL */
     char *appview_url;         /* Upstream AppView URL or NULL */
     char *appview_did; /* Upstream AppView DID for service-auth or NULL */
+    /* Extra `atproto-proxy` destinations (issue #251), comma-separated
+     * `<did>` or `<did>#<service_id>`; NULL when unset. */
+    char *proxy_destinations;
     metalbear_account_cache *account_cache;
     metalbear_report_store *reports;
     /* Operator-visible admin action audit trail (issue #160). */

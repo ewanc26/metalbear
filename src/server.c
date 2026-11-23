@@ -187,6 +187,8 @@ static bool copy_config(metalbear_server *server,
         server->appview_url = strdup(config->appview_url);
     if (config->appview_did && config->appview_did[0])
         server->appview_did = strdup(config->appview_did);
+    if (config->proxy_destinations && config->proxy_destinations[0])
+        server->proxy_destinations = strdup(config->proxy_destinations);
     if (config->mod_service_did && config->mod_service_did[0])
         server->mod_service_did = strdup(config->mod_service_did);
     load_lexicons(server, config->lexicon_dir);
@@ -827,6 +829,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_query(server->xrpc, "chat.bsky.convo.getConvos",
                                       appview_get_convos, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
+                                      "chat.bsky.convo.listConvos",
+                                      appview_list_convos, server) != WF_OK ||
+        wf_xrpc_server_register_query(server->xrpc,
                                       "chat.bsky.convo.getMessages",
                                       appview_get_messages, server) != WF_OK ||
         wf_xrpc_server_register_query(
@@ -1293,6 +1298,7 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->plc_url);
     free(server->appview_url);
     free(server->appview_did);
+    free(server->proxy_destinations);
     free(server->mod_service_did);
     wf_lexicon_registry_free(server->lexicons);
     free(server);
