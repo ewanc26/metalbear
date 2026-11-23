@@ -36,13 +36,17 @@ valid_login(metalbear_server *server, cJSON *body,
 
 static cJSON *session_json(metalbear_server *server,
                            metalbear_account_context *acct,
-                           const metalbear_session_tokens *tokens) {
+                           const metalbear_session_tokens *tokens,
+                           const char *trusted_device_token) {
     cJSON *root = cJSON_CreateObject();
     if (!root) return NULL;
     if (tokens) {
         cJSON_AddStringToObject(root, "accessJwt", tokens->access_jwt);
         cJSON_AddStringToObject(root, "refreshJwt", tokens->refresh_jwt);
     }
+    if (trusted_device_token)
+        cJSON_AddStringToObject(root, "trustedDeviceToken",
+                                trusted_device_token);
     cJSON_AddStringToObject(root, "handle", acct->handle);
     cJSON_AddStringToObject(root, "did", acct->did);
     bool active = false;
@@ -75,6 +79,8 @@ wf_status create_session(void *ctx, const wf_xrpc_request *request,
     metalbear_server *server = ctx;
     metalbear_account_context *acct = NULL;
     char *app_password_name = NULL;
+    char *trusted_device_token = NULL;
+    bool issue_trusted_device = false;
 
     /* Keyed by identifier+IP so this can't be used either to lock a
      * legitimate user out (an attacker hammering their identifier from many
@@ -154,48 +160,62 @@ wf_status create_session(void *ctx, const wf_xrpc_request *request,
         }
     }
     /* Two-factor login (docs/totp.md): an account with the factor on needs a
-     * valid token. App passwords skip it, as the design records. Attempts draw
-     * on the same budget as password attempts. */
+     * valid token. A trusted device token from a previous successful factor
+     * check skips it until it expires or is revoked (issue #131). App passwords
+     * skip the factor entirely, as the design records. Attempts draw on the
+     * same budget as password attempts. */
     if (credential == METALBEAR_CREDENTIAL_ACCOUNT &&
         metalbear_totp_login_required(server, acct)) {
-        const cJSON *identifier =
-            request->params ? cJSON_GetObjectItemCaseSensitive(request->params,
-                                                               "identifier")
-                            : NULL;
-        const char *id_str =
-            cJSON_IsString(identifier) ? identifier->valuestring : "";
-        char key[320];
-        snprintf(key, sizeof(key), "%s-%s", id_str,
-                 request->client_ip ? request->client_ip : "unknown");
-        if (!check_endpoint_rate_limit(server->rl_create_session_day,
-                                       server->rl_create_session_5min, key, 1,
-                                       response)) {
-            free(app_password_name);
-            return WF_OK;
-        }
-        const cJSON *token = request->params
-                                 ? cJSON_GetObjectItemCaseSensitive(
-                                       request->params, "authFactorToken")
-                                 : NULL;
-        if (!cJSON_IsString(token) || !token->valuestring[0]) {
-            free(app_password_name);
-            wf_xrpc_response_set_error(
-                response, 401, "AuthFactorTokenRequired",
-                "Two-factor authentication code required");
-            return WF_OK;
-        }
-        bool accepted = false;
-        wf_status checked = metalbear_totp_check_login_token(
-            server, acct, token->valuestring, &accepted);
-        if (checked != WF_OK || !accepted) {
-            free(app_password_name);
-            metalbear_metrics_inc(METALBEAR_METRIC_LOGIN_FAILURES);
-            LOG_WARN("create_session: wrong two-factor code for did=%s",
-                     acct->did);
-            wf_xrpc_response_set_error(
-                response, 401, "AuthFactorTokenRequired",
-                "Invalid two-factor authentication code");
-            return WF_OK;
+        const cJSON *device = request->params
+                                  ? cJSON_GetObjectItemCaseSensitive(
+                                        request->params, "trustedDeviceToken")
+                                  : NULL;
+        bool trusted = cJSON_IsString(device) &&
+                       metalbear_totp_trusted_device_valid(server, acct,
+                                                           device->valuestring);
+        if (!trusted) {
+            const cJSON *identifier = request->params
+                                          ? cJSON_GetObjectItemCaseSensitive(
+                                                request->params, "identifier")
+                                          : NULL;
+            const char *id_str =
+                cJSON_IsString(identifier) ? identifier->valuestring : "";
+            char key[320];
+            snprintf(key, sizeof(key), "%s-%s", id_str,
+                     request->client_ip ? request->client_ip : "unknown");
+            if (!check_endpoint_rate_limit(server->rl_create_session_day,
+                                           server->rl_create_session_5min, key,
+                                           1, response)) {
+                free(app_password_name);
+                return WF_OK;
+            }
+            const cJSON *token = request->params
+                                     ? cJSON_GetObjectItemCaseSensitive(
+                                           request->params, "authFactorToken")
+                                     : NULL;
+            if (!cJSON_IsString(token) || !token->valuestring[0]) {
+                free(app_password_name);
+                wf_xrpc_response_set_error(
+                    response, 401, "AuthFactorTokenRequired",
+                    "Two-factor authentication code required");
+                return WF_OK;
+            }
+            bool accepted = false;
+            wf_status checked = metalbear_totp_check_login_token(
+                server, acct, token->valuestring, &accepted);
+            if (checked != WF_OK || !accepted) {
+                free(app_password_name);
+                metalbear_metrics_inc(METALBEAR_METRIC_LOGIN_FAILURES);
+                LOG_WARN("create_session: wrong two-factor code for did=%s",
+                         acct->did);
+                wf_xrpc_response_set_error(
+                    response, 401, "AuthFactorTokenRequired",
+                    "Invalid two-factor authentication code");
+                return WF_OK;
+            }
+            /* A fresh factor check earns a new device token. A login that
+             * already used one does not extend it. */
+            issue_trusted_device = true;
         }
     }
     metalbear_access_scope scope =
@@ -215,10 +235,18 @@ wf_status create_session(void *ctx, const wf_xrpc_request *request,
         return WF_OK;
     }
     free(app_password_name);
+    if (issue_trusted_device &&
+        metalbear_totp_trusted_device_issue(server, acct,
+                                            &trusted_device_token) != WF_OK) {
+        LOG_WARN("create_session: could not issue a trusted device for did=%s",
+                 acct->did);
+    }
     metalbear_metrics_inc(METALBEAR_METRIC_SESSIONS_CREATED);
     LOG_INFO("create_session: issued session for did=%s scope=%d", acct->did,
              scope);
-    wf_status status = set_json(response, session_json(server, acct, &tokens));
+    wf_status status = set_json(
+        response, session_json(server, acct, &tokens, trusted_device_token));
+    free(trusted_device_token);
     metalbear_session_tokens_free(&tokens);
     return status;
 }
@@ -232,7 +260,7 @@ wf_status get_session(void *ctx, const wf_xrpc_request *request,
                                    "Invalid access token");
         return WF_OK;
     }
-    return set_json(response, session_json(server, acct, NULL));
+    return set_json(response, session_json(server, acct, NULL, NULL));
 }
 
 wf_status refresh_session(void *ctx, const wf_xrpc_request *request,
@@ -285,7 +313,8 @@ wf_status refresh_session(void *ctx, const wf_xrpc_request *request,
         }
         return WF_OK;
     }
-    wf_status status = set_json(response, session_json(server, acct, &tokens));
+    wf_status status =
+        set_json(response, session_json(server, acct, &tokens, NULL));
     metalbear_session_tokens_free(&tokens);
     return status;
 }

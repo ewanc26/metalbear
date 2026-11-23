@@ -54,6 +54,9 @@ static void test_reads_every_type(void) {
         "[repo]\n"
         "gc_interval_seconds = 86400\n"
         "\n"
+        "[totp]\n"
+        "trusted_device_seconds = 604800\n"
+        "\n"
         "[limits]\n"
         "rate_limit = 2500\n"
         "repo_bytes = 134217728\n"
@@ -77,6 +80,7 @@ static void test_reads_every_type(void) {
     CHECK(cfg.max_resident_accounts == 7);
     CHECK(cfg.deletion_hold_seconds == 86400);
     CHECK(cfg.repo_gc_interval_seconds == 86400);
+    CHECK(cfg.trusted_device_seconds == 604800);
     CHECK(cfg.rate_limit == 2500);
     CHECK(cfg.repo_byte_quota == 134217728);
     CHECK(cfg.blob_byte_quota == 268435456);

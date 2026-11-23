@@ -112,6 +112,17 @@ repo:
   # METALBEAR_REPO_GC_INTERVAL_SECONDS overrides this at runtime, and wins.
   # gc_interval_seconds: 86400
 
+# Two-factor login.
+totp:
+  # How long a trusted device may skip the second factor after a successful
+  # code login, in seconds. The default is 2592000 (30 days); 0 selects that
+  # default, and negative values are refused at startup. A device is revoked
+  # immediately when the account lists and revokes it, changes its password, or
+  # turns two-factor login off. Losing totp.key also drops every trusted device,
+  # because only a keyed hash is stored. METALBEAR_TRUSTED_DEVICE_SECONDS
+  # overrides this at runtime, and wins. See docs/totp.md.
+  # trusted_device_seconds: 2592000
+
 # Per-domain signup admission. The default applies when no listed domain
 # matches; when omitted it falls back to accounts.invite_required above.
 # Domains are handle suffixes including the leading dot; the longest match

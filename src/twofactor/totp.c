@@ -253,6 +253,55 @@ wf_status metalbear_backup_code_new(char out[METALBEAR_BACKUP_CODE_CHARS + 1]) {
                                    METALBEAR_BACKUP_CODE_CHARS + 1);
 }
 
+static wf_status random_base32(unsigned char bytes_size, char *out,
+                               size_t out_cap) {
+    unsigned char raw[32];
+    if (!out || bytes_size == 0 || bytes_size > sizeof(raw))
+        return WF_ERR_INVALID_ARG;
+    if (RAND_bytes(raw, bytes_size) != 1) return WF_ERR_CRYPTO;
+    return metalbear_base32_encode(raw, bytes_size, out, out_cap);
+}
+
+wf_status metalbear_trusted_device_token_new(
+    char out[METALBEAR_TRUSTED_DEVICE_TOKEN_CHARS + 1]) {
+    /* metalbear_base32_encode's capacity formula rounds up to whole 5-byte
+     * groups, so encode into a generously sized buffer and copy the 52 chars
+     * into the public token type. */
+    char encoded[64];
+    wf_status st = random_base32(METALBEAR_TRUSTED_DEVICE_TOKEN_BYTES, encoded,
+                                 sizeof(encoded));
+    if (st != WF_OK) return st;
+    memcpy(out, encoded, METALBEAR_TRUSTED_DEVICE_TOKEN_CHARS + 1);
+    OPENSSL_cleanse(encoded, sizeof(encoded));
+    return WF_OK;
+}
+
+wf_status metalbear_trusted_device_id_new(
+    char out[METALBEAR_TRUSTED_DEVICE_ID_CHARS + 1]) {
+    return random_base32(METALBEAR_TRUSTED_DEVICE_ID_BYTES, out,
+                         METALBEAR_TRUSTED_DEVICE_ID_CHARS + 1);
+}
+
+wf_status metalbear_trusted_device_token_hash(
+    const unsigned char key[METALBEAR_TWOFACTOR_KEY_BYTES], const char *token,
+    unsigned char out[32]) {
+    if (!key || !token || !token[0] || !out) return WF_ERR_INVALID_ARG;
+    /* The label makes these hashes unusable as backup codes even though both
+     * are HMAC-SHA-256 under the same server key. */
+    static const char label[] = "metalbear trusted device v1";
+    unsigned char message[sizeof(label) + METALBEAR_TRUSTED_DEVICE_TOKEN_CHARS];
+    size_t n = strlen(token);
+    if (n > METALBEAR_TRUSTED_DEVICE_TOKEN_CHARS) return WF_ERR_INVALID_ARG;
+    memcpy(message, label, sizeof(label));
+    memcpy(message + sizeof(label), token, n);
+    unsigned int len = 0;
+    if (!HMAC(EVP_sha256(), key, METALBEAR_TWOFACTOR_KEY_BYTES, message,
+              sizeof(label) + n, out, &len) ||
+        len != 32)
+        return WF_ERR_CRYPTO;
+    return WF_OK;
+}
+
 wf_status metalbear_backup_code_hash(
     const unsigned char key[METALBEAR_TWOFACTOR_KEY_BYTES], const char *code,
     unsigned char out[32]) {

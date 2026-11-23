@@ -105,6 +105,40 @@ wf_status metalbear_auth_totp_consume_backup(metalbear_auth_store *store,
 /* Removes the secret and every backup code. */
 wf_status metalbear_auth_totp_disable(metalbear_auth_store *store);
 
+/* Trusted devices that skip the second factor on a later full-password login
+ * (issue #131). The browser never gets the stored value back: only a keyed
+ * hash, a public id for revocation and an expiry are persisted in the same
+ * per-account auth database as the session keys. */
+typedef struct metalbear_auth_trusted_device {
+    char *id; /* public handle, safe to show in a list and revoke */
+    int64_t created_at;
+    int64_t expires_at;
+} metalbear_auth_trusted_device;
+
+void metalbear_auth_trusted_device_list_free(
+    metalbear_auth_trusted_device *items, size_t count);
+/* Stores a new device. The caller supplies the id and the keyed hash; raw
+ * tokens never reach this layer. Expired rows are pruned on every write. */
+wf_status metalbear_auth_trusted_device_add(metalbear_auth_store *store,
+                                            const char *id,
+                                            const unsigned char hash[32],
+                                            int64_t created_at,
+                                            int64_t expires_at);
+/* True only when a non-expired row matches the presented hash. Never throws
+ * when the table is absent or the database cannot be read: *valid stays
+ * false, so a failed lookup requires the second factor again. */
+wf_status metalbear_auth_trusted_device_valid(metalbear_auth_store *store,
+                                              const unsigned char hash[32],
+                                              bool *valid);
+wf_status
+metalbear_auth_trusted_device_list(metalbear_auth_store *store,
+                                   metalbear_auth_trusted_device **out,
+                                   size_t *out_count);
+/* Sets *removed to false when the id is not present. */
+wf_status metalbear_auth_trusted_device_remove(metalbear_auth_store *store,
+                                               const char *id, bool *removed);
+wf_status metalbear_auth_trusted_device_remove_all(metalbear_auth_store *store);
+
 #ifdef __cplusplus
 }
 #endif

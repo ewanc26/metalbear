@@ -181,6 +181,8 @@ struct metalbear_server {
      * file could not be loaded: enrolment and two-factor logins then fail. */
     unsigned char totp_key[METALBEAR_TWOFACTOR_KEY_BYTES];
     bool totp_key_ready;
+    /* Lifetime of an issued trusted-device token (issue #131). */
+    int64_t trusted_device_seconds;
     /* refpds-mirrored config (METALBEAR_*) */
     char *admin_password; /* may be NULL => admin endpoints 401 */
     char *crawlers;       /* comma-separated relay hosts, may be NULL */

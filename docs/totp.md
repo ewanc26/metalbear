@@ -89,6 +89,43 @@ it means a leaked app password gets around the second factor. Options:
 I recommend A to match the reference, and treating an app password as its own
 credential that can be revoked. Your call.
 
+## Trusted devices
+
+Implemented for [#131](https://github.com/ewanc26/metalbear/issues/131). After a
+successful factor check at login, the session response carries a
+`trustedDeviceToken` once. A later full-password login may send it back as
+`trustedDeviceToken` instead of `authFactorToken`; while it is valid the server
+skips the second factor. A login that uses a trusted device does not issue a
+new token or extend the existing one.
+
+Only a keyed hash of the token is stored, in the auth database beside the
+session keys:
+
+- `trusted_device(id, token_hash, created_at, expires_at)`, with an index on
+  the expiry. `id` is a public 16-character handle for listing and revocation;
+  the raw token is never stored or returned again.
+- The lifetime is `totp.trusted_device_seconds` (or
+  `METALBEAR_TRUSTED_DEVICE_SECONDS`), defaulting to 30 days. `0` selects the
+  default; negative values are refused at startup.
+- Expired rows are pruned on every write and before each validation, so a row
+  whose expiry the server has seen cannot be used again.
+- The token is hashed under `totp.key` with a domain-separating label, so it
+  cannot authenticate as a backup code. Losing `totp.key` therefore drops every
+  trusted device along with the enrolled secrets; every account enrols again.
+
+A successful trusted-device login does not draw on the extra second-factor rate
+limit, because no factor was attempted. A rejected or missing device token falls
+back to the normal factor path and its budget.
+
+Trust is dropped immediately, not just at expiry, when:
+
+- the account revokes the device with `uk.ewancroft.totp.revokeTrustedDevice`;
+- the account changes its password through `com.atproto.server.resetPassword`;
+- an admin changes it with `com.atproto.admin.updateAccountPassword`;
+- the account turns two-factor login off.
+
+Revocation takes effect on the next login. Existing sessions are not affected.
+
 ## Threat model for the server key
 
 The key protects the enrolled secrets and the backup codes. It is kept in the
@@ -116,7 +153,6 @@ feature.
 - Passkeys stay as they are. They are already a second factor where the client
   uses them.
 - SMS codes. Not planned.
-- Trusted devices. [#131](https://github.com/ewanc26/metalbear/issues/131) builds on this.
 
 ## Tests this design needs
 
@@ -128,6 +164,9 @@ feature.
 - Rate limit: repeated wrong codes are refused like repeated wrong passwords.
 - Disable: refused without a valid second factor.
 - Recovery: the admin action clears the factor and is logged.
+- Trusted devices: a factor login issues a token shown once; a trusted login
+  skips the factor without issuing or extending a token; expiry, revocation and
+  a password change each force the factor again; only a keyed hash is stored.
 
 ## Questions before code
 
@@ -144,5 +183,9 @@ feature.
 - `uk.ewancroft.totp.enrol` (authenticated): returns a secret and an `otpauth://` URI. Nothing changes until the next call succeeds.
 - `uk.ewancroft.totp.confirm` (authenticated, `code`): turns the factor on and returns ten backup codes, shown once.
 - `uk.ewancroft.totp.disable` (authenticated, `password` and `code`): turns it off. A session token alone is not enough.
+- `uk.ewancroft.totp.listTrustedDevices` (authenticated, query): returns the account's trusted devices as `devices`, each with `id`, `createdAt` and `expiresAt`. The raw token is never returned.
+- `uk.ewancroft.totp.revokeTrustedDevice` (authenticated, `id`): revokes one device. A missing id is a 404. Revocation takes effect on the next login.
 
 The server key is set with `METALBEAR_TOTP_KEY_FILE` (or `totp.key_file`). It defaults to `totp.key` in the data directory. If the key cannot be loaded, two-factor logins are refused, which fails closed. Scheduled backups leave `totp.key` out.
+
+Trusted-device lifetime is `totp.trusted_device_seconds` (or `METALBEAR_TRUSTED_DEVICE_SECONDS`), defaulting to 30 days. It is a lifetime, not a sliding window: using a device does not extend it.
