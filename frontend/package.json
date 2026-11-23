@@ -5,6 +5,10 @@
 	"description": "SvelteKit account and operator frontend for the MetalBear AT Protocol PDS.",
 	"license": "AGPL-3.0-only",
 	"type": "module",
+	"imports": {
+		"#lib": "./src/lib/index.ts",
+		"#lib/*": "./src/lib/*"
+	},
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",

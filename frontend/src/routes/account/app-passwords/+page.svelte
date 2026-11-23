@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { auth } from '$lib/stores/auth';
-	import { createAppPassword, listAppPasswords, revokeAppPassword } from '$lib/pds';
-	import type { AppPassword } from '$lib/pds';
+	import { auth } from '#lib/stores/auth.ts';
+	import { createAppPassword, listAppPasswords, revokeAppPassword } from '#lib/pds.ts';
+	import type { AppPassword } from '#lib/pds.ts';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
-	let session = $state<import('$lib/stores/auth').Session | null>(null);
+	let session = $state<import('#lib/stores/auth.ts').Session | null>(null);
 	let passwords = $state<AppPassword[]>([]);
 	let error = $state('');
 	let loading = $state(true);

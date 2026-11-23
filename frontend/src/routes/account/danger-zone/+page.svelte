@@ -1,17 +1,17 @@
 <script lang="ts">
-	import { auth } from '$lib/stores/auth';
+	import { auth } from '#lib/stores/auth.ts';
 	import {
 		getSession,
 		deactivateAccount,
 		activateAccount,
 		requestAccountDelete,
 		deleteAccount
-	} from '$lib/pds';
-	import type { SessionResponse } from '$lib/pds';
+	} from '#lib/pds.ts';
+	import type { SessionResponse } from '#lib/pds.ts';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
-	let session = $state<import('$lib/stores/auth').Session | null>(null);
+	let session = $state<import('#lib/stores/auth.ts').Session | null>(null);
 	let current = $state<SessionResponse | null>(null);
 	let loading = $state(true);
 	let loadError = $state('');

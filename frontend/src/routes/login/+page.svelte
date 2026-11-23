@@ -1,11 +1,16 @@
 <script lang="ts">
-	import { auth } from '$lib/stores/auth';
-	import { createSession, signInDevice, passkeyAuthenticateOptions, passkeyAuthenticateVerify } from '$lib/pds';
-	import { authenticateWithPasskey, isWebAuthnSupported } from '$lib/webauthn';
+	import { auth } from '#lib/stores/auth.ts';
+	import {
+		createSession,
+		signInDevice,
+		passkeyAuthenticateOptions,
+		passkeyAuthenticateVerify
+	} from '#lib/pds.ts';
+	import { authenticateWithPasskey, isWebAuthnSupported } from '#lib/webauthn.ts';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import AuthShell from '$lib/components/AuthShell.svelte';
+	import AuthShell from '#lib/components/AuthShell.svelte';
 
 	let identifier = $state('');
 	let password = $state('');
@@ -17,7 +22,7 @@
 	let redirectTo = $state('');
 
 	onMount(() => {
-		redirectTo = $page.url.searchParams.get('redirect') ?? '/';
+		redirectTo = page.url.searchParams.get('redirect') ?? '/';
 
 		const unsub = auth.subscribe((s) => {
 			if (s) goto(redirectTo, { replaceState: true });
@@ -93,8 +98,7 @@
 			const credential = await authenticateWithPasskey({
 				challenge: options.challenge,
 				rpId: options.rpId,
-				userVerification:
-					(options.userVerification as UserVerificationRequirement) ?? 'preferred',
+				userVerification: (options.userVerification as UserVerificationRequirement) ?? 'preferred',
 				allowCredentials: options.allowCredentials ?? []
 			});
 			await passkeyAuthenticateVerify(credential);

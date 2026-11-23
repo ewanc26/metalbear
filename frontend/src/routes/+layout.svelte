@@ -1,16 +1,16 @@
 <script lang="ts">
 	import './layout.css';
-	import favicon from '$lib/assets/favicon.svg';
-	import { page } from '$app/stores';
-	import { auth } from '$lib/stores/auth';
-	import { deleteSession } from '$lib/pds';
+	import favicon from '#lib/assets/favicon.svg';
+	import { page } from '$app/state';
+	import { auth } from '#lib/stores/auth.ts';
+	import { deleteSession } from '#lib/pds.ts';
 
 	let { children } = $props();
 
-	let session = $state<import('$lib/stores/auth').Session | null>(null);
+	let session = $state<import('#lib/stores/auth.ts').Session | null>(null);
 	auth.subscribe((s) => (session = s));
 
-	const pathname = $derived($page.url.pathname);
+	const pathname = $derived(page.url.pathname);
 	const isOAuthPage = $derived(pathname === '/login' || pathname.startsWith('/oauth/'));
 
 	async function handleLogout() {

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { adminAuth } from '$lib/stores/adminAuth';
+	import { adminAuth } from '#lib/stores/adminAuth.ts';
 	import {
 		adminLogin,
 		adminGetAccountInfo,
@@ -11,8 +11,8 @@
 		adminDisableInviteCodes,
 		resolveHandle,
 		listReposPage
-	} from '$lib/pds';
-	import type { AdminAccountView, SubjectStatus, AdminInviteCode, RepoInfo } from '$lib/pds';
+	} from '#lib/pds.ts';
+	import type { AdminAccountView, SubjectStatus, AdminInviteCode, RepoInfo } from '#lib/pds.ts';
 	import { onMount } from 'svelte';
 
 	let password = $state<string | null>(null);
@@ -334,9 +334,7 @@
 
 		<!-- Accounts (browse) -->
 		<section class="mb-8 rounded-lg border border-slate-800 bg-slate-900/30 p-6">
-			<h2 class="mb-4 text-sm font-semibold tracking-widest text-slate-500 uppercase">
-				Accounts
-			</h2>
+			<h2 class="mb-4 text-sm font-semibold tracking-widest text-slate-500 uppercase">Accounts</h2>
 
 			{#if reposError}
 				<p

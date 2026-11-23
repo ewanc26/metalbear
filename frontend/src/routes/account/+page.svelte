@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { auth } from '$lib/stores/auth';
-	import { getSession, refreshSession, downloadRepo } from '$lib/pds';
+	import { auth } from '#lib/stores/auth.ts';
+	import { getSession, refreshSession, downloadRepo } from '#lib/pds.ts';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
-	let session = $state<import('$lib/stores/auth').Session | null>(null);
-	let current = $state<import('$lib/pds').SessionResponse | null>(null);
+	let session = $state<import('#lib/stores/auth.ts').Session | null>(null);
+	let current = $state<import('#lib/pds.ts').SessionResponse | null>(null);
 	let error = $state('');
 	let loading = $state(true);
 	let downloadPending = $state(false);
@@ -132,9 +132,7 @@
 		</button>
 
 		<section class="mt-8 rounded-lg border border-slate-800 bg-slate-900/30 p-6">
-			<h2 class="mb-1 text-sm font-semibold tracking-widest text-slate-500 uppercase">
-				Your data
-			</h2>
+			<h2 class="mb-1 text-sm font-semibold tracking-widest text-slate-500 uppercase">Your data</h2>
 			<p class="mb-4 text-sm text-slate-400">
 				Download a full export of your repository as a CAR file — your posts, profile, and every
 				other record you own, signed and portable to any other AT Protocol server.

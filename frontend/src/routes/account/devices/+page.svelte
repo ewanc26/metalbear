@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { auth } from '$lib/stores/auth';
-	import { listDevices, revokeDevice } from '$lib/pds';
-	import type { DeviceInfo } from '$lib/pds';
-	import { formatDate } from '$lib/format';
+	import { auth } from '#lib/stores/auth.ts';
+	import { listDevices, revokeDevice } from '#lib/pds.ts';
+	import type { DeviceInfo } from '#lib/pds.ts';
+	import { formatDate } from '#lib/format.ts';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
-	let session = $state<import('$lib/stores/auth').Session | null>(null);
+	let session = $state<import('#lib/stores/auth.ts').Session | null>(null);
 	let devices = $state<DeviceInfo[]>([]);
 	let error = $state('');
 	let loading = $state(true);
