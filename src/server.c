@@ -973,6 +973,28 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     }
 #endif
 
+    /* Notification channels (issue #132). Each is off unless its settings are
+     * present, and the table is fixed size: no channel allocates per request.
+     */
+    if (metalbear_notifier_new(&server->notifier) != WF_OK) {
+        LOG_ERROR("cannot initialise notification channels");
+        goto fail;
+    }
+#ifdef METALBEAR_MODULE_EMAIL
+    if (server->email) {
+        metalbear_notify_channel channel;
+        if (metalbear_notify_email_channel(server->email, &channel) == WF_OK)
+            metalbear_notifier_add(server->notifier, &channel);
+    }
+#endif
+    if (config->notify_webhook_url && config->notify_webhook_url[0]) {
+        metalbear_notify_channel channel;
+        if (metalbear_notify_webhook_channel(config->notify_webhook_url,
+                                             config->notify_webhook_secret,
+                                             &channel) == WF_OK)
+            metalbear_notifier_add(server->notifier, &channel);
+    }
+
 #ifdef METALBEAR_MODULE_DNS
     /*
      * Open the handle DNS publisher, if one is configured.
@@ -1170,6 +1192,7 @@ void metalbear_server_free(metalbear_server *server) {
     /* Freed after the account contexts, which borrow it. */
     metalbear_sequencer_free(server->sequencer);
     metalbear_account_registry_free(server->registry);
+    metalbear_notifier_free(server->notifier);
 #ifdef METALBEAR_MODULE_EMAIL
     metalbear_email_free(server->email);
 #endif

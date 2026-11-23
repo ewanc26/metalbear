@@ -38,6 +38,11 @@ typedef struct metalbear_config {
     const char *from_address;
     const char *from_name;
     bool smtp_starttls;
+    /* Outbound notification webhook (issue #132). A channel is off unless it
+     * has settings: email uses smtp.* above, the webhook uses these. The
+     * secret is sent as a bearer token and never logged. */
+    const char *notify_webhook_url;
+    const char *notify_webhook_secret;
     /* Account email for notifications */
     const char *account_email;
     /* Override for the operator email shown on the landing page

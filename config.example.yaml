@@ -199,6 +199,12 @@ appview:
 #   from_name: "My PDS"
 #   starttls: true
 
+# notify:
+#   # Optional webhook channel; off unless webhook_url is set. The secret is
+#   # sent as a bearer token and is never logged. See docs/notifications.md.
+#   webhook_url: "https://hooks.example.com/metalbear"
+#   webhook_secret: "replace-me"
+
 updates:
   # Periodically checks GitHub for newer MetalBear and Wolfram releases, and
   # logs a warning when one is found. Disabled by default; enable it to be

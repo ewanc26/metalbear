@@ -765,9 +765,8 @@ wf_status request_plc_operation_signature(void *ctx,
                                    "Could not create verification token");
         return WF_OK;
     }
-    /* Send the email if configured. */
-#ifdef METALBEAR_MODULE_EMAIL
-    if (server->email) {
+    /* Send the notification through every configured channel. */
+    {
         char subject[256];
         char body[1024];
         snprintf(subject, sizeof(subject), "PLC Operation Signature Request");
@@ -777,9 +776,9 @@ wf_status request_plc_operation_signature(void *ctx,
                  "Enter this code to sign your PLC operation.\n\n"
                  "If you did not request this, please ignore this email.\n",
                  token);
-        metalbear_email_send(server->email, email, subject, body);
+        metalbear_notify_send_message(server->notifier, email, subject, body,
+                                      acct->did);
     }
-#endif
     free(email);
     /* Return empty object (per lexicon: no output schema). */
     cJSON *root = cJSON_CreateObject();

@@ -533,17 +533,15 @@ wf_status admin_send_email(void *ctx, const wf_xrpc_request *request,
                                    "recipient has no email address");
         return WF_OK;
     }
-    /* Send the email if the email module is configured. */
+    /* Send through every configured channel. With none configured this used
+     * to report sent=false, which the channel count preserves. */
     const char *subj = cJSON_IsString(subject_item)
                            ? subject_item->valuestring
                            : "Message from PDS administrator";
-    bool sent = false;
-#ifdef METALBEAR_MODULE_EMAIL
-    if (server->email) {
-        sent = metalbear_email_send(server->email, email, subj,
-                                    content->valuestring) == WF_OK;
-    }
-#endif
+    bool sent = metalbear_notifier_channel_count(server->notifier) > 0 &&
+                metalbear_notify_send_message(server->notifier, email, subj,
+                                              content->valuestring,
+                                              recipient->valuestring) == WF_OK;
     free(email);
     cJSON *root = cJSON_CreateObject();
     if (!root) return WF_ERR_ALLOC;
