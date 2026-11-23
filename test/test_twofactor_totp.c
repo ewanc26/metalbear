@@ -173,6 +173,41 @@ static void test_sealing(void) {
     free(empty);
 }
 
+static void test_trusted_device_tokens(void) {
+    char token[METALBEAR_TRUSTED_DEVICE_TOKEN_CHARS + 1];
+    char again[METALBEAR_TRUSTED_DEVICE_TOKEN_CHARS + 1];
+    CHECK(metalbear_trusted_device_token_new(token) == WF_OK);
+    CHECK(metalbear_trusted_device_token_new(again) == WF_OK);
+    CHECK(strlen(token) == METALBEAR_TRUSTED_DEVICE_TOKEN_CHARS);
+    CHECK(strlen(again) == METALBEAR_TRUSTED_DEVICE_TOKEN_CHARS);
+    for (const char *p = token; *p; p++)
+        CHECK((*p >= 'A' && *p <= 'Z') || (*p >= '2' && *p <= '7'));
+    CHECK(strcmp(token, again) != 0);
+
+    char id[METALBEAR_TRUSTED_DEVICE_ID_CHARS + 1];
+    CHECK(metalbear_trusted_device_id_new(id) == WF_OK);
+    CHECK(strlen(id) == METALBEAR_TRUSTED_DEVICE_ID_CHARS);
+    for (const char *p = id; *p; p++)
+        CHECK((*p >= 'A' && *p <= 'Z') || (*p >= '2' && *p <= '7'));
+
+    unsigned char key[32], other[32];
+    memset(key, 5, sizeof(key));
+    memset(other, 6, sizeof(other));
+    unsigned char h1[32], h2[32], h3[32], backup[32];
+    CHECK(metalbear_trusted_device_token_hash(key, token, h1) == WF_OK);
+    CHECK(metalbear_trusted_device_token_hash(key, token, h2) == WF_OK);
+    CHECK(memcmp(h1, h2, 32) == 0);
+    CHECK(metalbear_trusted_device_token_hash(key, again, h2) == WF_OK);
+    CHECK(memcmp(h1, h2, 32) != 0);
+    CHECK(metalbear_trusted_device_token_hash(other, token, h2) == WF_OK);
+    CHECK(memcmp(h1, h2, 32) != 0);
+    /* Domain separation: a device token must not authenticate as a backup
+     * code even though both are HMAC-SHA-256 under the same server key. */
+    CHECK(metalbear_backup_code_hash(key, token, backup) == WF_OK);
+    CHECK(memcmp(h1, backup, 32) != 0);
+    CHECK(metalbear_trusted_device_token_hash(key, "", h2) != WF_OK);
+}
+
 static void test_backup_codes(void) {
     unsigned char key[32], other[32];
     memset(key, 3, sizeof(key));
@@ -210,6 +245,7 @@ int main(void) {
     test_codes_and_window();
     test_key_file();
     test_sealing();
+    test_trusted_device_tokens();
     test_backup_codes();
     if (failures == 0) {
         printf("PASS: TOTP primitives\n");

@@ -398,7 +398,12 @@ wf_status metalbear_auth_store_open(const char *path, const char *service_did,
             "active INTEGER NOT NULL DEFAULT 0,last_step INTEGER NOT NULL "
             "DEFAULT -1);"
             "CREATE TABLE IF NOT EXISTS totp_backup("
-            "code_hash BLOB PRIMARY KEY);") != WF_OK ||
+            "code_hash BLOB PRIMARY KEY);"
+            "CREATE TABLE IF NOT EXISTS trusted_device("
+            "id TEXT PRIMARY KEY,token_hash BLOB NOT NULL UNIQUE,"
+            "created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL);"
+            "CREATE INDEX IF NOT EXISTS trusted_device_expiry_idx ON "
+            "trusted_device(expires_at);") != WF_OK ||
         load_or_create_key(store) != WF_OK)
         goto fail;
     sqlite3_exec(store->db,
@@ -716,7 +721,8 @@ metalbear_auth_revoke_app_password_sessions(metalbear_auth_store *store,
 wf_status metalbear_auth_delete_all(metalbear_auth_store *store) {
     if (!store) return WF_ERR_INVALID_ARG;
     return execute(store->db, "DELETE FROM refresh_token;"
-                              "DELETE FROM auth_meta;");
+                              "DELETE FROM auth_meta;"
+                              "DELETE FROM trusted_device;");
 }
 
 /* ---- two-factor login (docs/totp.md) ---- */
@@ -871,6 +877,156 @@ wf_status metalbear_auth_totp_consume_backup(metalbear_auth_store *store,
 
 wf_status metalbear_auth_totp_disable(metalbear_auth_store *store) {
     if (!store) return WF_ERR_INVALID_ARG;
+    /* Turning the factor off drops trusted devices too: a later login must
+     * still ask for a code if the factor is turned back on. */
     return execute(store->db,
-                   "DELETE FROM totp_backup; DELETE FROM totp_secret;");
+                   "DELETE FROM totp_backup; DELETE FROM totp_secret;"
+                   "DELETE FROM trusted_device;");
+}
+
+/* ---- trusted devices (issue #131) ---- */
+
+void metalbear_auth_trusted_device_list_free(
+    metalbear_auth_trusted_device *items, size_t count) {
+    if (!items) return;
+    for (size_t i = 0; i < count; i++) free(items[i].id);
+    free(items);
+}
+
+static void prune_expired_trusted_devices(metalbear_auth_store *store,
+                                          int64_t now) {
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+                           "DELETE FROM trusted_device WHERE expires_at<=?;",
+                           -1, &stmt, NULL) != SQLITE_OK)
+        return;
+    sqlite3_bind_int64(stmt, 1, now);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+}
+
+wf_status metalbear_auth_trusted_device_add(metalbear_auth_store *store,
+                                            const char *id,
+                                            const unsigned char hash[32],
+                                            int64_t created_at,
+                                            int64_t expires_at) {
+    if (!store || !id || !id[0] || !hash) return WF_ERR_INVALID_ARG;
+    prune_expired_trusted_devices(store, (int64_t)time(NULL));
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+                           "INSERT INTO trusted_device"
+                           "(id,token_hash,created_at,expires_at)"
+                           " VALUES(?,?,?,?);",
+                           -1, &stmt, NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_blob(stmt, 2, hash, 32, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 3, created_at);
+    sqlite3_bind_int64(stmt, 4, expires_at);
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
+}
+
+wf_status metalbear_auth_trusted_device_valid(metalbear_auth_store *store,
+                                              const unsigned char hash[32],
+                                              bool *valid) {
+    if (!store || !hash || !valid) return WF_ERR_INVALID_ARG;
+    *valid = false;
+    prune_expired_trusted_devices(store, (int64_t)time(NULL));
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+                           "SELECT 1 FROM trusted_device WHERE token_hash=? "
+                           "AND expires_at>?;",
+                           -1, &stmt, NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    sqlite3_bind_blob(stmt, 1, hash, 32, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, (int64_t)time(NULL));
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (rc == SQLITE_ROW) *valid = true;
+    return rc == SQLITE_ROW || rc == SQLITE_DONE ? WF_OK : WF_ERR_INTERNAL;
+}
+
+wf_status
+metalbear_auth_trusted_device_list(metalbear_auth_store *store,
+                                   metalbear_auth_trusted_device **out,
+                                   size_t *out_count) {
+    if (!store || !out || !out_count) return WF_ERR_INVALID_ARG;
+    *out = NULL;
+    *out_count = 0;
+    prune_expired_trusted_devices(store, (int64_t)time(NULL));
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+                           "SELECT id,created_at,expires_at FROM "
+                           "trusted_device ORDER BY created_at,id;",
+                           -1, &stmt, NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    size_t capacity = 0;
+    metalbear_auth_trusted_device *items = NULL;
+    wf_status st = WF_OK;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (*out_count == capacity) {
+            size_t next = capacity ? capacity * 2 : 8;
+            metalbear_auth_trusted_device *grown =
+                realloc(items, next * sizeof(*items));
+            if (!grown) {
+                st = WF_ERR_ALLOC;
+                break;
+            }
+            items = grown;
+            capacity = next;
+        }
+        metalbear_auth_trusted_device *item = &items[*out_count];
+        memset(item, 0, sizeof(*item));
+        const unsigned char *text = sqlite3_column_text(stmt, 0);
+        if (!text) {
+            st = WF_ERR_INTERNAL;
+            break;
+        }
+        /* sqlite3_column_text returns a pointer owned by the statement, so it
+         * must be copied before the statement is finalized. */
+        item->id = strdup((const char *)text);
+        if (!item->id) {
+            st = WF_ERR_ALLOC;
+            break;
+        }
+        item->created_at = sqlite3_column_int64(stmt, 1);
+        item->expires_at = sqlite3_column_int64(stmt, 2);
+        (*out_count)++;
+    }
+    if (rc != SQLITE_DONE && rc != SQLITE_ROW) st = WF_ERR_INTERNAL;
+    sqlite3_finalize(stmt);
+    if (st != WF_OK) {
+        metalbear_auth_trusted_device_list_free(items, *out_count);
+        *out = NULL;
+        *out_count = 0;
+        return st;
+    }
+    *out = items;
+    return WF_OK;
+}
+
+wf_status metalbear_auth_trusted_device_remove(metalbear_auth_store *store,
+                                               const char *id, bool *removed) {
+    if (!store || !id || !id[0] || !removed) return WF_ERR_INVALID_ARG;
+    *removed = false;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db, "DELETE FROM trusted_device WHERE id=?;",
+                           -1, &stmt, NULL) != SQLITE_OK)
+        return WF_ERR_INTERNAL;
+    sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(stmt);
+    int changed = sqlite3_changes(store->db);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) return WF_ERR_INTERNAL;
+    *removed = changed == 1;
+    return WF_OK;
+}
+
+wf_status
+metalbear_auth_trusted_device_remove_all(metalbear_auth_store *store) {
+    if (!store) return WF_ERR_INVALID_ARG;
+    return execute(store->db, "DELETE FROM trusted_device;");
 }

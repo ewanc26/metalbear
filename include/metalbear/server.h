@@ -92,6 +92,10 @@ typedef struct metalbear_config {
      * directory. Keep it outside the data directory where you can: see
      * docs/totp.md. */
     const char *totp_key_file;
+    /* How long a device issued a trusted-device token may skip the second
+     * factor (issue #131), in seconds. 0 selects the 30-day default. Mapped to
+     * totp.trusted_device_seconds / METALBEAR_TRUSTED_DEVICE_SECONDS. */
+    int64_t trusted_device_seconds;
     /* Admin password (refpds PDS_ADMIN_PASSWORD). When set, admin
      * endpoints require HTTP Basic `admin:<password>` auth. When unset,
      * admin endpoints return 401 honestly. */

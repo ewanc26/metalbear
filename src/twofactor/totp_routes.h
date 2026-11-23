@@ -28,4 +28,20 @@ wf_status metalbear_totp_check_login_token(metalbear_server *server,
                                            metalbear_account_context *acct,
                                            const char *token, bool *accepted);
 
+/* Trusted devices (issue #131). A successful second-factor login issues a
+ * token shown once; a later full-password login can present it to skip the
+ * factor until it expires or is revoked. Both fail closed when the server key
+ * is unavailable. */
+wf_status metalbear_totp_trusted_device_issue(metalbear_server *server,
+                                              metalbear_account_context *acct,
+                                              char **out_token);
+bool metalbear_totp_trusted_device_valid(metalbear_server *server,
+                                         metalbear_account_context *acct,
+                                         const char *token);
+
+wf_status totp_list_trusted_devices(void *ctx, const wf_xrpc_request *request,
+                                    wf_xrpc_response *response);
+wf_status totp_revoke_trusted_device(void *ctx, const wf_xrpc_request *request,
+                                     wf_xrpc_response *response);
+
 #endif

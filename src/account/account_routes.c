@@ -963,6 +963,10 @@ wf_status reset_password(void *ctx, const wf_xrpc_request *request,
                                    "Could not reset password");
         return WF_OK;
     }
+    /* A password change drops device trust (issue #131): the next login must
+     * present the second factor again. Admin password resets clear this too,
+     * through metalbear_auth_delete_all. */
+    metalbear_auth_trusted_device_remove_all(acct->auth);
     return WF_OK;
 }
 

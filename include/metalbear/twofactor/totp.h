@@ -77,6 +77,25 @@ wf_status metalbear_backup_code_hash(
     const unsigned char key[METALBEAR_TWOFACTOR_KEY_BYTES], const char *code,
     unsigned char out[32]);
 
+/* Trusted devices (issue #131): a high-entropy token shown to the client once
+ * after a successful second-factor login, and a public id used to revoke it.
+ * Only the keyed hash and the id are stored, with an expiry. */
+#define METALBEAR_TRUSTED_DEVICE_TOKEN_BYTES 32
+/* 32 bytes of base32 with no padding. */
+#define METALBEAR_TRUSTED_DEVICE_TOKEN_CHARS 52
+#define METALBEAR_TRUSTED_DEVICE_ID_BYTES 10
+#define METALBEAR_TRUSTED_DEVICE_ID_CHARS 16
+
+wf_status metalbear_trusted_device_token_new(
+    char out[METALBEAR_TRUSTED_DEVICE_TOKEN_CHARS + 1]);
+wf_status metalbear_trusted_device_id_new(
+    char out[METALBEAR_TRUSTED_DEVICE_ID_CHARS + 1]);
+/* Domain-separated from backup-code hashes by a fixed label, so a device
+ * token can never authenticate as a backup code or the other way around. */
+wf_status metalbear_trusted_device_token_hash(
+    const unsigned char key[METALBEAR_TWOFACTOR_KEY_BYTES], const char *token,
+    unsigned char out[32]);
+
 #ifdef __cplusplus
 }
 #endif

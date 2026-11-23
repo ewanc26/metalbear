@@ -600,6 +600,12 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         wf_xrpc_server_register_procedure(server->xrpc,
                                           "uk.ewancroft.totp.disable",
                                           totp_disable, server) != WF_OK ||
+        wf_xrpc_server_register_query(
+            server->xrpc, "uk.ewancroft.totp.listTrustedDevices",
+            totp_list_trusted_devices, server) != WF_OK ||
+        wf_xrpc_server_register_procedure(
+            server->xrpc, "uk.ewancroft.totp.revokeTrustedDevice",
+            totp_revoke_trusted_device, server) != WF_OK ||
         /* Not part of the AT Protocol lexicon -- account-management
          * listings for OAuth state (connected apps, active devices),
          * registered under a project-scoped nsid the same way "_health"
@@ -1123,6 +1129,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     server->development = config->development;
     server->public_status = config->public_status;
     server->thread_count = config->thread_count;
+    server->trusted_device_seconds = config->trusted_device_seconds > 0
+                                         ? config->trusted_device_seconds
+                                         : 30 * 24 * 60 * 60;
 
     /* Configure firehose retention */
     server->retention_max_age = config->retention_max_age_seconds > 0

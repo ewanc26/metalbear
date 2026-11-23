@@ -319,3 +319,100 @@ wf_status metalbear_totp_check_login_token(metalbear_server *server,
     }
     return check_backup(server, acct->auth, token, accepted);
 }
+
+wf_status metalbear_totp_trusted_device_issue(metalbear_server *server,
+                                              metalbear_account_context *acct,
+                                              char **out_token) {
+    if (!out_token) return WF_ERR_INVALID_ARG;
+    *out_token = NULL;
+    if (!server->totp_key_ready || !acct || !acct->auth) return WF_OK;
+    char id[METALBEAR_TRUSTED_DEVICE_ID_CHARS + 1];
+    char token[METALBEAR_TRUSTED_DEVICE_TOKEN_CHARS + 1];
+    if (metalbear_trusted_device_id_new(id) != WF_OK ||
+        metalbear_trusted_device_token_new(token) != WF_OK)
+        return WF_ERR_CRYPTO;
+    unsigned char hash[32];
+    if (metalbear_trusted_device_token_hash(server->totp_key, token, hash) !=
+        WF_OK)
+        return WF_ERR_CRYPTO;
+    int64_t now = (int64_t)time(NULL);
+    wf_status st = metalbear_auth_trusted_device_add(
+        acct->auth, id, hash, now, now + server->trusted_device_seconds);
+    OPENSSL_cleanse(hash, sizeof(hash));
+    if (st != WF_OK) return st;
+    *out_token = strdup(token);
+    OPENSSL_cleanse(token, sizeof(token));
+    return *out_token ? WF_OK : WF_ERR_ALLOC;
+}
+
+bool metalbear_totp_trusted_device_valid(metalbear_server *server,
+                                         metalbear_account_context *acct,
+                                         const char *token) {
+    if (!server->totp_key_ready || !acct || !acct->auth || !token || !*token)
+        return false;
+    unsigned char hash[32];
+    if (metalbear_trusted_device_token_hash(server->totp_key, token, hash) !=
+        WF_OK)
+        return false;
+    bool valid = false;
+    wf_status st =
+        metalbear_auth_trusted_device_valid(acct->auth, hash, &valid);
+    OPENSSL_cleanse(hash, sizeof(hash));
+    return st == WF_OK && valid;
+}
+
+wf_status totp_list_trusted_devices(void *ctx, const wf_xrpc_request *request,
+                                    wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct)
+        return respond_error(response, 401, "InvalidToken",
+                             "Invalid access token");
+    metalbear_auth_trusted_device *items = NULL;
+    size_t count = 0;
+    if (metalbear_auth_trusted_device_list(acct->auth, &items, &count) != WF_OK)
+        return respond_error(response, 500, "InternalError",
+                             "Could not list trusted devices");
+    cJSON *root = cJSON_CreateObject();
+    cJSON *list = cJSON_CreateArray();
+    if (!root || !list) {
+        cJSON_Delete(root);
+        cJSON_Delete(list);
+        metalbear_auth_trusted_device_list_free(items, count);
+        return WF_ERR_ALLOC;
+    }
+    for (size_t i = 0; i < count; i++) {
+        cJSON *item = cJSON_CreateObject();
+        if (!item) continue;
+        cJSON_AddStringToObject(item, "id", items[i].id);
+        cJSON_AddNumberToObject(item, "createdAt", (double)items[i].created_at);
+        cJSON_AddNumberToObject(item, "expiresAt", (double)items[i].expires_at);
+        cJSON_AddItemToArray(list, item);
+    }
+    cJSON_AddItemToObject(root, "devices", list);
+    metalbear_auth_trusted_device_list_free(items, count);
+    return set_json(response, root);
+}
+
+wf_status totp_revoke_trusted_device(void *ctx, const wf_xrpc_request *request,
+                                     wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    metalbear_account_context *acct = resolve_request_context(server, request);
+    if (!acct)
+        return respond_error(response, 401, "InvalidToken",
+                             "Invalid access token");
+    const char *id = param_string(request, "id");
+    if (!id || !*id)
+        return respond_error(response, 400, "InvalidRequest", "id is required");
+    bool removed = false;
+    wf_status st =
+        metalbear_auth_trusted_device_remove(acct->auth, id, &removed);
+    if (st != WF_OK)
+        return respond_error(response, 500, "InternalError",
+                             "Could not revoke trusted device");
+    if (!removed)
+        return respond_error(response, 404, "NotFound",
+                             "No such trusted device");
+    LOG_INFO("totp: revoked trusted device id=%s for did=%s", id, acct->did);
+    return WF_OK;
+}
