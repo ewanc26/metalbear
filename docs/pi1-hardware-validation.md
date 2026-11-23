@@ -9,6 +9,13 @@ Run it on a real Raspberry Pi 1B or Zero, not QEMU.  Cross-compilation proves
 that the linker accepted the target; it cannot prove that an ARMv6 CPU will
 execute the output or establish its memory envelope.
 
+For a pre-flight approximation without a Pi, `test/pi1-emulation/` runs the
+published container image under cgroup caps modelled on this checklist and,
+optionally, under QEMU `arm/v7` emulation. It exercises the memory, thread,
+file-descriptor and startup gates ahead of hardware. It is not a substitute
+for this record: the latency gates and on-device execution still need a real
+ARM1176, and a harness result is never hardware evidence for #34.
+
 ## What CI already checks
 
 CI's `minimal profile + ARMv6 atomics` job builds `METALBEAR_PROFILE=minimal`

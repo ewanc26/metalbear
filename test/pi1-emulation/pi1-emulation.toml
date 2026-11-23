@@ -1,0 +1,6 @@
+# Pi 1B/Zero emulation configuration: one server worker, matching the
+# one-core target configuration in docs/pi1-hardware-validation.md
+# (`[server] threads = 1`). docker-compose.yml points METALBEAR_CONFIG
+# here; every other setting comes from the compose environment block.
+[server]
+threads = 1
