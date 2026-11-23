@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-11-23
+
 ### Added
 
 - Trusted devices for two-factor login: a successful code login returns a `trustedDeviceToken` once, and a later full-password login can present it to skip the second factor until it expires or is revoked. Accounts can list and revoke devices with `uk.ewancroft.totp.listTrustedDevices` and `uk.ewancroft.totp.revokeTrustedDevice`; changing the password or turning two-factor login off drops trust immediately. Only a keyed hash is stored, the lifetime is `totp.trusted_device_seconds` / `METALBEAR_TRUSTED_DEVICE_SECONDS` (30 days by default), and losing `totp.key` drops every device. See [docs/totp.md](docs/totp.md). ([#131](https://github.com/ewanc26/metalbear/issues/131))
