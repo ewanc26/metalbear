@@ -125,13 +125,16 @@ static metalbear_repo_store *resolve_repo(metalbear_pds_repo_bundle *b,
 typedef struct blob_assoc_ctx {
     metalbear_blob_store *blobs;
     const char *uri;
+    const char *rev;
 } blob_assoc_ctx;
 
 static void blob_associate_cb(const char *cid, void *opaque) {
     blob_assoc_ctx *c = opaque;
     /* WF_ERR_NOT_FOUND (blob not uploaded yet) is expected and not an error
-     * here — see the module comment above. */
-    (void)metalbear_blob_store_associate(c->blobs, cid, c->uri);
+     * here — see the module comment above. `rev` is the commit that made this
+     * reference live; the lifecycle sweeper uses it to tell historical refs
+     * that repo GC has collected from still-reachable ones. */
+    (void)metalbear_blob_store_associate_at(c->blobs, cid, c->uri, c->rev);
 }
 
 /* Associate every blob `record_json` references with `uri`. Call this
@@ -139,13 +142,23 @@ static void blob_associate_cb(const char *cid, void *opaque) {
  * shared between the old and new value is already re-associated by the time
  * the old value's association is dropped. */
 static void track_written_blobs(metalbear_blob_store *blobs, const char *uri,
-                                const char *record_json) {
+                                const char *record_json, const char *rev) {
     if (!blobs || !record_json) return;
     cJSON *value = cJSON_Parse(record_json);
     if (!value) return;
-    blob_assoc_ctx c = {blobs, uri};
+    blob_assoc_ctx c = {blobs, uri, rev};
     metalbear_blob_walk_refs(value, blob_associate_cb, &c);
     cJSON_Delete(value);
+}
+
+/* Best-effort: a write that succeeded has a revision, but an older embedded
+ * caller may not expose one. NULL means "unknown", which the lifecycle store
+ * keeps until an explicit reconciliation can date the reference. */
+static char *write_revision(metalbear_repo_store *s) {
+    char *rev = NULL;
+    if (s && metalbear_repo_store_current_revision(s, &rev) != WF_OK)
+        return NULL;
+    return rev;
 }
 
 /* A small deduplicated set of owned CID strings, used only to answer "is
@@ -490,7 +503,9 @@ static wf_status h_create_record(void *ctx, const wf_xrpc_request *req,
         set_write_error(resp, st, "record creation failed");
         return WF_OK;
     }
-    track_written_blobs(blobs, uri, rec_json);
+    char *rev = write_revision(s);
+    track_written_blobs(blobs, uri, rec_json, rev);
+    free(rev);
     free(rec_json);
 
     cJSON *out = cJSON_CreateObject();
@@ -570,8 +585,10 @@ static wf_status h_put_record(void *ctx, const wf_xrpc_request *req,
         set_write_error(resp, st, "record put failed");
         return WF_OK;
     }
-    track_written_blobs(blobs, uri, rec_json);
+    char *rev = write_revision(s);
+    track_written_blobs(blobs, uri, rec_json, rev);
     untrack_superseded_blobs(blobs, uri, old_json, rec_json);
+    free(rev);
     free(rec_json);
     free(old_json);
 
@@ -879,7 +896,8 @@ static wf_status h_apply_writes(void *ctx, const wf_xrpc_request *req,
                         "com.atproto.repo.applyWrites#update") == 0);
             if (is_create_or_update && cJSON_IsString(entry_uri) && val) {
                 char *val_json = cJSON_PrintUnformatted(val);
-                track_written_blobs(blobs, entry_uri->valuestring, val_json);
+                track_written_blobs(blobs, entry_uri->valuestring, val_json,
+                                    rev);
                 free(val_json);
             }
         }

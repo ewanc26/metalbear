@@ -1769,11 +1769,11 @@ int main(void) {
         {"did", alice_did},
         {"cid", blob_cid ? blob_cid : ""},
     };
+    /* A newly uploaded blob is temporary: hidden from getBlob until a
+     * record references it and promotes it to durable. */
     CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getBlob", blob_params,
-                               2, &response) == WF_OK);
-    CHECK(response.status == 200 && response.body_len == sizeof(blob_data));
-    CHECK(response.body_len == sizeof(blob_data) &&
-          memcmp(response.body, blob_data, sizeof(blob_data)) == 0);
+                               2, &response) == WF_ERR_HTTP);
+    CHECK(response.status == 404);
     wf_response_free(&response);
 
 #ifdef METALBEAR_MODULE_VIDEO
@@ -1871,14 +1871,18 @@ int main(void) {
     }
 #endif
 
-    char create_body[512];
+    char create_body[1024];
     snprintf(create_body, sizeof(create_body),
              "{\"repo\":\"%s\","
              "\"collection\":\"app.bsky.feed.post\",\"rkey\":\"first\","
              "\"record\":{\"$type\":\"app.bsky.feed.post\","
              "\"text\":\"hello from MetalBear\","
+             "\"embed\":{\"$type\":\"app.bsky.embed.images\","
+             "\"images\":[{\"alt\":\"a\",\"image\":{\"$type\":\"blob\","
+             "\"ref\":{\"$link\":\"%s\"},\"mimeType\":\"image/png\","
+             "\"size\":4}}]},"
              "\"createdAt\":\"2026-07-19T00:00:00.000Z\"}}",
-             alice_did);
+             alice_did, blob_cid ? blob_cid : "");
     CHECK(wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
                             create_body, &response) == WF_ERR_HTTP);
     CHECK(response.status == 401);
@@ -1905,6 +1909,15 @@ int main(void) {
                            : NULL;
     CHECK(commit_cid && commit_rev);
     cJSON_Delete(json);
+    wf_response_free(&response);
+
+    /* The record now references the blob, so it is durable and downloadable
+     * again with the exact bytes that were uploaded. */
+    CHECK(wf_xrpc_query_params(client, "com.atproto.sync.getBlob", blob_params,
+                               2, &response) == WF_OK);
+    CHECK(response.status == 200 && response.body_len == sizeof(blob_data));
+    CHECK(response.body_len == sizeof(blob_data) &&
+          memcmp(response.body, blob_data, sizeof(blob_data)) == 0);
     wf_response_free(&response);
 
     /* queryLabels answers from this server's own label store. Alice has no

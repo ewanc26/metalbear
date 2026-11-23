@@ -135,6 +135,9 @@ typedef struct metalbear_config {
      * blob stores against the account's own usage counter. */
     int64_t repo_byte_quota;
     int64_t blob_byte_quota;
+    /* Seconds an unreferenced uploaded blob stays temporary before the sweep
+     * may delete it. 0 means immediate expiry; default 86400 (one day). */
+    int64_t blob_temp_seconds;
     /* Whether com.atproto.repo.importRepo accepts requests at all (refpds
      * PDS_ACCEPTING_REPO_IMPORTS). Defaults true; an operator who wants the
      * bulk-replace path closed off entirely can disable it. */

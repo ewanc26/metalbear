@@ -18,6 +18,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #ifdef METALBEAR_BUILD_BLOB_CRYPTO
 #include <sodium.h>
@@ -30,6 +31,9 @@ typedef struct metalbear_blob_node {
     size_t len;
     char **refs; /* owned array of owned record URI strings */
     size_t ref_count;
+    /* Whether these bytes are currently charged to the account quota.
+     * Temporary uploads are not charged until a record promotes them. */
+    bool quota_counted;
     /* TID (from wf_tid_now, same process clock as repo commit revs) at which
      * this blob was first seen; empty when unknown. Sorts by creation order
      * via strcmp, which is how listBlobs' `since` filter compares. */
@@ -43,6 +47,10 @@ struct metalbear_blob_store {
     metalbear_blob_node *head; /* in-memory index; source of truth */
     /* Borrowed account store used for per-account byte quotas (issue #152). */
     metalbear_account_store *quota_account;
+    /* Borrowed host-wide lifecycle database (issue #253). `did` is owned and
+     * identifies which account's copy this store holds. */
+    metalbear_blob_lifecycle *lifecycle;
+    char *did;
     pthread_mutex_t mutex; /* guards head and all node mutations */
 #ifdef METALBEAR_BUILD_BLOB_CRYPTO
     unsigned char key[crypto_secretbox_KEYBYTES]; /* derived secret-box key */
@@ -105,6 +113,7 @@ static wf_status blob_node_push(metalbear_blob_store *store, char *cid,
     node->mime = mime;
     node->data = data;
     node->len = len;
+    node->quota_counted = true;
     if (rev) snprintf(node->rev, sizeof(node->rev), "%s", rev);
     node->next = store->head;
     store->head = node;
@@ -127,6 +136,16 @@ static metalbear_blob_node *blob_node_find(metalbear_blob_store *store,
     for (metalbear_blob_node *n = store->head; n; n = n->next)
         if (strcmp(n->cid, cid) == 0) return n;
     return NULL;
+}
+
+/* A bound store hides temporary copies from the public read/list paths.
+ * Stores used standalone (tests, embedders) have no lifecycle database and
+ * keep their historical behavior: every stored blob is immediately visible. */
+static bool blob_node_visible(const metalbear_blob_store *store,
+                              const metalbear_blob_node *node) {
+    if (!store->lifecycle || !store->did) return true;
+    return metalbear_blob_lifecycle_is_durable(store->lifecycle, store->did,
+                                               node->cid) == 1;
 }
 
 static size_t refs_index_of(metalbear_blob_node *n, const char *uri) {
@@ -630,6 +649,7 @@ void metalbear_blob_store_free(metalbear_blob_store *store) {
         n = next;
     }
     free(store->dir);
+    free(store->did);
     pthread_mutex_unlock(&store->mutex);
     pthread_mutex_destroy(&store->mutex);
     free(store);
@@ -647,6 +667,11 @@ void metalbear_blob_store_set_quota_account(metalbear_blob_store *store,
     if (account) {
         uint64_t used = 0;
         for (metalbear_blob_node *n = store->head; n; n = n->next) {
+            /* Issue #253: temporary uploads are not charged until a record
+             * promotes them. Existing stores opened before lifecycle tracking
+             * have no bound database and remain fully charged. */
+            n->quota_counted = blob_node_visible(store, n);
+            if (!n->quota_counted) continue;
             if (n->len > UINT64_MAX - used) {
                 used = UINT64_MAX;
                 break;
@@ -655,6 +680,17 @@ void metalbear_blob_store_set_quota_account(metalbear_blob_store *store,
         }
         (void)metalbear_account_set_usage(account, true, used);
     }
+    pthread_mutex_unlock(&store->mutex);
+}
+
+void metalbear_blob_store_set_lifecycle(metalbear_blob_store *store,
+                                        metalbear_blob_lifecycle *lifecycle,
+                                        const char *did) {
+    if (!store || !did) return;
+    pthread_mutex_lock(&store->mutex);
+    store->lifecycle = lifecycle;
+    free(store->did);
+    store->did = strdup(did);
     pthread_mutex_unlock(&store->mutex);
 }
 
@@ -679,17 +715,16 @@ static void quota_release_locked(metalbear_blob_store *store,
  * length being replaced, or zero for a new CID. */
 static void quota_usage_delta(const metalbear_blob_node *node, size_t new_len,
                               uint64_t *out_grow, uint64_t *out_shrink) {
-    uint64_t old_len = node ? node->len : 0;
+    uint64_t old_len = node && node->quota_counted ? node->len : 0;
     *out_grow = new_len > old_len ? (uint64_t)new_len - old_len : 0;
     *out_shrink = new_len < old_len ? old_len - (uint64_t)new_len : 0;
 }
 
-wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
-                                   const char *mime_type,
-                                   const unsigned char *data, size_t len) {
-    if (!store || !blob_cid_is_valid(cid) || !mime_type || !data) {
+static wf_status blob_put_impl(metalbear_blob_store *store, const char *cid,
+                               const char *mime_type, const unsigned char *data,
+                               size_t len, bool temporary) {
+    if (!store || !blob_cid_is_valid(cid) || !mime_type || !data)
         return WF_ERR_INVALID_ARG;
-    }
 
     unsigned char *data_copy = NULL;
     if (!store->file_backed) {
@@ -707,9 +742,23 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
     }
 
     pthread_mutex_lock(&store->mutex);
+    /* A re-upload of an already durable copy must not flip it back to
+     * temporary: a live record may still depend on it. */
+    bool tracked = store->lifecycle && store->did;
+    bool already_durable =
+        tracked && metalbear_blob_lifecycle_is_durable(store->lifecycle,
+                                                       store->did, cid) == 1;
+    bool temp = temporary && tracked && !already_durable;
+    /* Temporary bytes are held on disk but not charged until promotion. */
+    bool charge = !temp;
+
+    metalbear_blob_node *existing = blob_node_find(store, cid);
+    uint64_t old_counted =
+        existing && existing->quota_counted ? existing->len : 0;
     uint64_t grow = 0, shrink = 0, reserved = 0;
-    quota_usage_delta(blob_node_find(store, cid), len, &grow, &shrink);
-    wf_status quota_st = quota_reserve_locked(store, grow, &reserved);
+    quota_usage_delta(existing, len, &grow, &shrink);
+    wf_status quota_st =
+        charge ? quota_reserve_locked(store, grow, &reserved) : WF_OK;
     if (quota_st != WF_OK) {
         free(data_copy);
         free(cid_copy);
@@ -738,15 +787,26 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
             n->mime = mime_copy;
             n->data = data_copy;
             n->len = len;
+            n->quota_counted = charge;
             free(cid_copy);
-            /* A re-upload of a blob whose first-seen rev was never recorded
-             * (e.g. loaded from a store created before rev tracking) records
-             * this upload as its first-seen moment. */
             if (n->rev[0] == '\0') {
                 blob_tid_now(n->rev);
                 persist_rev(store, n);
             }
-            quota_release_locked(store, shrink);
+            if (charge)
+                quota_release_locked(store, shrink);
+            else if (old_counted)
+                quota_release_locked(store, old_counted);
+            if (tracked) {
+                /* mark_uploaded updates the size without changing state, so
+                 * re-uploading a durable copy keeps it durable and an upload
+                 * that races its first record reference keeps its bytes. */
+                (void)metalbear_blob_lifecycle_mark_uploaded(
+                    store->lifecycle, store->did, cid, len, time(NULL));
+                if (!temp)
+                    (void)metalbear_blob_lifecycle_promote(
+                        store->lifecycle, store->did, cid, NULL);
+            }
             pthread_mutex_unlock(&store->mutex);
             return WF_OK;
         }
@@ -768,9 +828,31 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
         pthread_mutex_unlock(&store->mutex);
         return WF_ERR_ALLOC;
     }
+    store->head->quota_counted = charge;
     persist_rev(store, store->head); /* push inserts at head */
+    if (tracked) {
+        (void)metalbear_blob_lifecycle_mark_uploaded(
+            store->lifecycle, store->did, cid, len, time(NULL));
+        if (!temp)
+            (void)metalbear_blob_lifecycle_promote(store->lifecycle, store->did,
+                                                   cid, NULL);
+    }
     pthread_mutex_unlock(&store->mutex);
     return WF_OK;
+}
+
+wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
+                                   const char *mime_type,
+                                   const unsigned char *data, size_t len) {
+    return blob_put_impl(store, cid, mime_type, data, len, false);
+}
+
+wf_status metalbear_blob_store_put_temporary(metalbear_blob_store *store,
+                                             const char *cid,
+                                             const char *mime_type,
+                                             const unsigned char *data,
+                                             size_t len) {
+    return blob_put_impl(store, cid, mime_type, data, len, true);
 }
 
 wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
@@ -804,7 +886,8 @@ wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
 
     pthread_mutex_lock(&store->mutex);
     uint64_t grow = 0, shrink = 0, reserved = 0;
-    quota_usage_delta(blob_node_find(store, cid), expected_len, &grow, &shrink);
+    metalbear_blob_node *existing = blob_node_find(store, cid);
+    quota_usage_delta(existing, expected_len, &grow, &shrink);
     wf_status quota_st = quota_reserve_locked(store, grow, &reserved);
     if (quota_st != WF_OK) {
         free(cid_copy);
@@ -859,7 +942,10 @@ wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
         if (node) {
             free(node->mime);
             node->mime = mime_copy;
+            /* quota_usage_delta already reserved the full payload when the
+             * old copy was a quarantined temporary (not quota-counted). */
             node->len = expected_len;
+            node->quota_counted = true;
             free(cid_copy);
             if (node->rev[0] == '\0') {
                 blob_tid_now(node->rev);
@@ -871,11 +957,19 @@ wf_status metalbear_blob_store_put_file(metalbear_blob_store *store,
             st = blob_node_push(store, cid_copy, mime_copy, NULL, expected_len,
                                 rev);
             if (st == WF_OK) {
+                store->head->quota_counted = true;
                 persist_rev(store, store->head);
             } else {
                 if (datap) (void)remove(datap);
                 if (mimep) (void)remove(mimep);
             }
+        }
+        /* put_file is a durable import path, never a temporary upload. */
+        if (st == WF_OK && store->lifecycle && store->did) {
+            (void)metalbear_blob_lifecycle_mark_uploaded(
+                store->lifecycle, store->did, cid, expected_len, time(NULL));
+            (void)metalbear_blob_lifecycle_promote(store->lifecycle, store->did,
+                                                   cid, NULL);
         }
     }
     quota_release_locked(store, st == WF_OK ? shrink : reserved);
@@ -901,6 +995,7 @@ wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
     pthread_mutex_lock(&store->mutex);
     for (metalbear_blob_node *n = store->head; n; n = n->next) {
         if (strcmp(n->cid, cid) == 0) {
+            if (!blob_node_visible(store, n)) break;
             char *mime = strdup(n->mime);
             if (!mime) {
                 pthread_mutex_unlock(&store->mutex);
@@ -970,6 +1065,107 @@ wf_status metalbear_blob_store_exists(metalbear_blob_store *store,
     return WF_ERR_NOT_FOUND;
 }
 
+wf_status metalbear_blob_store_get_size(metalbear_blob_store *store,
+                                        const char *cid, size_t *out_size) {
+    if (!store || !blob_cid_is_valid(cid) || !out_size)
+        return WF_ERR_INVALID_ARG;
+    *out_size = 0;
+    pthread_mutex_lock(&store->mutex);
+    metalbear_blob_node *n = blob_node_find(store, cid);
+    if (n) *out_size = n->len;
+    pthread_mutex_unlock(&store->mutex);
+    return n ? WF_OK : WF_ERR_NOT_FOUND;
+}
+
+wf_status metalbear_blob_store_list_physical(metalbear_blob_store *store,
+                                             char ***out_cids,
+                                             size_t *out_count) {
+    if (!store || !out_cids || !out_count) return WF_ERR_INVALID_ARG;
+    *out_cids = NULL;
+    *out_count = 0;
+    pthread_mutex_lock(&store->mutex);
+    size_t count = 0;
+    for (metalbear_blob_node *n = store->head; n; n = n->next) count++;
+    if (count == 0) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_OK;
+    }
+    char **cids = (char **)calloc(count, sizeof(*cids));
+    if (!cids) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_ALLOC;
+    }
+    size_t i = 0;
+    for (metalbear_blob_node *n = store->head; n; n = n->next) {
+        cids[i] = strdup(n->cid);
+        if (!cids[i]) {
+            for (size_t j = 0; j < i; j++) free(cids[j]);
+            free(cids);
+            pthread_mutex_unlock(&store->mutex);
+            return WF_ERR_ALLOC;
+        }
+        i++;
+    }
+    pthread_mutex_unlock(&store->mutex);
+    *out_cids = cids;
+    *out_count = count;
+    return WF_OK;
+}
+
+wf_status metalbear_blob_store_get_refs(metalbear_blob_store *store,
+                                        const char *cid, char ***out_uris,
+                                        size_t *out_count) {
+    if (!store || !blob_cid_is_valid(cid) || !out_uris || !out_count)
+        return WF_ERR_INVALID_ARG;
+    *out_uris = NULL;
+    *out_count = 0;
+    pthread_mutex_lock(&store->mutex);
+    metalbear_blob_node *n = blob_node_find(store, cid);
+    if (!n) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_NOT_FOUND;
+    }
+    if (n->ref_count == 0) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_OK;
+    }
+    char **uris = (char **)calloc(n->ref_count, sizeof(*uris));
+    if (!uris) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_ALLOC;
+    }
+    size_t count = n->ref_count;
+    for (size_t i = 0; i < count; i++) {
+        uris[i] = strdup(n->refs[i]);
+        if (!uris[i]) {
+            for (size_t j = 0; j < i; j++) free(uris[j]);
+            free(uris);
+            pthread_mutex_unlock(&store->mutex);
+            return WF_ERR_ALLOC;
+        }
+    }
+    pthread_mutex_unlock(&store->mutex);
+    *out_uris = uris;
+    *out_count = count;
+    return WF_OK;
+}
+
+wf_status metalbear_blob_store_get_revision(metalbear_blob_store *store,
+                                            const char *cid, char **out_rev) {
+    if (!store || !blob_cid_is_valid(cid) || !out_rev)
+        return WF_ERR_INVALID_ARG;
+    *out_rev = NULL;
+    pthread_mutex_lock(&store->mutex);
+    metalbear_blob_node *n = blob_node_find(store, cid);
+    if (!n) {
+        pthread_mutex_unlock(&store->mutex);
+        return WF_ERR_NOT_FOUND;
+    }
+    *out_rev = strdup(n->rev[0] ? n->rev : "unknown");
+    pthread_mutex_unlock(&store->mutex);
+    return *out_rev ? WF_OK : WF_ERR_ALLOC;
+}
+
 /* Deletes the node for `cid`. Assumes the caller already holds
  * store->mutex and leaves it held on return -- factored out so
  * metalbear_blob_store_dissociate can delete a just-zeroed blob within the
@@ -1018,9 +1214,12 @@ static wf_status blob_store_delete_locked(metalbear_blob_store *store,
         }
 
         *link = node->next;
-        uint64_t released_len = node->len;
+        uint64_t released_len = node->quota_counted ? node->len : 0;
         blob_node_free(node);
         quota_release_locked(store, released_len);
+        if (store->lifecycle && store->did)
+            (void)metalbear_blob_lifecycle_forget(store->lifecycle, store->did,
+                                                  cid);
         (void)remove(data_trash);
         (void)remove(mime_trash);
         free(datap);
@@ -1042,9 +1241,12 @@ static wf_status blob_store_delete_locked(metalbear_blob_store *store,
     }
 
     *link = node->next;
-    uint64_t released_len = node->len;
+    uint64_t released_len = node->quota_counted ? node->len : 0;
     blob_node_free(node);
     quota_release_locked(store, released_len);
+    if (store->lifecycle && store->did)
+        (void)metalbear_blob_lifecycle_forget(store->lifecycle, store->did,
+                                              cid);
     return WF_OK;
 }
 
@@ -1119,6 +1321,7 @@ static wf_status blob_collect_cids(metalbear_blob_store *store,
                                    size_t *out_count) {
     size_t count = 0;
     for (metalbear_blob_node *n = store->head; n; n = n->next) {
+        if (!blob_node_visible(store, n)) continue;
         if (since && (n->rev[0] == '\0' || strcmp(n->rev, since) <= 0))
             continue;
         count++;
@@ -1134,6 +1337,7 @@ static wf_status blob_collect_cids(metalbear_blob_store *store,
     wf_status status = WF_OK;
     for (metalbear_blob_node *n = store->head; n && status == WF_OK;
          n = n->next) {
+        if (!blob_node_visible(store, n)) continue;
         if (since && (n->rev[0] == '\0' || strcmp(n->rev, since) <= 0))
             continue;
         cids[i] = strdup(n->cid);
@@ -1188,6 +1392,7 @@ wf_status metalbear_blob_store_list_page(metalbear_blob_store *store,
 
     for (metalbear_blob_node *n = store->head; n && status == WF_OK;
          n = n->next) {
+        if (!blob_node_visible(store, n)) continue;
         /* since filter: only blobs first seen strictly after the rev. */
         if (since) {
             if (n->rev[0] == '\0' || strcmp(n->rev, since) <= 0) continue;
@@ -1298,9 +1503,10 @@ void metalbear_blob_walk_refs(const cJSON *node,
     }
 }
 
-wf_status metalbear_blob_store_associate(metalbear_blob_store *store,
-                                         const char *cid,
-                                         const char *record_uri) {
+wf_status metalbear_blob_store_associate_at(metalbear_blob_store *store,
+                                            const char *cid,
+                                            const char *record_uri,
+                                            const char *rev) {
     if (!store || !blob_cid_is_valid(cid) || !record_uri || !record_uri[0])
         return WF_ERR_INVALID_ARG;
     pthread_mutex_lock(&store->mutex);
@@ -1321,8 +1527,31 @@ wf_status metalbear_blob_store_associate(metalbear_blob_store *store,
     else
         st = refs_append(n, record_uri);
     if (st == WF_OK) persist_refs(store, n);
+
+    /* Promotion happens on the first record reference, per the blob
+     * lifecycle spec. Charge the bytes exactly once, when the copy changes
+     * from temporary to durable. */
+    if (st == WF_OK && store->lifecycle && store->did) {
+        int changed = 0;
+        st = metalbear_blob_lifecycle_promote(store->lifecycle, store->did, cid,
+                                              &changed);
+        if (st == WF_OK && changed && !n->quota_counted) {
+            uint64_t reserved = 0;
+            (void)quota_reserve_locked(store, n->len, &reserved);
+            n->quota_counted = true;
+        }
+        if (st == WF_OK)
+            st = metalbear_blob_lifecycle_add_ref(store->lifecycle, store->did,
+                                                  cid, record_uri, rev);
+    }
     pthread_mutex_unlock(&store->mutex);
     return st;
+}
+
+wf_status metalbear_blob_store_associate(metalbear_blob_store *store,
+                                         const char *cid,
+                                         const char *record_uri) {
+    return metalbear_blob_store_associate_at(store, cid, record_uri, NULL);
 }
 
 wf_status metalbear_blob_store_dissociate(metalbear_blob_store *store,
@@ -1342,14 +1571,23 @@ wf_status metalbear_blob_store_dissociate(metalbear_blob_store *store,
         return WF_OK; /* not associated: no-op success */
     }
     refs_remove_at(n, idx);
+    /* Drop every revision row for this URI immediately. Old repo revisions
+     * may still name the record, but the record itself no longer references
+     * the blob; keeping those rows would pin the copy forever after repo GC.
+     * This is a no-op on stores without lifecycle tracking. */
+    if (store->lifecycle && store->did)
+        (void)metalbear_blob_lifecycle_remove_refs(store->lifecycle, store->did,
+                                                   cid, record_uri);
     if (n->ref_count == 0) {
-        /* Dereferenced: garbage, matching the reference PDS's
-         * deleteDereferencedBlobs. Delete outright rather than waiting on a
-         * timer — see metalbear_blob_store_dissociate's header comment.
-         * Delete within this same locked section (blob_store_delete_locked,
-         * not the public metalbear_blob_store_delete) so a concurrent
-         * associate can't slip a fresh reference onto this node between
-         * dropping to zero and the delete happening. */
+        /* With lifecycle tracking, losing the last in-memory association only
+         * makes the durable copy sweepable; the payload stays available until
+         * the sweep can also check older repository revisions (issue #253).
+         * Without tracking, preserve the historical immediate deletion. */
+        if (store->lifecycle && store->did) {
+            persist_refs(store, n);
+            pthread_mutex_unlock(&store->mutex);
+            return WF_OK;
+        }
         wf_status del_st = blob_store_delete_locked(store, cid);
         pthread_mutex_unlock(&store->mutex);
         return del_st;

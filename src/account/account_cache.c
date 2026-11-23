@@ -29,6 +29,8 @@ struct metalbear_account_cache {
     /* Operator defaults applied when a context is first opened. */
     uint64_t repo_quota_bytes;
     uint64_t blob_quota_bytes;
+    /* Borrowed host-wide blob lifecycle database (issue #253). */
+    metalbear_blob_lifecycle *blob_lifecycle;
     pthread_mutex_t lock;
     struct cache_entry {
         char *did;
@@ -84,6 +86,11 @@ void metalbear_account_cache_set_quota_defaults(metalbear_account_cache *cache,
     if (!cache) return;
     cache->repo_quota_bytes = repo_bytes;
     cache->blob_quota_bytes = blob_bytes;
+}
+
+void metalbear_account_cache_set_blob_lifecycle(
+    metalbear_account_cache *cache, metalbear_blob_lifecycle *lifecycle) {
+    if (cache) cache->blob_lifecycle = lifecycle;
 }
 
 void metalbear_account_cache_set_max_resident(metalbear_account_cache *cache,
@@ -204,6 +211,9 @@ metalbear_account_cache_get(metalbear_account_cache *cache,
         entry->data_directory, NULL, NULL, cache->sequencer, &ctx);
     metalbear_account_entry_free(entry);
     if (status != WF_OK || !ctx) return NULL;
+    if (cache->blob_lifecycle)
+        metalbear_account_context_set_blob_lifecycle(ctx,
+                                                     cache->blob_lifecycle);
     (void)metalbear_account_context_apply_quota_defaults(
         ctx, cache->repo_quota_bytes, cache->blob_quota_bytes);
 

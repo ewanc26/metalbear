@@ -19,7 +19,7 @@ extern "C" {
  * the same change that adds a migration an older binary could misread, and
  * state the new number in CHANGELOG.md.
  */
-#define METALBEAR_SCHEMA_VERSION 6
+#define METALBEAR_SCHEMA_VERSION 7
 
 /*
  * Call right after opening `db`, before any migration. Returns WF_OK and

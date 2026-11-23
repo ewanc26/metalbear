@@ -14,6 +14,8 @@
 
 #include "metalbear/log.h"
 #include "metalbear/ops/metrics.h"
+#include "metalbear/repo/blob_lifecycle.h"
+#include "metalbear/repo/blob_sweep.h"
 #include "wolfram/xrpc.h"
 
 #include <cJSON.h>
@@ -225,6 +227,32 @@ static wf_status metrics_handler(void *ctx, const wf_xrpc_request *req,
             "# TYPE metalbear_account_cache_idle gauge\n"
             "metalbear_account_cache_idle %llu\n",
             (unsigned long long)resident, (unsigned long long)idle);
+    }
+
+    /* Blob lifecycle state, read at scrape time (gauges, not counters). A
+     * server without lifecycle tracking reports zeros so dashboards always
+     * see the same series. */
+    {
+        metalbear_blob_sweep_summary summary = {0};
+        if (server->blob_lifecycle)
+            (void)metalbear_blob_sweep_stats(server, &summary);
+        if (ok)
+            ok = sb_append(
+                &sb,
+                "# HELP metalbear_blobs_temporary Blob copies awaiting a "
+                "record reference.\n"
+                "# TYPE metalbear_blobs_temporary gauge\n"
+                "metalbear_blobs_temporary %zu\n"
+                "# HELP metalbear_blobs_expiring Temporary blob copies older "
+                "than the temporary window.\n"
+                "# TYPE metalbear_blobs_expiring gauge\n"
+                "metalbear_blobs_expiring %zu\n"
+                "# HELP metalbear_blobs_unreferenced_durable Durable blob "
+                "copies with no live record reference.\n"
+                "# TYPE metalbear_blobs_unreferenced_durable gauge\n"
+                "metalbear_blobs_unreferenced_durable %zu\n",
+                summary.temporary, summary.expiring,
+                summary.unreferenced_durable);
     }
 
     /*

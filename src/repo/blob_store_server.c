@@ -280,7 +280,10 @@ wf_status upload_blob(void *ctx, const wf_xrpc_request *request,
                                    "Blob has been takendown, cannot re-upload");
         return WF_OK;
     }
-    wf_status put_st = metalbear_blob_store_put(
+    /* Uploads are temporary until a record references them (issue #253).
+     * The lifecycle binding is installed by the account cache; standalone
+     * stores without one keep their historical durable behavior. */
+    wf_status put_st = metalbear_blob_store_put_temporary(
         acct->blobs, cid_str, mime, request->body, request->body_len);
     if (put_st != WF_OK) {
         free(cid_str);

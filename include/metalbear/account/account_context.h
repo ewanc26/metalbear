@@ -106,6 +106,14 @@ wf_status metalbear_account_context_open_shared(
 wf_status metalbear_account_context_apply_quota_defaults(
     metalbear_account_context *ctx, uint64_t repo_bytes, uint64_t blob_bytes);
 
+/*
+ * Bind the blob store to the host-wide lifecycle database (issue #253) and
+ * re-seed blob quota usage so temporary uploads are not charged. The cache
+ * calls this when it opens a context; standalone callers can use it too.
+ */
+void metalbear_account_context_set_blob_lifecycle(
+    metalbear_account_context *ctx, metalbear_blob_lifecycle *lifecycle);
+
 /* Free every store in the context and the context itself. Safe with NULL. */
 void metalbear_account_context_close(metalbear_account_context *ctx);
 

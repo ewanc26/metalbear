@@ -177,6 +177,7 @@ static bool copy_config(metalbear_server *server,
     server->blob_upload_limit = config->blob_upload_limit;
     server->repo_byte_quota = config->repo_byte_quota;
     server->blob_byte_quota = config->blob_byte_quota;
+    server->blob_temp_seconds = config->blob_temp_seconds;
     server->drain_timeout_seconds = config->drain_timeout_seconds;
     server->accepting_imports = config->accepting_imports;
     server->max_import_size = config->max_import_size;
@@ -342,6 +343,16 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         goto fail;
     }
     free(registry_path);
+
+    /* Host-wide blob lifecycle state (schema 7). Opened before the account
+     * cache so every context can bind to it on first use. */
+    server->blob_lifecycle =
+        metalbear_blob_lifecycle_open(config->data_directory);
+    if (!server->blob_lifecycle) {
+        LOG_ERROR("cannot open blob lifecycle store");
+        goto fail;
+    }
+
     /* The registry starts empty. There is no account to seed: every account,
      * including the first, is created through com.atproto.server.createAccount
      * and registers itself there. */
@@ -448,6 +459,10 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     metalbear_account_cache_set_quota_defaults(
         server->account_cache, (uint64_t)server->repo_byte_quota,
         (uint64_t)server->blob_byte_quota);
+    /* Bind every account this cache opens to the host-wide lifecycle store so
+     * uploads are temporary from the first request, not after a sweep. */
+    metalbear_account_cache_set_blob_lifecycle(server->account_cache,
+                                               server->blob_lifecycle);
     /* Bound the resident account set for small hosts (e.g. a 256 MB Pi 1B).
      * The config file sets the deployment default; METALBEAR_MAX_RESIDENT_
      * ACCOUNTS overrides it at runtime. */
@@ -497,6 +512,20 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
             }
             metalbear_account_entries_free(entries, count);
         }
+    }
+
+    /* One lifecycle pass at startup (issue #253). This is where a host
+     * upgrading to schema 7 reconciles pre-existing payload sidecars and
+     * reclaims temporaries that expired while the server was down. */
+    {
+        metalbear_blob_sweep_summary summary;
+        wf_status sweep_st = metalbear_blob_sweep_run(server, false, &summary);
+        if (sweep_st != WF_OK)
+            LOG_WARN("blob sweep: startup pass failed; it will retry on the "
+                     "interval");
+        else if (summary.deleted || summary.refs_pruned)
+            LOG_INFO("blob sweep: startup deleted %zu copies, pruned %zu refs",
+                     summary.deleted, summary.refs_pruned);
     }
 
     if (wf_xrpc_server_register_query(server->xrpc,
@@ -1152,6 +1181,25 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                      (long long)config->repo_gc_interval_seconds);
     }
 
+    /* Blob lifecycle sweep. The startup pass already ran; this catches blobs
+     * abandoned while the server is live. Cap the interval so a long temp
+     * window does not leave deletions days overdue after a busy afternoon. */
+    {
+        long interval = server->blob_temp_seconds > 0
+                            ? (long)server->blob_temp_seconds
+                            : 3600;
+        if (interval > 3600) interval = 3600;
+        server->blob_sweep_schedule =
+            metalbear_blob_sweep_schedule_start(server, interval);
+        if (!server->blob_sweep_schedule)
+            LOG_WARN("blob sweep: could not start; temporary uploads will not "
+                     "be reclaimed automatically");
+        else
+            LOG_INFO("blob sweep: every %ld seconds, temporary window %lld "
+                     "seconds",
+                     interval, (long long)server->blob_temp_seconds);
+    }
+
     return server;
 
 fail:
@@ -1189,6 +1237,7 @@ void metalbear_server_free(metalbear_server *server) {
      * in-flight pass. */
     metalbear_deletion_sweep_free(server->deletion_sweep);
     metalbear_repo_gc_schedule_free(server->repo_gc_schedule);
+    metalbear_blob_sweep_schedule_free(server->blob_sweep_schedule);
     metalbear_account_cache_free(server->account_cache);
     metalbear_oauth_store_free(server->oauth);
     metalbear_key_rotation_free(server->plc_rotation);
@@ -1209,6 +1258,8 @@ void metalbear_server_free(metalbear_server *server) {
     metalbear_admin_audit_free(server->audit);
     metalbear_backup_schedule_free(server->backup_schedule);
     metalbear_label_store_free(server->labels);
+    /* Account contexts borrow the lifecycle database; close it last. */
+    metalbear_blob_lifecycle_free(server->blob_lifecycle);
     wf_rate_limiter_free(server->rate_limiter);
     wf_rate_limiter_free(server->rl_create_session_day);
     wf_rate_limiter_free(server->rl_create_session_5min);

@@ -52,6 +52,14 @@ void metalbear_account_cache_set_quota_defaults(metalbear_account_cache *cache,
                                                 uint64_t blob_bytes);
 
 /*
+ * Bind every context this cache opens to the host-wide blob lifecycle store
+ * (issue #253). Borrowed; the caller must outlive the cache. Call before the
+ * first get so uploads are correctly classified as temporary.
+ */
+void metalbear_account_cache_set_blob_lifecycle(
+    metalbear_account_cache *cache, metalbear_blob_lifecycle *lifecycle);
+
+/*
  * Configure the resident budget: the maximum number of idle (fully released)
  * account contexts the cache will keep open at once. When the idle count
  * exceeds `max_resident`, the least-recently-used idle contexts are closed

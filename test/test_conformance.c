@@ -332,12 +332,42 @@ int main(int argc, char **argv) {
             wf_response_free(&response);
 
             bool ok = cid != NULL;
+            char url[512], get_path[512];
+            snprintf(get_path, sizeof(get_path),
+                     "/xrpc/com.atproto.sync.getBlob?did=%s&cid=%s", did,
+                     cid ? cid : "");
+            snprintf(url, sizeof(url), "%s%s", base, get_path);
             if (ok) {
-                char url[512], get_path[512];
-                snprintf(get_path, sizeof(get_path),
-                         "/xrpc/com.atproto.sync.getBlob?did=%s&cid=%s", did,
-                         cid);
-                snprintf(url, sizeof(url), "%s%s", base, get_path);
+                /* A freshly uploaded blob is temporary: not yet downloadable
+                 * and not distributed until a record references it. */
+                st = wf_http_get(client, url, &response);
+                /* wf_http_get reports non-2xx as WF_ERR_HTTP; the 404 is the
+                 * expected "temporary blobs are not downloadable" answer. */
+                ok = st == WF_ERR_HTTP && response.status == 404;
+                wf_response_free(&response);
+            }
+            if (ok) {
+                /* Reference the blob from a record, which promotes it to
+                 * durable and makes it publicly downloadable. */
+                char body[1024];
+                snprintf(
+                    body, sizeof(body),
+                    "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
+                    "\"rkey\":\"blob-ref\",\"record\":{"
+                    "\"$type\":\"app.bsky.feed.post\","
+                    "\"text\":\"blob ref conformance\","
+                    "\"embed\":{\"$type\":\"app.bsky.embed.images\","
+                    "\"images\":[{\"alt\":\"a\",\"image\":{"
+                    "\"$type\":\"blob\",\"ref\":{\"$link\":\"%s\"},"
+                    "\"mimeType\":\"image/jpeg\",\"size\":%zu}}]},"
+                    "\"createdAt\":\"2026-11-22T00:00:00.000Z\"}}",
+                    did, cid, sizeof(payload));
+                st = wf_xrpc_procedure(client, "com.atproto.repo.createRecord",
+                                       body, &response);
+                ok = st == WF_OK && response.status == 200;
+                wf_response_free(&response);
+            }
+            if (ok) {
                 st = wf_http_get(client, url, &response);
                 ok = st == WF_OK && response.status == 200 &&
                      response.body_len == sizeof(payload) &&

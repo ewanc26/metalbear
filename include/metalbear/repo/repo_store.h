@@ -385,6 +385,23 @@ wf_status metalbear_repo_store_get_head(metalbear_repo_store *store,
                                         char **out_rev, char **out_cid);
 
 /**
+ * Return the revision every route reports for the current head, honouring a
+ * decoupled importRepo `rev_override`. Caller owns *out_rev. Used to stamp
+ * blob lifecycle references with the revision that made them live.
+ */
+wf_status metalbear_repo_store_current_revision(metalbear_repo_store *store,
+                                                char **out_rev);
+
+/**
+ * Return WF_OK when `rev` is still present in the persisted block index (or is
+ * the current head's effective revision), WF_ERR_NOT_FOUND when repo GC has
+ * removed it. Used by the blob sweep to tell live record references from
+ * historical ones that can no longer be fetched (issue #253).
+ */
+wf_status metalbear_repo_store_revision_exists(metalbear_repo_store *store,
+                                               const char *rev);
+
+/**
  * Export the repository as a CAR rooted at the current commit.
  *
  * When `since_or_null` is NULL or empty, all persisted repo blocks are
