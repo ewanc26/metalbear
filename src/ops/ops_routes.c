@@ -10,6 +10,7 @@
 
 #include "ops_routes.h"
 #include "../server_internal.h"
+#include "metalbear/ops/public_status.h"
 #include "metalbear/video_upload.h"
 
 #include <cJSON.h>
@@ -159,6 +160,14 @@ wf_status operator_info(void *ctx, const wf_xrpc_request *request,
                               false);
 #endif
         cJSON_AddItemToObject(root, "capabilities", capabilities);
+    }
+
+    /* Opt-in public resource snapshot (issue #267). The gate lives here so a
+     * server with the flag off omits the field entirely -- the frontend then
+     * has nothing to render, rather than a misleading set of zeroes. */
+    if (server->public_status) {
+        cJSON *status = metalbear_public_status_json(server);
+        if (status) cJSON_AddItemToObject(root, "publicStatus", status);
     }
 
     /* Self-serve signup policy (issue #258). There is no lexicon field for

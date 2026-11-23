@@ -79,6 +79,26 @@ int64_t metalbear_sequencer_current(metalbear_sequencer *s) {
     return seq;
 }
 
+int64_t metalbear_sequencer_last_event_epoch(metalbear_sequencer *s) {
+    if (!s) return 0;
+    pthread_mutex_lock(&s->mutex);
+    int64_t epoch = 0;
+    sqlite3_stmt *stmt = NULL;
+    /* SQLite understands the UTC ISO-8601 format timestamp_now writes. A
+     * NULL result means either an empty log or the sequence-floor placeholder
+     * with its blank created_at, both of which are honestly "no event yet". */
+    if (sqlite3_prepare_v2(s->db,
+                           "SELECT CAST(strftime('%s', created_at) AS INTEGER) "
+                           "FROM events WHERE created_at <> '' "
+                           "ORDER BY seq DESC LIMIT 1;",
+                           -1, &stmt, NULL) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW)
+        epoch = sqlite3_column_int64(stmt, 0);
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&s->mutex);
+    return epoch;
+}
+
 /*
  * The highest sequence number retention has deleted, or 0 if it never has.
  *

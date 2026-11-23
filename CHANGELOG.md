@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in public instance status: `[server] public_status` / `METALBEAR_PUBLIC_STATUS` publishes aggregate uptime, worker, memory, descriptor, load, disk, storage, firehose and request figures on `/operator.json` and the landing page. Disabled by default with the field absent rather than zeroed; only NSID route labels are included, and the fuller `/metrics` view stays admin-gated. ([#267](https://github.com/ewanc26/metalbear/issues/267))
+
 ## [0.59.0] - 2026-11-23
 
 ### Added

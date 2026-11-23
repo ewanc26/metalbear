@@ -643,6 +643,14 @@ outside, from a PDS that is down.
 An optional Prometheus + Grafana stack lives in `deploy/monitoring/`; see
 [docs/monitoring.md](docs/monitoring.md) for setup.
 
+An operator can also opt into a small public panel on the landing page with
+`[server] public_status = true` or `METALBEAR_PUBLIC_STATUS=1`. That adds an
+aggregate-only `publicStatus` object to `/operator.json`: uptime, worker count,
+resident memory, descriptors, load, disk and storage totals, firehose age and
+request totals. It is absent by default rather than zeroed, contains no account
+identifiers, and does not replace the fuller admin-gated `/metrics` view. See
+[docs/monitoring.md](docs/monitoring.md) for the exact fields.
+
 ### Logging
 
 `METALBEAR_LOG_LEVEL` is `debug`, `info` (default), `warn` or `error`, and

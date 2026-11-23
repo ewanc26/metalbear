@@ -41,6 +41,38 @@
 	/* A relay counts as consuming us once it has ingested at least one event.
 	 * seq -1 means registered but never consumed, which is not the same thing. */
 	const federating = $derived(relays?.filter((r) => r.known && (r.seq ?? -1) > 0).length ?? 0);
+
+	/* Opt-in public status (issue #267): only host/process aggregates arrive
+	 * here. Format them for a human without reintroducing per-account detail. */
+	const status = $derived(info?.publicStatus);
+	function bytes(value: number | undefined): string {
+		if (value === undefined) return '—';
+		if (value < 1024) return `${value} B`;
+		const units = ['KB', 'MB', 'GB', 'TB'];
+		let scaled = value / 1024;
+		let unit = 0;
+		while (scaled >= 1024 && unit < units.length - 1) {
+			scaled /= 1024;
+			unit++;
+		}
+		return `${scaled.toFixed(scaled < 10 ? 1 : 0)} ${units[unit]}`;
+	}
+	function uptime(seconds: number | undefined): string {
+		if (seconds === undefined) return '—';
+		const days = Math.floor(seconds / 86400);
+		const hours = Math.floor((seconds % 86400) / 3600);
+		if (days) return `${days}d ${hours}h`;
+		const minutes = Math.floor((seconds % 3600) / 60);
+		if (hours) return `${hours}h ${minutes}m`;
+		return `${minutes}m`;
+	}
+	function age(seconds: number | null | undefined): string {
+		if (seconds === undefined) return '—';
+		if (seconds === null) return 'no events yet';
+		if (seconds < 60) return `${seconds}s ago`;
+		if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+		return `${Math.floor(seconds / 3600)}h ago`;
+	}
 </script>
 
 <svelte:head>
@@ -162,6 +194,89 @@
 			</ul>
 		{/if}
 	</section>
+
+	{#if status}
+		<section class="mb-10">
+			<h2 class="mb-3 text-xs font-semibold tracking-widest text-slate-500 uppercase">
+				Instance status
+			</h2>
+			<p class="mb-4 text-sm text-slate-400">
+				Aggregate resource figures, published by the operator. No account details are included.
+			</p>
+			<dl class="grid gap-x-8 gap-y-3 sm:grid-cols-2">
+				<div>
+					<dt class="text-sm text-slate-500">Uptime</dt>
+					<dd class="font-mono text-sm text-slate-200">{uptime(status.uptimeSeconds)}</dd>
+				</div>
+				<div>
+					<dt class="text-sm text-slate-500">Worker threads</dt>
+					<dd class="font-mono text-sm text-slate-200">{status.workerThreads ?? '—'}</dd>
+				</div>
+				<div>
+					<dt class="text-sm text-slate-500">Memory in use</dt>
+					<dd class="font-mono text-sm text-slate-200">{bytes(status.rssBytes)}</dd>
+				</div>
+				<div>
+					<dt class="text-sm text-slate-500">Open file descriptors</dt>
+					<dd class="font-mono text-sm text-slate-200">{status.openFdCount ?? '—'}</dd>
+				</div>
+				{#if status.cpuLoad}
+					<div>
+						<dt class="text-sm text-slate-500">CPU load (1 / 5 / 15 min)</dt>
+						<dd class="font-mono text-sm text-slate-200">
+							{status.cpuLoad.oneMinute?.toFixed(2) ?? '—'} /
+							{status.cpuLoad.fiveMinute?.toFixed(2) ?? '—'} /
+							{status.cpuLoad.fifteenMinute?.toFixed(2) ?? '—'}
+						</dd>
+					</div>
+				{/if}
+				{#if status.disk}
+					<div>
+						<dt class="text-sm text-slate-500">Disk used</dt>
+						<dd class="font-mono text-sm text-slate-200">
+							{#if status.disk.filesystem}
+								{bytes(status.disk.filesystem.usedBytes)} of {bytes(
+									status.disk.filesystem.totalBytes
+								)}
+							{:else}—{/if}
+						</dd>
+					</div>
+					<div>
+						<dt class="text-sm text-slate-500">Server data</dt>
+						<dd class="font-mono text-sm text-slate-200">
+							{bytes(status.disk.dataDirectoryBytes)} · blobs {bytes(status.disk.blobStoreBytes)}
+						</dd>
+					</div>
+				{/if}
+				{#if status.storage}
+					<div>
+						<dt class="text-sm text-slate-500">Account storage</dt>
+						<dd class="font-mono text-sm text-slate-200">
+							repos {bytes(status.storage.repoBytes)} · blobs {bytes(status.storage.blobBytes)}
+						</dd>
+					</div>
+				{/if}
+				{#if status.requests}
+					<div>
+						<dt class="text-sm text-slate-500">Requests</dt>
+						<dd class="font-mono text-sm text-slate-200">
+							{status.requests.total ?? '—'} total · {status.requests.failed ?? '—'} failed
+						</dd>
+					</div>
+				{/if}
+				{#if status.firehose}
+					<div>
+						<dt class="text-sm text-slate-500">Firehose</dt>
+						<dd class="font-mono text-sm text-slate-200">
+							seq {status.firehose.sequence ?? '—'} · last event {age(
+								status.firehose.lastEventAgeSeconds
+							)}
+						</dd>
+					</div>
+				{/if}
+			</dl>
+		</section>
+	{/if}
 
 	{#if repos && repos.length > 0}
 		<section class="mb-10">

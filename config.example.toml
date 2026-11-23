@@ -26,6 +26,11 @@ user_domain   = ".pds.example.com"   # suffix accounts may register handles unde
 # New writes get 503 once the drain begins; 0 stops immediately. Keep this
 # under the orchestrator's stop grace period (Docker's default is 10s).
 # drain_timeout_seconds = 5
+# Opt-in public resource status. When true, aggregate host/process figures are
+# added to /operator.json and shown on the landing page. Off by default:
+# /metrics stays the admin-gated, fuller view. No account identifiers are ever
+# published here.
+# public_status = false
 
 [operator]
 # Who runs this instance. `email`, `privacy_policy` and `terms_of_service` are
