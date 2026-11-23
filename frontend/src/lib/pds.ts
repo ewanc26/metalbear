@@ -839,3 +839,139 @@ export async function resolveHandle(handle: string): Promise<string> {
 	const { did } = await xrpc<{ did: string }>('com.atproto.identity.resolveHandle', { handle });
 	return did;
 }
+
+/* ------------------------------------------------------------------ */
+/* Public repo browser (issue #262)                                     */
+/* ------------------------------------------------------------------ */
+
+/** An XRPC failure with the protocol error code preserved. */
+export class XrpcError extends Error {
+	readonly code: string;
+	readonly status: number;
+
+	constructor(path: string, status: number, code: string, message?: string) {
+		super(message ? `${code || path}: ${message}` : `${path}: ${status}${code ? ` ${code}` : ''}`);
+		this.name = 'XrpcError';
+		this.code = code;
+		this.status = status;
+	}
+}
+
+/** Like xrpc(), but keeps the XRPC error code so callers can distinguish a
+ * takedown from a missing repo instead of collapsing both into "404". */
+export async function xrpcResult<T>(path: string, params?: Record<string, string>): Promise<T> {
+	const url = new URL(`/xrpc/${path}`, window.location.origin);
+	for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
+	const res = await fetch(url, { headers: { accept: 'application/json' } });
+	if (!res.ok) {
+		let code = '';
+		let message = '';
+		try {
+			const body = await res.json();
+			if (typeof body?.error === 'string') code = body.error;
+			if (typeof body?.message === 'string') message = body.message;
+		} catch {
+			/* A non-JSON error still carries its HTTP status. */
+		}
+		throw new XrpcError(path, res.status, code, message);
+	}
+	return res.json() as Promise<T>;
+}
+
+export interface RepoStatus {
+	did: string;
+	active: boolean;
+	status?: string;
+	rev?: string;
+}
+
+export interface DescribeRepo {
+	did: string;
+	handle: string;
+	collections: string[];
+	rev?: string;
+	didDoc?: unknown;
+	handleIsCorrect?: boolean;
+}
+
+export interface LatestCommit {
+	cid: string;
+	rev: string;
+}
+
+export interface RepoRecord {
+	uri: string;
+	cid: string;
+	value: unknown;
+}
+
+export interface ListRecordsResult {
+	records: RepoRecord[];
+	cursor?: string;
+}
+
+export interface GetRecordResult {
+	uri: string;
+	cid: string;
+	value: unknown;
+}
+
+export interface ListBlobsResult {
+	cids: string[];
+	cursor?: string;
+}
+
+export function repoStatus(did: string): Promise<RepoStatus> {
+	return xrpcResult('com.atproto.sync.getRepoStatus', { did });
+}
+
+export function describeRepo(repo: string): Promise<DescribeRepo> {
+	return xrpcResult('com.atproto.repo.describeRepo', { repo });
+}
+
+/** Empty repos have no commit; callers treat that as "no head yet". */
+export function getLatestCommit(did: string): Promise<LatestCommit> {
+	return xrpcResult('com.atproto.sync.getLatestCommit', { did });
+}
+
+export function listRecordsPage(
+	repo: string,
+	collection: string,
+	limit: number,
+	cursor?: string
+): Promise<ListRecordsResult> {
+	return xrpcResult('com.atproto.repo.listRecords', {
+		repo,
+		collection,
+		limit: String(limit),
+		...(cursor ? { cursor } : {})
+	});
+}
+
+export function getRecord(
+	repo: string,
+	collection: string,
+	rkey: string
+): Promise<GetRecordResult> {
+	return xrpcResult('com.atproto.repo.getRecord', { repo, collection, rkey });
+}
+
+export function listBlobsPage(
+	did: string,
+	limit: number,
+	cursor?: string
+): Promise<ListBlobsResult> {
+	return xrpcResult('com.atproto.sync.listBlobs', {
+		did,
+		limit: String(limit),
+		...(cursor ? { cursor } : {})
+	});
+}
+
+/** Same-origin URL for a blob; getBlob itself forces download/CSP on the server. */
+export function blobUrl(did: string, cid: string): string {
+	const url = new URL('/xrpc/com.atproto.sync.getBlob', window.location.origin);
+	url.searchParams.set('did', did);
+	url.searchParams.set('cid', cid);
+	return url.pathname + url.search;
+}

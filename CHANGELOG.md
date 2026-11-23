@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Added
+
+- Read-only repo browser at `/repo` in the frontend: search by handle or DID, browse collections and paginated records, inspect raw record JSON, and list blobs with size/type and download links. Taken-down and deactivated repositories are reported without exposing withheld records, and admin/landing pages link directly into the browser. ([#262](https://github.com/ewanc26/metalbear/issues/262))
+
 ## [0.58.0] - 2026-11-23
 
 ### Added

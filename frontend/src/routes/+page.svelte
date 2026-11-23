@@ -160,7 +160,12 @@
 				{#each repos as repo (repo.did)}
 					<li class="px-4 py-2.5">
 						<div class="flex items-center justify-between gap-4">
-							<code class="text-xs break-all text-slate-300">{repo.did}</code>
+							<a
+								class="text-xs break-all text-slate-300 hover:text-emerald-400"
+								href={`/repo?did=${encodeURIComponent(repo.did)}`}
+							>
+								{repo.did}
+							</a>
 							<span
 								class="shrink-0 font-mono text-xs {repo.active
 									? 'text-emerald-400'
@@ -292,6 +297,7 @@
 				>Wolfram SDK</a
 			>
 			<a class="text-emerald-500 hover:text-emerald-400" href="https://atproto.com">AT Protocol</a>
+			<a class="text-emerald-500 hover:text-emerald-400" href="/repo">Repo browser</a>
 		</nav>
 		<p class="mt-4 text-xs text-slate-600">
 			Public endpoints are served under <code class="text-slate-500">/xrpc/</code>.
