@@ -12,7 +12,17 @@ HELPER="${METALBEAR_MAINT_BIN:-$PWD/build/metalbear-maint}"
 [[ -x "$HELPER" ]] || { echo "not ok - metalbear-maint not built" >&2; exit 1; }
 
 T="$(mktemp -d)"
-HPORT=$((21000 + RANDOM % 20000))
+# Ask the kernel for a free port rather than guessing: a collision here made
+# the mock server fail to bind, and the test then mistook "not live" for the
+# expected refusal.
+HPORT=$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)
 trap 'kill $(cat "$T"/*.pid 2>/dev/null) 2>/dev/null || true; rm -rf "$T"' EXIT
 pass=0
 ok() { pass=$((pass + 1)); echo "ok - $*"; }
@@ -69,12 +79,17 @@ ok "rotate-keys republishes a did:web key without network access"
 grep -q 'reconciled did:web:alice.example.com' "$T/admin.log" || die "unexpected admin dispatch output: $(cat "$T/admin.log")"
 ok "metalbear-admin dispatches offline commands through the wrapper"
 
-python3 -m http.server "$HPORT" --bind 127.0.0.1 --directory "$T/live" >/dev/null 2>&1 &
+python3 -m http.server "$HPORT" --bind 127.0.0.1 --directory "$T/live" >"$T/server.log" 2>&1 &
 echo $! >"$T/server.pid"
-for _ in $(seq 1 30); do
-  curl -sf "http://127.0.0.1:$HPORT/xrpc/_health" >/dev/null 2>&1 && break
+ready=0
+for _ in $(seq 1 50); do
+  if curl -sf "http://127.0.0.1:$HPORT/xrpc/_health" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
   sleep 0.1
 done
+[[ "$ready" -eq 1 ]] || die "mock live instance did not start: $(cat "$T/server.log")"
 if METALBEAR_HEALTH_URL="http://127.0.0.1:$HPORT/xrpc/_health" "$WRAPPER" sequencer-recover >"$T/live.log" 2>&1; then
   die "maintenance ran against a live instance"
 fi
