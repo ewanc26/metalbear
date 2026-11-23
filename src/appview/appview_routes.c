@@ -369,6 +369,13 @@ wf_status appview_get_convos(void *ctx, const wf_xrpc_request *req,
                              wf_xrpc_response *resp) {
     return appview_private(ctx, req, resp);
 }
+/* The entry point current chat clients call for the conversation list. It is
+ * registered explicitly (rather than left to proxy_fallback) so the normal
+ * auth callback and per-route rate limiter apply to it. */
+wf_status appview_list_convos(void *ctx, const wf_xrpc_request *req,
+                              wf_xrpc_response *resp) {
+    return appview_private(ctx, req, resp);
+}
 wf_status appview_get_messages(void *ctx, const wf_xrpc_request *req,
                                wf_xrpc_response *resp) {
     return appview_private(ctx, req, resp);

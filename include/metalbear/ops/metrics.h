@@ -34,6 +34,10 @@ typedef enum metalbear_metric {
      * rate of these is the first sign of a misconfigured client or a
      * credential-stuffing run. */
     METALBEAR_METRIC_AUTH_REFUSED,
+    /* Proxy requests refused because the atproto-proxy destination is not
+     * allowed. Distinct from auth refusals: the caller had a valid session,
+     * the PDS simply will not forward to that service. */
+    METALBEAR_METRIC_PROXY_REFUSALS,
     METALBEAR_METRIC_ACCOUNTS_CREATED,
     METALBEAR_METRIC_ACCOUNTS_DELETED,
     METALBEAR_METRIC_SESSIONS_CREATED,

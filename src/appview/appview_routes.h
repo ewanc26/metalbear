@@ -72,6 +72,8 @@ wf_status appview_get_convo(void *ctx, const wf_xrpc_request *req,
                             wf_xrpc_response *resp);
 wf_status appview_get_convos(void *ctx, const wf_xrpc_request *req,
                              wf_xrpc_response *resp);
+wf_status appview_list_convos(void *ctx, const wf_xrpc_request *req,
+                              wf_xrpc_response *resp);
 wf_status appview_get_messages(void *ctx, const wf_xrpc_request *req,
                                wf_xrpc_response *resp);
 wf_status appview_get_labeler_info(void *ctx, const wf_xrpc_request *req,

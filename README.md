@@ -65,6 +65,14 @@ Per-route request accounting grows on demand up to a 4096-route cap — enough
 for the protocol surface and a host proxying the whole AppView surface — with
 requests beyond the cap still counted under `other` so the totals stay honest.
 
+Chat (`chat.bsky.convo.*`), labeler and Ozone (`tools.ozone.*`) clients send an
+`atproto-proxy` header naming their destination service. MetalBear validates
+the session, mints a destination-scoped service-auth token and forwards the
+call to an allowlisted destination; `appview.proxy_destinations` adds extra
+DIDs, and unknown ones are refused with a counted 403 rather than relayed. See
+[`docs/atproto-proxy.md`](docs/atproto-proxy.md) for the allowlist and the
+buffered-response limitation.
+
 ## Release stage
 
 MetalBear reports where a given build sits on the [software release life

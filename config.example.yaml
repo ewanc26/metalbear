@@ -156,6 +156,11 @@ firehose:
 appview:
   url: "https://api.bsky.app"
   did: "did:web:api.bsky.app"
+  # Extra atproto-proxy destinations to forward to, comma-separated
+  # `<did>` or `<did>#<service_id>` (e.g. a self-hosted labeler). The
+  # well-known Bluesky chat/labeler destinations, this AppView DID and any
+  # mod_service_did are always allowed; unknown destinations get a 403.
+  # proxy_destinations: "did:web:labeler.example.com#atproto_labeler"
 
 # Moderator service (e.g. ozone) DID trusted to read another account's
 # preferences through the undocumented `did` parameter on

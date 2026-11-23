@@ -222,6 +222,7 @@ int main(int argc, char **argv) {
     ENV_STR("METALBEAR_CRAWLERS", crawlers);
     ENV_STR("METALBEAR_APPVIEW_URL", appview_url);
     ENV_STR("METALBEAR_APPVIEW_DID", appview_did);
+    ENV_STR("METALBEAR_PROXY_DESTINATIONS", proxy_destinations);
     ENV_STR("METALBEAR_LEXICON_DIR", lexicon_dir);
     ENV_STR("METALBEAR_ACCOUNT_EMAIL", account_email);
     ENV_STR("METALBEAR_OPERATOR_EMAIL", operator_email);

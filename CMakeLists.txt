@@ -629,6 +629,15 @@ if(METALBEAR_BUILD_TESTS)
   endif()
 
   if(METALBEAR_MODULE_APPVIEW)
+    add_executable(test_metalbear_proxy_refusal test/test_proxy_refusal.c)
+    target_link_libraries(test_metalbear_proxy_refusal
+                          PRIVATE metalbear_core Threads::Threads)
+    target_include_directories(test_metalbear_proxy_refusal
+                               PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+    add_test(NAME metalbear_proxy_refusal COMMAND test_metalbear_proxy_refusal)
+  endif()
+
+  if(METALBEAR_MODULE_APPVIEW)
     add_executable(test_metalbear_appview_route_classification
                    test/test_appview_route_classification.c)
     target_link_libraries(test_metalbear_appview_route_classification

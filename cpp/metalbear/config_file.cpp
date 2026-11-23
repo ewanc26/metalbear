@@ -180,6 +180,7 @@ static std::string unescape_basic(const std::string &v) {
                                                                                \
     STR("appview.url", appview_url)                                            \
     STR("appview.did", appview_did)                                            \
+    STR("appview.proxy_destinations", proxy_destinations)                      \
                                                                                \
     STR("dns.provider", dns_provider)                                          \
     STR("dns.api_token", dns_api_token)                                        \

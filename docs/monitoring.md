@@ -34,6 +34,7 @@ target in `deploy/monitoring/prometheus.yml` if the PDS listens elsewhere.
 | Version, uptime | `metalbear_build_info`, `metalbear_uptime_seconds` |
 | Accounts by status | `metalbear_accounts` |
 | Request and error rate by route | `metalbear_route_requests_total`, `metalbear_route_errors_total` |
+| Refused `atproto-proxy` destinations | `metalbear_proxy_refusals_total` |
 | Firehose sequence | `metalbear_firehose_seq` |
 | Open account contexts | `metalbear_account_cache_resident`, `metalbear_account_cache_idle` |
 | Host CPU | `node_cpu_seconds_total` |
