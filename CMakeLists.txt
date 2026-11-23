@@ -215,6 +215,8 @@ set(METALBEAR_CORE_SOURCES
   src/moderation/report.c
   src/repo/blob_store.c
   src/repo/blob_store_server.c
+  src/repo/blob_lifecycle.c
+  src/repo/blob_sweep.c
   src/ops/status.c
   src/ops/frontend_static.c
   src/label/label_store.c
@@ -733,6 +735,13 @@ if(METALBEAR_BUILD_TESTS)
     test_metalbear_blob_gc PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
                                    "${METALBEAR_WOLFRAM_ROOT}/test")
   add_test(NAME metalbear_blob_gc COMMAND test_metalbear_blob_gc)
+
+  add_executable(test_metalbear_blob_lifecycle test/test_blob_lifecycle.c)
+  target_link_libraries(test_metalbear_blob_lifecycle PRIVATE metalbear_core)
+  target_include_directories(
+    test_metalbear_blob_lifecycle PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}"
+                                          "${METALBEAR_WOLFRAM_ROOT}/test")
+  add_test(NAME metalbear_blob_lifecycle COMMAND test_metalbear_blob_lifecycle)
 
   add_executable(test_metalbear_repo_gc test/test_repo_gc.c)
   target_link_libraries(test_metalbear_repo_gc PRIVATE metalbear_core)

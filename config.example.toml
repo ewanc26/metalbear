@@ -124,6 +124,9 @@ blob_upload_bytes = 5242880
 repo_bytes = 0
 blob_bytes = 0
 
+# Unreferenced uploads are temporary until a record references them.
+# blob_temp_seconds = 86400
+
 [firehose]
 # Relays told about new data via requestCrawl on write. Without any, a quiet
 # host is never crawled and never federates.

@@ -192,6 +192,27 @@ static long create_record(wf_xrpc_client *client, const char *repo,
     return status;
 }
 
+/* Create a record embedding a blob ref, which promotes an uploaded blob from
+ * temporary to durable so getBlob can serve it. */
+static long create_blob_record(wf_xrpc_client *client, const char *repo,
+                               const char *rkey, const char *cid) {
+    char body[1024];
+    snprintf(body, sizeof(body),
+             "{\"repo\":\"%s\",\"collection\":\"app.bsky.feed.post\","
+             "\"rkey\":\"%s\",\"record\":{\"$type\":\"app.bsky.feed.post\","
+             "\"text\":\"blob holder\",\"embed\":{"
+             "\"$type\":\"app.bsky.embed.images\",\"images\":[{\"alt\":\"a\","
+             "\"image\":{\"$type\":\"blob\",\"ref\":{\"$link\":\"%s\"},"
+             "\"mimeType\":\"image/png\",\"size\":12}}]},"
+             "\"createdAt\":\"2026-07-27T00:00:00.000Z\"}}",
+             repo, rkey, cid);
+    wf_response response = {0};
+    wf_xrpc_procedure(client, "com.atproto.repo.createRecord", body, &response);
+    long status = response.status;
+    wf_response_free(&response);
+    return status;
+}
+
 static long get_record(wf_xrpc_client *client, const char *repo,
                        const char *rkey) {
     wf_xrpc_param params[] = {
@@ -341,6 +362,12 @@ int main(void) {
     /* Same bytes, so necessarily the same CID: this is what makes a takedown
      * keyed on the CID alone a bug rather than a shortcut. */
     CHECK(strcmp(mallory_blob, victim_blob) == 0);
+
+    /* Each account references the shared CID from a record so the copy is
+     * durable and publicly visible: getBlob must serve it before either
+     * takedown, and only the CID-keyed takedown may hide Mallory's copy. */
+    CHECK(create_blob_record(client, mallory_did, "blob", mallory_blob) == 200);
+    CHECK(create_blob_record(client, victim_did, "blob", victim_blob) == 200);
 
     wf_response response = {0};
     char err[64];

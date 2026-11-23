@@ -49,6 +49,7 @@
 
 #include "wolfram/util.h"
 #include "metalbear/repo/repo_store.h"
+#include "metalbear/repo/blob_lifecycle.h"
 #include <cJSON.h>
 
 #ifdef __cplusplus
@@ -79,6 +80,18 @@ void metalbear_blob_store_free(metalbear_blob_store *store);
  */
 void metalbear_blob_store_set_quota_account(metalbear_blob_store *store,
                                             metalbear_account_store *account);
+
+/*
+ * Bind this store to the host-wide lifecycle database (issue #253). `did`
+ * identifies the account whose copy this store owns and is copied. Once bound,
+ * uploads made through metalbear_blob_store_put_temporary are hidden until a
+ * record reference promotes them, get/list skip temporary copies, and quota
+ * accounting counts only durable bytes. Plain put/put_file remain durable for
+ * embedders and import paths that do not use uploadBlob.
+ */
+void metalbear_blob_store_set_lifecycle(metalbear_blob_store *store,
+                                        metalbear_blob_lifecycle *lifecycle,
+                                        const char *did);
 
 /**
  * Enable at-rest encryption of the file-backed blob payloads.
@@ -116,6 +129,19 @@ wf_status metalbear_blob_store_put(metalbear_blob_store *store, const char *cid,
                                    const char *mime_type,
                                    const unsigned char *data, size_t len);
 
+/*
+ * Store an upload as temporary when a lifecycle database is bound (issue
+ * #253). On stores without lifecycle state this is identical to put(), so the
+ * embeddable blob-server API keeps its historical durable behavior. Temporary
+ * bytes do not consume the account's storage quota until a record references
+ * the blob and promotes it.
+ */
+wf_status metalbear_blob_store_put_temporary(metalbear_blob_store *store,
+                                             const char *cid,
+                                             const char *mime_type,
+                                             const unsigned char *data,
+                                             size_t len);
+
 /**
  * Store a blob by streaming `source_path` into the backing store. File-backed
  * stores copy with bounded memory and publish atomically; in-memory stores
@@ -137,6 +163,35 @@ wf_status metalbear_blob_store_get(metalbear_blob_store *store, const char *cid,
 /** Return WF_OK if the blob exists, WF_ERR_NOT_FOUND otherwise. */
 wf_status metalbear_blob_store_exists(metalbear_blob_store *store,
                                       const char *cid);
+
+/*
+ * Physical payload size, ignoring temporary/durable visibility. Used by the
+ * sweep to reconcile on-disk blobs with lifecycle state without reading their
+ * bytes.
+ */
+wf_status metalbear_blob_store_get_size(metalbear_blob_store *store,
+                                        const char *cid, size_t *out_size);
+
+/*
+ * List every physical payload in this store, including blobs hidden by
+ * lifecycle state. Used only by migration/sweep reconciliation, which must
+ * discover pre-schema-7 files that have no lifecycle row yet. The returned
+ * array is freed with metalbear_blob_store_list_free.
+ */
+wf_status metalbear_blob_store_list_physical(metalbear_blob_store *store,
+                                             char ***out_cids,
+                                             size_t *out_count);
+
+/*
+ * Copy the persisted record-URI associations and first-seen revision of a
+ * physical blob, ignoring lifecycle visibility. Used to seed the schema-7
+ * reference table from pre-existing sidecars during reconciliation.
+ */
+wf_status metalbear_blob_store_get_refs(metalbear_blob_store *store,
+                                        const char *cid, char ***out_uris,
+                                        size_t *out_count);
+wf_status metalbear_blob_store_get_revision(metalbear_blob_store *store,
+                                            const char *cid, char **out_rev);
 
 wf_status metalbear_blob_store_delete(metalbear_blob_store *store,
                                       const char *cid);
@@ -216,6 +271,17 @@ void metalbear_blob_walk_refs(const cJSON *node,
 wf_status metalbear_blob_store_associate(metalbear_blob_store *store,
                                          const char *cid,
                                          const char *record_uri);
+
+/*
+ * As associate(), but records the reference at repo revision `rev` in the
+ * lifecycle store and promotes the blob to durable. `rev` is the commit the
+ * write just produced; NULL records an unknown revision, which the sweeper
+ * treats as stale only after an explicit reconciliation.
+ */
+wf_status metalbear_blob_store_associate_at(metalbear_blob_store *store,
+                                            const char *cid,
+                                            const char *record_uri,
+                                            const char *rev);
 
 /*
  * Remove `record_uri`'s association with `cid`. If that was the blob's last

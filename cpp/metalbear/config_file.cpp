@@ -149,6 +149,7 @@ static std::string unescape_basic(const std::string &v) {
     INT("limits.blob_upload_bytes", blob_upload_limit)                         \
     NONNEG("limits.repo_bytes", repo_byte_quota)                               \
     NONNEG("limits.blob_bytes", blob_byte_quota)                               \
+    NONNEG("limits.blob_temp_seconds", blob_temp_seconds)                      \
     INT("limits.max_import_bytes", max_import_size)                            \
                                                                                \
     BOOL("repo.accepting_imports", accepting_imports)                          \

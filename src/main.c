@@ -164,6 +164,9 @@ int main(int argc, char **argv) {
          * lever on a server whose operator never thought about it; an
          * operator who wants no cap can still set 0 explicitly. */
         .blob_upload_limit = 5 * 1024 * 1024,
+        /* Unreferenced uploads stay temporary until a record references them;
+         * the sweep may delete them after this window (0 = immediate). */
+        .blob_temp_seconds = 86400,
         /* SIGTERM drains in-flight writes for up to this long (issue #164).
          * Five seconds is short enough to fit inside Docker's 10s stop grace
          * and long enough for an applyWrites batch on a small host. */
@@ -246,6 +249,7 @@ int main(int argc, char **argv) {
     ENV_I64("METALBEAR_BLOB_UPLOAD_LIMIT", blob_upload_limit);
     ENV_I64("METALBEAR_REPO_BYTES", repo_byte_quota);
     ENV_I64("METALBEAR_BLOB_BYTES", blob_byte_quota);
+    ENV_I64("METALBEAR_BLOB_TEMP_SECONDS", blob_temp_seconds);
     ENV_I64("METALBEAR_DRAIN_TIMEOUT_SECONDS", drain_timeout_seconds);
     ENV_I64("METALBEAR_MAX_IMPORT_SIZE", max_import_size);
     ENV_I64("METALBEAR_DELETION_HOLD_SECONDS", deletion_hold_seconds);
@@ -317,6 +321,11 @@ int main(int argc, char **argv) {
         LOG_ERROR("limits.repo_bytes and limits.blob_bytes "
                   "(METALBEAR_REPO_BYTES / METALBEAR_BLOB_BYTES) must not be "
                   "negative");
+        return 2;
+    }
+    if (config.blob_temp_seconds < 0) {
+        LOG_ERROR("limits.blob_temp_seconds "
+                  "(METALBEAR_BLOB_TEMP_SECONDS) must not be negative");
         return 2;
     }
     if (config.deletion_hold_seconds < 0) {

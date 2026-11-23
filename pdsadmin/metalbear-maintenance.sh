@@ -48,16 +48,20 @@ Usage:
   METALBEAR_DATA=DIR metalbear-maintenance.sh [--yes] sequencer-recover
   METALBEAR_DATA=DIR metalbear-maintenance.sh [--yes] rebuild-repo DID
   METALBEAR_DATA=DIR metalbear-maintenance.sh [--yes] --plc-url URL rotate-keys DID...
+  METALBEAR_DATA=DIR metalbear-maintenance.sh [--yes] blob-sweep [--dry-run]
 
 Environment:
-  METALBEAR_DATA        data directory of the stopped instance (required)
-  METALBEAR_HEALTH_URL  health endpoint used to detect a live instance
-  METALBEAR_MAINT_BIN   path to metalbear-maint (auto-detected from build dirs)
-  METALBEAR_PLC_URL     PLC directory for rotate-keys (or pass --plc-url)
+  METALBEAR_DATA               data directory of the stopped instance (required)
+  METALBEAR_HEALTH_URL         health endpoint used to detect a live instance
+  METALBEAR_MAINT_BIN          path to metalbear-maint (auto-detected from build dirs)
+  METALBEAR_PLC_URL            PLC directory for rotate-keys (or pass --plc-url)
+  METALBEAR_BLOB_TEMP_SECONDS  temporary-upload expiry window for blob-sweep (default 86400)
 
 rotate-keys publishes the repo's existing signing key to did:plc; it does not
 mint a new key. rebuild-repo verifies the head and rebuilds the derived SQL
-indexes from it; it does not reconstruct a damaged MST.
+indexes from it; it does not reconstruct a damaged MST. blob-sweep deletes
+expired temporary uploads and blobs whose record revisions are gone; --dry-run
+only reports the counts and needs no confirmation.
 EOF
   exit 1
 fi
@@ -87,7 +91,17 @@ fi
 exec 9>"$DATA_DIR/.maintenance.lock"
 flock -n 9 || fail "another maintenance command holds the lock on $DATA_DIR"
 
-if [[ "$COMMAND" == "rebuild-repo" || "$COMMAND" == "rotate-keys" ]]; then
+NEEDS_CONFIRM=0
+case "$COMMAND" in
+  rebuild-repo|rotate-keys) NEEDS_CONFIRM=1 ;;
+  blob-sweep)
+    NEEDS_CONFIRM=1
+    for arg in "${ARGS[@]}"; do
+      if [[ "$arg" == "--dry-run" ]]; then NEEDS_CONFIRM=0; fi
+    done
+    ;;
+esac
+if [[ "$NEEDS_CONFIRM" -eq 1 ]]; then
   if [[ "$ASSUME_YES" -ne 1 ]]; then
     echo "This command modifies $DATA_DIR. Type 'yes' to continue:" >&2
     read -r answer || true
@@ -112,6 +126,11 @@ if [[ "$COMMAND" == "rotate-keys" ]]; then
   done
   [[ -n "$PLC_URL" ]] || fail "rotate-keys needs --plc-url or METALBEAR_PLC_URL"
   [[ ${#final_args[@]} -gt 0 ]] || fail "rotate-keys needs at least one DID"
+elif [[ "$COMMAND" == "blob-sweep" ]]; then
+  for arg in "${ARGS[@]}"; do
+    [[ "$arg" == "--dry-run" ]] || fail "blob-sweep accepts only --dry-run"
+    final_args+=("$arg")
+  done
 elif [[ ${#ARGS[@]} -gt 0 ]]; then
   final_args=("${ARGS[@]}")
 fi

@@ -10,16 +10,20 @@
 
 #include "metalbear/account/account_registry.h"
 #include "metalbear/plc_publish.h"
+#include "metalbear/repo/blob_lifecycle.h"
+#include "metalbear/repo/blob_store.h"
 #include "metalbear/repo/key_rotation.h"
 #include "metalbear/repo/repo_store.h"
 #include "metalbear/sequencer.h"
 #include "wolfram/xrpc.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 static void usage(void) {
     fprintf(
@@ -30,7 +34,11 @@ static void usage(void) {
         "  sequencer-recover          heal missing account/repo tail events\n"
         "  rebuild-repo DID           verify the head, rebuild the SQL "
         "indexes\n"
-        "  rotate-keys DID...         publish each repo key to did:plc\n");
+        "  rotate-keys DID...         publish each repo key to did:plc\n"
+        "  blob-sweep [--dry-run]     expire temporary uploads and prune "
+        "stale refs\n"
+        "\n"
+        "blob-sweep uses METALBEAR_BLOB_TEMP_SECONDS (default 86400).\n");
 }
 
 static char *join(const char *a, const char *b) {
@@ -72,6 +80,104 @@ static wf_status open_repo(metalbear_account_entry *account,
 static int fail(const char *command, const char *what, wf_status st) {
     fprintf(stderr, "%s: %s failed (status=%d)\n", command, what, st);
     return 1;
+}
+
+/* One entry per account, all opened before the single host-wide sweep. The
+ * lifecycle database holds every account's rows, so callbacks must resolve the
+ * DID to that account's already-open stores rather than assume a single one. */
+typedef struct blob_sweep_ctx {
+    const char *did; /* borrowed from the account registry list */
+    metalbear_blob_store *blobs;
+    metalbear_repo_store *repo;
+} blob_sweep_ctx;
+
+typedef struct blob_sweep_all_ctx {
+    blob_sweep_ctx *accounts;
+    size_t count;
+} blob_sweep_all_ctx;
+
+static blob_sweep_ctx *blob_sweep_find(const blob_sweep_all_ctx *all,
+                                       const char *did) {
+    if (!all || !did) return NULL;
+    for (size_t i = 0; i < all->count; i++)
+        if (all->accounts[i].did && strcmp(all->accounts[i].did, did) == 0)
+            return &all->accounts[i];
+    return NULL;
+}
+
+static wf_status blob_sweep_revision_exists(const char *did, const char *rev,
+                                            void *ctx) {
+    blob_sweep_ctx *c = blob_sweep_find(ctx, did);
+    if (!c || !c->repo) return WF_ERR_INTERNAL; /* unknown: retain the ref */
+    return metalbear_repo_store_revision_exists(c->repo, rev);
+}
+
+static wf_status blob_sweep_delete(const char *did, const char *cid,
+                                   void *ctx) {
+    blob_sweep_ctx *c = blob_sweep_find(ctx, did);
+    if (!c || !c->blobs) return WF_ERR_INTERNAL;
+    return metalbear_blob_store_delete(c->blobs, cid);
+}
+
+static int64_t blob_temp_seconds(void) {
+    const char *env = getenv("METALBEAR_BLOB_TEMP_SECONDS");
+    int64_t seconds = 86400;
+    if (env && *env) {
+        char *end = NULL;
+        long long parsed = strtoll(env, &end, 10);
+        if (end != env && *end == '\0' && parsed >= 0)
+            seconds = (int64_t)parsed;
+        else
+            fprintf(stderr,
+                    "blob-sweep: ignoring invalid "
+                    "METALBEAR_BLOB_TEMP_SECONDS (using %lld)\n",
+                    (long long)seconds);
+    }
+    return seconds;
+}
+
+/*
+ * An upgraded host has blobs on disk but no lifecycle rows for them. Seed each
+ * visible copy as durable so the sweep does not mistake a live blob for an
+ * abandoned upload. seed_blob is INSERT-safe: a temporary upload that raced
+ * the restart scan keeps its temporary state.
+ */
+static wf_status seed_existing_blobs(const char *did, const char *blobs_dir,
+                                     metalbear_blob_store *blobs,
+                                     metalbear_blob_lifecycle *life,
+                                     int64_t now) {
+    (void)blobs_dir; /* physical size and refs come from the opened store */
+    char **cids = NULL;
+    size_t count = 0;
+    wf_status st = metalbear_blob_store_list_physical(blobs, &cids, &count);
+    if (st != WF_OK) return st;
+    for (size_t i = 0; i < count && st == WF_OK; i++) {
+        size_t size = 0;
+        if (metalbear_blob_store_get_size(blobs, cids[i], &size) != WF_OK)
+            continue;
+        st = metalbear_blob_lifecycle_seed_blob(life, did, cids[i], size, now);
+        if (st != WF_OK) break;
+
+        /* Pre-schema-7 sidecars are the only source of historical refs. Seed
+         * them into the revision-aware table; add_ref's INSERT OR REPLACE and
+         * seed_blob's INSERT OR IGNORE keep live temporary state untouched. */
+        char **uris = NULL;
+        size_t uri_count = 0;
+        if (metalbear_blob_store_get_refs(blobs, cids[i], &uris, &uri_count) ==
+            WF_OK) {
+            char *rev = NULL;
+            if (metalbear_blob_store_get_revision(blobs, cids[i], &rev) !=
+                WF_OK)
+                rev = NULL;
+            for (size_t j = 0; j < uri_count && st == WF_OK; j++)
+                st = metalbear_blob_lifecycle_add_ref(life, did, cids[i],
+                                                      uris[j], rev);
+            metalbear_blob_store_list_free(uris, uri_count);
+            free(rev);
+        }
+    }
+    metalbear_blob_store_list_free(cids, count);
+    return st;
 }
 
 static int publish_identity(const char *data_dir, const char *did) {
@@ -244,6 +350,77 @@ static int rotate_keys(const char *data_dir, const char *plc_url, int did_count,
     return st == WF_OK ? 0 : fail("rotate-keys", "publish signing key", st);
 }
 
+static int blob_sweep(const char *data_dir, bool dry_run) {
+    metalbear_account_registry *registry = NULL;
+    metalbear_account_entry *accounts = NULL;
+    metalbear_blob_lifecycle *life = NULL;
+    blob_sweep_all_ctx all = {0};
+    size_t count = 0;
+    wf_status st = WF_OK;
+    int64_t now = (int64_t)time(NULL);
+    int64_t temp_seconds = blob_temp_seconds();
+    metalbear_blob_sweep_summary summary = {0};
+
+    life = metalbear_blob_lifecycle_open(data_dir);
+    if (!life)
+        return fail("blob-sweep", "open blob lifecycle store", WF_ERR_INTERNAL);
+    st = open_registry(data_dir, &registry);
+    if (st == WF_OK)
+        st = metalbear_account_registry_list(registry, &accounts, &count);
+    if (count) {
+        all.accounts = calloc(count, sizeof(*all.accounts));
+        if (!all.accounts) st = WF_ERR_ALLOC;
+        all.count = count;
+    }
+
+    /* Open each account's stores once: seeding is per account, but the
+     * lifecycle sweep itself walks every account's rows in one pass. */
+    for (size_t i = 0; st == WF_OK && i < count; i++) {
+        char *blobs_dir = NULL;
+        all.accounts[i].did = accounts[i].did;
+        blobs_dir = join(accounts[i].data_directory, "blobs");
+        if (!blobs_dir) {
+            st = WF_ERR_ALLOC;
+            break;
+        }
+        all.accounts[i].blobs = metalbear_blob_store_new(blobs_dir);
+        if (!all.accounts[i].blobs) {
+            free(blobs_dir);
+            st = WF_ERR_INTERNAL;
+            break;
+        }
+        metalbear_blob_store_set_lifecycle(all.accounts[i].blobs, life,
+                                           accounts[i].did);
+        st = open_repo(&accounts[i], &all.accounts[i].repo);
+        if (st == WF_OK)
+            st = seed_existing_blobs(accounts[i].did, blobs_dir,
+                                     all.accounts[i].blobs, life, now);
+        free(blobs_dir);
+    }
+    if (st == WF_OK)
+        st = metalbear_blob_lifecycle_sweep(life, now, temp_seconds, dry_run,
+                                            blob_sweep_revision_exists,
+                                            blob_sweep_delete, &all, &summary);
+    if (st == WF_OK)
+        printf("%saccounts=%zu temporary=%zu temporary_bytes=%llu "
+               "expiring=%zu unreferenced_durable=%zu deleted=%zu "
+               "refs_pruned=%zu\n",
+               dry_run ? "dry-run " : "", count, summary.temporary,
+               (unsigned long long)summary.temporary_bytes, summary.expiring,
+               summary.unreferenced_durable, summary.deleted,
+               summary.refs_pruned);
+
+    for (size_t i = 0; i < count; i++) {
+        metalbear_blob_store_free(all.accounts[i].blobs);
+        metalbear_repo_store_free(all.accounts[i].repo);
+    }
+    free(all.accounts);
+    metalbear_account_entries_free(accounts, count);
+    metalbear_account_registry_free(registry);
+    metalbear_blob_lifecycle_free(life);
+    return st == WF_OK ? 0 : fail("blob-sweep", "sweep account blobs", st);
+}
+
 int main(int argc, char **argv) {
     const char *data_dir = NULL, *plc_url = NULL;
     int i = 1;
@@ -278,6 +455,13 @@ int main(int argc, char **argv) {
         return rebuild_repo(data_dir, args[0]);
     if (strcmp(command, "rotate-keys") == 0 && remaining >= 1)
         return rotate_keys(data_dir, plc_url, remaining, args);
+    if (strcmp(command, "blob-sweep") == 0 && remaining <= 1) {
+        if (remaining == 1 && strcmp(args[0], "--dry-run") != 0) {
+            usage();
+            return 2;
+        }
+        return blob_sweep(data_dir, remaining == 1);
+    }
     usage();
     return 2;
 }

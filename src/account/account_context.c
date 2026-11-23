@@ -171,6 +171,15 @@ wf_status metalbear_account_context_apply_quota_defaults(
     return metalbear_account_set_quotas(ctx->account, repo, blob);
 }
 
+void metalbear_account_context_set_blob_lifecycle(
+    metalbear_account_context *ctx, metalbear_blob_lifecycle *lifecycle) {
+    if (!ctx || !ctx->blobs || !ctx->did) return;
+    metalbear_blob_store_set_lifecycle(ctx->blobs, lifecycle, ctx->did);
+    /* Re-seed usage: a temporary upload must not consume quota, while blobs
+     * on disk before schema 7 are reconciled as durable by the sweep. */
+    metalbear_blob_store_set_quota_account(ctx->blobs, ctx->account);
+}
+
 void metalbear_account_context_close(metalbear_account_context *ctx) {
     if (!ctx) return;
     if (ctx->repo) metalbear_repo_store_free(ctx->repo);

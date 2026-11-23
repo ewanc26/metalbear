@@ -9,6 +9,7 @@ into the next version's. Releases made before it existed are described only by t
 
 ### Added
 
+- Blob lifecycle: uploads stay temporary until a record references them, unreferenced copies are removed by an expiry sweep, and revision-aware references survive repo GC, with host-wide state in `blob_lifecycle.sqlite3` (schema version 7). `limits.blob_temp_seconds` / `METALBEAR_BLOB_TEMP_SECONDS` sets the window (default 86400), `pdsadmin/metalbear-maintenance.sh blob-sweep --dry-run` previews deletions, and `/metrics` exposes temporary, expiring and unreferenced-durable gauges. ([#253](https://github.com/ewanc26/metalbear/issues/253))
 - Opt-in custom-domain handles: `[handles] allow_custom_domains` accepts a handle outside `user_domain` only when it resolves to the account's DID before any PLC write; an optional `allowed_custom_domains` suffix allowlist restricts which domains, custom DNS records stay with their owner, and host-only reserved labels and signup label lengths do not apply. ([#250](https://github.com/ewanc26/metalbear/issues/250))
 - Nightly advisory community compatibility run of pinned `atproto-smoke` against a throwaway local-mode instance, with results and triage published in `docs/conformance.md`. ([#249](https://github.com/ewanc26/metalbear/issues/249))
 - Notification channel interface with email and JSON webhook channels, configured by `notify.webhook_url` / `notify.webhook_secret`; every configured channel receives account notifications and secrets are never logged. ([#132](https://github.com/ewanc26/metalbear/issues/132))

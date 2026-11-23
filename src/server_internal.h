@@ -31,6 +31,8 @@
 #endif
 #include "metalbear/oauth/oauth.h"
 #include "metalbear/repo/key_rotation.h"
+#include "metalbear/repo/blob_lifecycle.h"
+#include "metalbear/repo/blob_sweep.h"
 #include "metalbear/repo/backup_schedule.h"
 #include "metalbear/repo/repo_gc_schedule.h"
 #include "metalbear/twofactor/totp.h"
@@ -152,6 +154,9 @@ struct metalbear_server {
     metalbear_backup_schedule *backup_schedule;
     /* Periodic repo-GC timer, or NULL when repo.gc_interval_seconds is 0. */
     metalbear_repo_gc_schedule *repo_gc_schedule;
+    /* Blob lifecycle state and its expiry sweep timer (issue #253). */
+    metalbear_blob_lifecycle *blob_lifecycle;
+    metalbear_blob_sweep_schedule *blob_sweep_schedule;
     /* Deferred hard-deletion timer, or NULL when the hold is 0/off. */
     metalbear_deletion_sweep *deletion_sweep;
     /* Server key for two-factor login (docs/totp.md). Not ready when the key
@@ -175,6 +180,7 @@ struct metalbear_server {
     int64_t blob_upload_limit; /* 0 => unlimited */
     int64_t repo_byte_quota;   /* default per-account repo bytes; 0 unlimited */
     int64_t blob_byte_quota;   /* default per-account blob bytes; 0 unlimited */
+    int64_t blob_temp_seconds; /* unreferenced upload lifetime; 0 = immediate */
     bool accepting_imports;    /* gates com.atproto.repo.importRepo */
     int64_t max_import_size;   /* 0 => unlimited; caps importRepo's CAR body */
     char *plc_url;             /* PLC directory URL or NULL */

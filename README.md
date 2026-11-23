@@ -239,6 +239,7 @@ rate_limit                = 3000   # per client, per window
 rate_limit_window_seconds = 60
 repo_bytes                = 0      # per-account quota; 0 = unlimited
 blob_bytes                = 0      # per-account quota; 0 = unlimited
+blob_temp_seconds         = 86400  # unreferenced uploads expire after this window
 
 [firehose]
 crawlers     = ["https://bsky.network"]

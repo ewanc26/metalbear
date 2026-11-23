@@ -2692,6 +2692,52 @@ wf_status metalbear_repo_store_get_head(metalbear_repo_store *s, char **out_rev,
     return WF_OK;
 }
 
+wf_status metalbear_repo_store_current_revision(metalbear_repo_store *s,
+                                                char **out_rev) {
+    if (!s || !out_rev) return WF_ERR_INVALID_ARG;
+    *out_rev = NULL;
+    char rev[64];
+    pthread_mutex_lock(&s->mutex);
+    get_effective_rev(s, rev, sizeof(rev));
+    pthread_mutex_unlock(&s->mutex);
+    if (!rev[0]) return WF_ERR_NOT_FOUND;
+    *out_rev = strdup(rev);
+    return *out_rev ? WF_OK : WF_ERR_ALLOC;
+}
+
+wf_status metalbear_repo_store_revision_exists(metalbear_repo_store *s,
+                                               const char *rev) {
+    if (!s || !rev || !rev[0]) return WF_ERR_INVALID_ARG;
+    char effective[64];
+    pthread_mutex_lock(&s->mutex);
+    get_effective_rev(s, effective, sizeof(effective));
+    if (effective[0] && strcmp(effective, rev) == 0) {
+        pthread_mutex_unlock(&s->mutex);
+        return WF_OK;
+    }
+
+    sqlite3_stmt *stmt = NULL;
+    wf_status st = WF_ERR_NOT_FOUND;
+    if (sqlite3_prepare_v2(s->db,
+                           "SELECT 1 FROM blocks WHERE repo_rev=?"
+                           " LIMIT 1;",
+                           -1, &stmt, NULL) != SQLITE_OK) {
+        pthread_mutex_unlock(&s->mutex);
+        return WF_ERR_INTERNAL;
+    }
+    sqlite3_bind_text(stmt, 1, rev, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW)
+        st = WF_OK;
+    else if (rc == SQLITE_DONE)
+        st = WF_ERR_NOT_FOUND;
+    else
+        st = WF_ERR_INTERNAL;
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&s->mutex);
+    return st;
+}
+
 wf_status metalbear_repo_store_export_locked(metalbear_repo_store *s,
                                              const char *since,
                                              unsigned char **out_data,
