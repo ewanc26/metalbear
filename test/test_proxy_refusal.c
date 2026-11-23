@@ -27,6 +27,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 static int rmtree_remove_cb(const char *path, const struct stat *sb, int type,
@@ -62,7 +63,12 @@ static int write_all(int fd, const void *data, size_t length) {
 }
 
 /* A mock AppView that counts requests and captures the latest upstream header
- * block, so an allowed destination can be seen to reach it. */
+ * block, so an allowed destination can be seen to reach it. The loop is
+ * bounded like test_proxy.c: exactly one upstream request is made in this
+ * test. An unbounded accept() plus close() from the joining thread hangs on
+ * Linux, where close does not wake a blocked accept(). */
+#define MOCK_UPSTREAM_REQUESTS 1
+
 typedef struct {
     int listen_fd;
     pthread_t thread;
@@ -73,7 +79,7 @@ typedef struct {
 
 static void *mock_upstream_run(void *arg) {
     mock_upstream *mock = arg;
-    for (;;) {
+    for (int i = 0; i < MOCK_UPSTREAM_REQUESTS; i++) {
         int fd = accept(mock->listen_fd, NULL, NULL);
         if (fd < 0) break;
         char buf[8192];
@@ -111,6 +117,11 @@ static int mock_upstream_start(mock_upstream *mock, uint16_t *port_out) {
     int reuse = 1;
     setsockopt(mock->listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse,
                sizeof(reuse));
+    /* A receive timeout bounds accept() even if an expected request never
+     * arrives, so a failing assertion can never wedge the test thread. */
+    struct timeval recv_timeout = {.tv_sec = 5, .tv_usec = 0};
+    setsockopt(mock->listen_fd, SOL_SOCKET, SO_RCVTIMEO, &recv_timeout,
+               sizeof(recv_timeout));
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = inet_addr("127.0.0.1");
@@ -137,8 +148,8 @@ static int mock_upstream_start(mock_upstream *mock, uint16_t *port_out) {
 }
 
 static void mock_upstream_stop(mock_upstream *mock) {
-    close(mock->listen_fd);
     pthread_join(mock->thread, NULL);
+    close(mock->listen_fd);
     pthread_mutex_destroy(&mock->mutex);
 }
 
