@@ -49,6 +49,18 @@ bool metalbear_admission_parse_mode(const char *text,
     return true;
 }
 
+const char *metalbear_admission_mode_name(metalbear_admission_mode mode) {
+    switch (mode) {
+        case METALBEAR_ADMISSION_OPEN:
+            return "open";
+        case METALBEAR_ADMISSION_INVITE:
+            return "invite";
+        case METALBEAR_ADMISSION_CLOSED:
+            return "closed";
+    }
+    return "closed";
+}
+
 bool metalbear_admission_config_valid(const char *default_mode,
                                       const char *open_domains,
                                       const char *invite_domains,

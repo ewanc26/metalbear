@@ -136,6 +136,8 @@ static void build_fixture(const char *root) {
     mkdir(path, 0755);
     snprintf(path, sizeof(path), "%s/account/devices.html", root);
     write_file(path, "<html>devices page</html>");
+    snprintf(path, sizeof(path), "%s/signup.html", root);
+    write_file(path, "<html>signup page</html>");
     snprintf(path, sizeof(path), "%s/_app", root);
     mkdir(path, 0755);
     snprintf(path, sizeof(path), "%s/_app/app.js", root);
@@ -145,8 +147,9 @@ static void build_fixture(const char *root) {
 }
 
 static void remove_fixture(const char *root) {
-    const char *files[] = {"index.html", "account.html", "account/devices.html",
-                           "_app/app.js", "robots.txt"};
+    const char *files[] = {"index.html",           "account.html",
+                           "account/devices.html", "signup.html",
+                           "_app/app.js",          "robots.txt"};
     char path[512];
     for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
         snprintf(path, sizeof(path), "%s/%s", root, files[i]);
@@ -184,9 +187,9 @@ int main(void) {
     }
     routes = 0;
     CHECK(metalbear_frontend_register(server, root, &routes) == WF_OK);
-    /* index + account.html + its bare alias + devices + its alias + app.js.
-     * robots.txt is skipped. */
-    CHECK(routes == 6);
+    /* index + account.html + its bare alias + devices + its alias + signup
+     * + its bare alias + app.js. robots.txt is skipped. */
+    CHECK(routes == 8);
     unsigned short port = wf_xrpc_server_port(server);
 
     char ctype[128], body[256];
@@ -202,6 +205,13 @@ int main(void) {
     CHECK(http_get(port, "/account.html", ctype, sizeof(ctype), body,
                    sizeof(body)) == 200);
     CHECK(strcmp(body, "<html>account page</html>") == 0);
+
+    CHECK(http_get(port, "/signup", ctype, sizeof(ctype), body, sizeof(body)) ==
+          200);
+    CHECK(strcmp(body, "<html>signup page</html>") == 0);
+    CHECK(http_get(port, "/signup.html", ctype, sizeof(ctype), body,
+                   sizeof(body)) == 200);
+    CHECK(strcmp(body, "<html>signup page</html>") == 0);
 
     CHECK(http_get(port, "/account/devices", ctype, sizeof(ctype), body,
                    sizeof(body)) == 200);

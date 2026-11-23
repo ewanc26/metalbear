@@ -29,6 +29,20 @@ int main(void) {
     const char *invite = ".invite.example,.sub.invite.example";
     const char *closed = ".closed.example";
 
+    /* Public metadata uses these exact names; pin them so /operator.json
+     * cannot drift into a synonym the bundled frontend does not understand. */
+    if (strcmp(metalbear_admission_mode_name(METALBEAR_ADMISSION_OPEN),
+               "open") != 0 ||
+        strcmp(metalbear_admission_mode_name(METALBEAR_ADMISSION_INVITE),
+               "invite") != 0 ||
+        strcmp(metalbear_admission_mode_name(METALBEAR_ADMISSION_CLOSED),
+               "closed") != 0 ||
+        strcmp(metalbear_admission_mode_name((metalbear_admission_mode)99),
+               "closed") != 0) {
+        fprintf(stderr, "unexpected admission mode name\n");
+        return 1;
+    }
+
     /* No match uses the legacy global fallback. */
     expect_mode("alice.other.test", METALBEAR_ADMISSION_INVITE, open, invite,
                 closed, METALBEAR_ADMISSION_INVITE);

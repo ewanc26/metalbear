@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { adminAuth } from '#lib/stores/adminAuth.ts';
 	import {
 		adminLogin,
@@ -10,12 +11,20 @@
 		adminGetInviteCodes,
 		adminDisableInviteCodes,
 		resolveHandle,
-		listReposPage
+		listReposPage,
+		operatorInfo
 	} from '#lib/pds.ts';
-	import type { AdminAccountView, SubjectStatus, AdminInviteCode, RepoInfo } from '#lib/pds.ts';
+	import type {
+		AdminAccountView,
+		SubjectStatus,
+		AdminInviteCode,
+		RepoInfo,
+		OperatorInfo
+	} from '#lib/pds.ts';
 	import { onMount } from 'svelte';
 
 	let password = $state<string | null>(null);
+	let operator = $state<OperatorInfo | null>(null);
 	adminAuth.subscribe((p) => (password = p));
 
 	/* ---- Login ---- */
@@ -189,6 +198,9 @@
 	}
 
 	onMount(() => {
+		/* Signup is public metadata; show the link even before admin sign-in
+		 * when the operator allows people to join this server. */
+		void operatorInfo().then((info) => (operator = info));
 		if (password) loadInviteCodes();
 	});
 </script>
@@ -200,11 +212,18 @@
 <main class="mx-auto max-w-3xl px-6 py-12">
 	<div class="mb-8 flex items-center justify-between">
 		<h1 class="text-2xl font-semibold text-white">Admin</h1>
-		{#if password}
-			<button onclick={handleLogout} class="text-sm text-slate-500 hover:text-slate-300">
-				Sign out
-			</button>
-		{/if}
+		<div class="flex items-center gap-5">
+			{#if operator?.registration?.mode && operator.registration.mode !== 'closed'}
+				<a href={resolve('/signup')} class="text-sm text-emerald-500 hover:text-emerald-400">
+					Signup
+				</a>
+			{/if}
+			{#if password}
+				<button onclick={handleLogout} class="text-sm text-slate-500 hover:text-slate-300">
+					Sign out
+				</button>
+			{/if}
+		</div>
 	</div>
 
 	{#if !password}

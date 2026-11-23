@@ -43,6 +43,12 @@ The admin route uses the same check: an operator override cannot assign a
 handle an account holder could never set. This is a constraint on new
 assignments; it does not rename existing accounts or change any stored data.
 
+The bundled `/signup` page first calls `checkHandleAvailability` for MetalBear's
+local label, reservation and conflict rules, then `resolveHandle`. A
+`HandleNotFound` answer from `resolveHandle` means the handle is free; other
+errors leave the field usable but warn that the check was inconclusive.
+`createAccount` always rechecks the handle, so the form is only a preflight.
+
 Two temporary XRPC helpers support signup forms:
 
 - `com.atproto.temp.checkHandleAvailability` is public. It takes `handle` and

@@ -10,6 +10,7 @@ into the next version's. Releases made before it existed are described only by t
 ### Added
 
 - Read-only repo browser at `/repo` in the frontend: search by handle or DID, browse collections and paginated records, inspect raw record JSON, and list blobs with size/type and download links. Taken-down and deactivated repositories are reported without exposing withheld records, and admin/landing pages link directly into the browser. ([#262](https://github.com/ewanc26/metalbear/issues/262))
+- Self-serve signup at `/signup`: the form reads the public registration mode from `/operator.json`, checks handle conflicts with `checkHandleAvailability` and `resolveHandle`, supports invite codes and verification email where configured, and links from the landing and admin pages. `describeServer.inviteCodeRequired` now reflects the effective `[admission]` mode instead of only the legacy flag. ([#258](https://github.com/ewanc26/metalbear/issues/258))
 
 ## [0.58.0] - 2026-11-23
 

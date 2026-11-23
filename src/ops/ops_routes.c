@@ -13,6 +13,26 @@
 #include "metalbear/video_upload.h"
 
 #include <cJSON.h>
+#include <stdio.h>
+
+/* Signup metadata is MetalBear-specific, so it lives in /operator.json
+ * rather than inventing a field in describeServer's lexicon. describeServer's
+ * inviteCodeRequired still has to agree with it, though, or clients get two
+ * contradictory answers. Probe the configured user domain so a per-domain
+ * admission list is reflected in both. */
+static metalbear_admission_mode
+advertised_admission_mode(const metalbear_server *server) {
+    if (!server) return METALBEAR_ADMISSION_CLOSED;
+    if (!server->user_domain) return server->admission_default_mode;
+    char probe[320];
+    int written =
+        snprintf(probe, sizeof(probe), "signup%s", server->user_domain);
+    if (written < 0 || (size_t)written >= sizeof(probe))
+        return server->admission_default_mode;
+    return metalbear_admission_for_handle(
+        probe, server->admission_default_mode, server->admission_open_domains,
+        server->admission_invite_domains, server->admission_closed_domains);
+}
 
 /* ---- com.atproto.server.describeServer (query) ---- */
 wf_status describe_server(void *ctx, const wf_xrpc_request *request,
@@ -31,7 +51,9 @@ wf_status describe_server(void *ctx, const wf_xrpc_request *request,
     cJSON_AddStringToObject(root, "did", server->service_did);
     cJSON_AddItemToArray(domains, cJSON_CreateString(server->user_domain));
     cJSON_AddItemToObject(root, "availableUserDomains", domains);
-    cJSON_AddBoolToObject(root, "inviteCodeRequired", server->invite_required);
+    cJSON_AddBoolToObject(root, "inviteCodeRequired",
+                          advertised_admission_mode(server) ==
+                              METALBEAR_ADMISSION_INVITE);
     cJSON_AddBoolToObject(root, "phoneVerificationRequired", false);
     if (server->blob_upload_limit > 0)
         cJSON_AddNumberToObject(root, "blobUploadLimit",
@@ -126,7 +148,33 @@ wf_status operator_info(void *ctx, const wf_xrpc_request *request,
         cJSON_AddNumberToObject(capabilities, "videoPartBytes",
                                 (double)METALBEAR_VIDEO_PART_BYTES);
 #endif
+        /* Only advertise verification mail when the server can actually send
+         * it: a built without SMTP, or one with no host configured, must not
+         * send a signup to check an inbox that will never receive anything. */
+#ifdef METALBEAR_MODULE_EMAIL
+        cJSON_AddBoolToObject(capabilities, "emailVerificationAvailable",
+                              server->email != NULL);
+#else
+        cJSON_AddBoolToObject(capabilities, "emailVerificationAvailable",
+                              false);
+#endif
         cJSON_AddItemToObject(root, "capabilities", capabilities);
+    }
+
+    /* Self-serve signup policy (issue #258). There is no lexicon field for
+     * "open"/"invite"/"closed", so the bundled frontend reads this alongside
+     * describeServer's availableUserDomains and inviteCodeRequired. The
+     * server remains authoritative: createAccount still enforces admission. */
+    metalbear_admission_mode mode = advertised_admission_mode(server);
+    cJSON *registration = cJSON_CreateObject();
+    if (registration) {
+        cJSON_AddStringToObject(registration, "mode",
+                                metalbear_admission_mode_name(mode));
+        cJSON_AddBoolToObject(registration, "inviteCodeRequired",
+                              mode == METALBEAR_ADMISSION_INVITE);
+        cJSON_AddBoolToObject(registration, "closed",
+                              mode == METALBEAR_ADMISSION_CLOSED);
+        cJSON_AddItemToObject(root, "registration", registration);
     }
 
     if (server->instance_description)

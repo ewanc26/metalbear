@@ -2,6 +2,7 @@
 	import { auth } from '#lib/stores/auth.ts';
 	import { getSession, refreshSession, downloadRepo } from '#lib/pds.ts';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 
 	let session = $state<import('#lib/stores/auth.ts').Session | null>(null);
@@ -10,10 +11,16 @@
 	let loading = $state(true);
 	let downloadPending = $state(false);
 	let downloadError = $state('');
+	let registered = $state(false);
+	let verifyEmail = $state(false);
 
 	auth.subscribe((s) => (session = s));
 
 	onMount(async () => {
+		/* Read only in the browser: query parameters are unavailable while this
+		 * prerendered page is built, as with the repo browser. */
+		registered = page.url.searchParams.get('registered') === '1';
+		verifyEmail = page.url.searchParams.get('verifyEmail') === '1';
 		if (!session) {
 			goto('/login');
 			return;
@@ -76,6 +83,21 @@
 
 <main class="mx-auto max-w-2xl px-6 py-12">
 	<h1 class="mb-8 text-2xl font-semibold text-white">Account</h1>
+
+	{#if registered}
+		<section
+			class="mb-8 rounded-lg border border-emerald-900/60 bg-emerald-950/30 px-4 py-3 text-sm text-emerald-200"
+		>
+			<p>Your account was created.</p>
+			{#if verifyEmail}
+				<p class="mt-1 text-emerald-300/80">Check your inbox to confirm your email address.</p>
+			{:else}
+				<p class="mt-1 text-emerald-300/80">
+					You can confirm your email later under Security settings.
+				</p>
+			{/if}
+		</section>
+	{/if}
 
 	{#if loading}
 		<p class="text-sm text-slate-400">Loading…</p>

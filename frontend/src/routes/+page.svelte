@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import BearLogo from '#lib/components/BearLogo.svelte';
 	import {
@@ -82,6 +83,17 @@
 			</p>
 		{/if}
 	</header>
+
+	{#if info?.registration?.mode && info.registration.mode !== 'closed'}
+		<p class="mb-10">
+			<a
+				href={resolve('/signup')}
+				class="inline-flex rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-500"
+			>
+				Join this server →
+			</a>
+		</p>
+	{/if}
 
 	{#if failed}
 		<p
