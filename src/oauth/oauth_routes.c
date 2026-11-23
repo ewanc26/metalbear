@@ -687,17 +687,77 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
     oauth_route_ctx *rctx = ctx;
     const char *request_uri = NULL;
     const char *client_id = NULL;
+    const char *approved_scope = NULL;
+    bool denied = false;
     if (req->params && cJSON_IsObject(req->params)) {
         cJSON *ru =
             cJSON_GetObjectItemCaseSensitive(req->params, "request_uri");
         cJSON *cid = cJSON_GetObjectItemCaseSensitive(req->params, "client_id");
+        cJSON *sc = cJSON_GetObjectItemCaseSensitive(req->params, "scope");
+        cJSON *dn = cJSON_GetObjectItemCaseSensitive(req->params, "deny");
         if (cJSON_IsString(ru)) request_uri = ru->valuestring;
         if (cJSON_IsString(cid)) client_id = cid->valuestring;
+        if (cJSON_IsString(sc) && sc->valuestring && sc->valuestring[0])
+            approved_scope = sc->valuestring;
+        if (cJSON_IsTrue(dn)) denied = true;
     }
 
     if (!request_uri || !client_id) {
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                    "Missing request_uri or client_id");
+        return WF_OK;
+    }
+
+    /*
+     * A denial is decided entirely on the server, not in the browser: the
+     * client must receive a real OAuth error redirect (with its own stored
+     * redirect_uri and state) rather than the consent page secretly
+     * redirecting to a URL it supplied itself. Consuming the PAR here also
+     * means a denied request can't later be approved by replaying the URI.
+     * This needs no device session -- saying "no" must always be possible.
+     */
+    if (denied) {
+        char *deny_redirect = NULL, *deny_state = NULL;
+        wf_status deny_status = metalbear_oauth_deny(
+            rctx->store, request_uri, client_id, &deny_redirect, &deny_state);
+        if (deny_status != WF_OK) {
+            wf_xrpc_response_set_error(
+                resp, 400,
+                deny_status == WF_ERR_NOT_FOUND ? "expired" : "invalid_request",
+                "Authorization request is no longer valid");
+            return WF_OK;
+        }
+        char *escaped_state = deny_state ? url_escape(deny_state) : NULL;
+        char *escaped_issuer = url_escape(rctx->public_url);
+        if ((deny_state && !escaped_state) || !escaped_issuer) {
+            curl_free(escaped_state);
+            curl_free(escaped_issuer);
+            free(deny_redirect);
+            free(deny_state);
+            return WF_ERR_ALLOC;
+        }
+        const char sep = strchr(deny_redirect, '?') ? '&' : '?';
+        size_t len = strlen(deny_redirect) + strlen(escaped_issuer) +
+                     (escaped_state ? strlen(escaped_state) : 0) + 48;
+        char *url = malloc(len);
+        if (!url) {
+            curl_free(escaped_state);
+            curl_free(escaped_issuer);
+            free(deny_redirect);
+            free(deny_state);
+            return WF_ERR_ALLOC;
+        }
+        snprintf(url, len, "%s%cerror=access_denied%s%s&iss=%s", deny_redirect,
+                 sep, escaped_state ? "&state=" : "",
+                 escaped_state ? escaped_state : "", escaped_issuer);
+        wf_xrpc_response_set_content_type(resp, "text/html");
+        wf_xrpc_response_add_header(resp, "Location", url);
+        resp->http_status = 302;
+        free(url);
+        curl_free(escaped_state);
+        curl_free(escaped_issuer);
+        free(deny_redirect);
+        free(deny_state);
         return WF_OK;
     }
 
@@ -795,9 +855,21 @@ static wf_status oauth_authorize(void *ctx, const wf_xrpc_request *req,
     char *code = NULL;
     char *redirect_uri = NULL;
     char *state = NULL;
-    wf_status status =
-        metalbear_oauth_authorize(rctx->store, request_uri, client_id, subject,
-                                  &code, &redirect_uri, &state);
+    wf_status status;
+    if (approved_scope)
+        status = metalbear_oauth_authorize_scoped(
+            rctx->store, request_uri, client_id, subject, approved_scope, &code,
+            &redirect_uri, &state);
+    else
+        status =
+            metalbear_oauth_authorize(rctx->store, request_uri, client_id,
+                                      subject, &code, &redirect_uri, &state);
+    if (status == WF_ERR_VALIDATION) {
+        wf_xrpc_response_set_error(resp, 400, "invalid_scope",
+                                   "The selected permissions are not a valid "
+                                   "subset of the requested permissions");
+        return WF_OK;
+    }
     if (status != WF_OK) {
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
                                    "Authorization failed");
@@ -1059,12 +1131,15 @@ static wf_status oauth_authorize_info(void *ctx, const wf_xrpc_request *req,
     oauth_route_ctx *rctx = ctx;
     const char *request_uri = NULL;
     const char *client_id = NULL;
+    const char *hint = NULL;
     if (req->params && cJSON_IsObject(req->params)) {
         cJSON *ru =
             cJSON_GetObjectItemCaseSensitive(req->params, "request_uri");
         cJSON *cid = cJSON_GetObjectItemCaseSensitive(req->params, "client_id");
+        cJSON *lh = cJSON_GetObjectItemCaseSensitive(req->params, "login_hint");
         if (cJSON_IsString(ru)) request_uri = ru->valuestring;
         if (cJSON_IsString(cid)) client_id = cid->valuestring;
+        if (cJSON_IsString(lh)) hint = lh->valuestring;
     }
     if (!request_uri || !client_id) {
         wf_xrpc_response_set_error(resp, 400, "invalid_request",
@@ -1097,12 +1172,40 @@ static wf_status oauth_authorize_info(void *ctx, const wf_xrpc_request *req,
     }
     free(redirect_uri); /* not part of this response */
 
+    /* Incremental consent: when the browser is signed into the account named
+     * by login_hint, report the scope this client was last granted so the
+     * consent page can mark what is newly being asked for. Gated on a device
+     * session for that subject so this read-only endpoint cannot be used to
+     * probe another account's grants by guessing a login_hint. */
+    char *previous_scope = NULL;
+    if (hint && hint[0] && rctx->resolve_subject) {
+        char subject[256];
+        if (rctx->resolve_subject(rctx->resolver_ctx, hint, subject,
+                                  sizeof(subject))) {
+            device_session_entry sessions[MB_DEVICE_MAX_SESSIONS];
+            size_t count =
+                read_device_sessions(rctx->store, req->cookie_header, sessions);
+            bool authenticated = false;
+            for (size_t i = 0; i < count; i++) {
+                if (strcmp(sessions[i].subject, subject) == 0) {
+                    authenticated = true;
+                    break;
+                }
+            }
+            free_device_sessions(sessions, count);
+            if (authenticated)
+                metalbear_oauth_granted_scope(rctx->store, subject, client_id,
+                                              &previous_scope);
+        }
+    }
+
     char *name = NULL, *uri = NULL, *logo = NULL;
     fetch_client_display_metadata(client_id, &name, &uri, &logo);
 
     cJSON *root = cJSON_CreateObject();
     if (!root) {
         free(scope);
+        free(previous_scope);
         free(name);
         free(uri);
         free(logo);
@@ -1112,10 +1215,13 @@ static wf_status oauth_authorize_info(void *ctx, const wf_xrpc_request *req,
     }
     bool ok = cJSON_AddStringToObject(root, "client_id", client_id) &&
               cJSON_AddStringToObject(root, "scope", scope);
+    if (ok && previous_scope)
+        ok = cJSON_AddStringToObject(root, "previous_scope", previous_scope);
     if (ok && name) ok = cJSON_AddStringToObject(root, "client_name", name);
     if (ok && uri) ok = cJSON_AddStringToObject(root, "client_uri", uri);
     if (ok && logo) ok = cJSON_AddStringToObject(root, "logo_uri", logo);
     free(scope);
+    free(previous_scope);
     free(name);
     free(uri);
     free(logo);
@@ -1356,6 +1462,10 @@ static wf_status oauth_token(void *ctx, const wf_xrpc_request *req,
     cJSON_AddStringToObject(root, "access_token", grant.access_token);
     cJSON_AddStringToObject(root, "token_type", "DPoP");
     cJSON_AddNumberToObject(root, "expires_in", (double)grant.expires_in);
+    /* Reflect the scope actually bound to this grant, which may be a subset
+     * the user selected on the consent screen. Clients rely on this to know
+     * what they were granted (RFC 6749 §5.1). */
+    if (grant.scope) cJSON_AddStringToObject(root, "scope", grant.scope);
     if (grant.refresh_token)
         cJSON_AddStringToObject(root, "refresh_token", grant.refresh_token);
     metalbear_oauth_grant_free(&grant);

@@ -197,6 +197,35 @@ bool mb_scope_set_allows_rpc(const mb_scope_set *set, const char *lxm,
 char *mb_scope_normalize(const char *scope_str);
 
 /**
+ * Check that `approved` is a strict subset of `requested`, comparing whole
+ * whitespace-separated scope tokens verbatim. Returns false when `approved`
+ * is empty or duplicated, or carries any token absent from `requested`.
+ *
+ * This is the consent gate: the browser round-trip may only remove
+ * permissions from a pushed authorization request. Comparing raw tokens
+ * rather than parsed permissions means a crafted request cannot widen a
+ * grant by reshaping a scope into something the parser considers equivalent.
+ */
+bool mb_scope_is_subset(const char *approved, const char *requested);
+
+/**
+ * Whether a scope token is one the consent screen must keep checked:
+ * `atproto` (every issued token needs it), plus every `transition:*` and
+ * `identity:*` grant and their `include:` references. The server enforces
+ * this as well as the UI so dropping a locked token by editing the URL
+ * cannot slip through.
+ */
+bool mb_scope_is_required(const char *token);
+
+/**
+ * A consent-approved scope is valid only when it is a strict subset of the
+ * request AND retains every required token the request carried. Used by the
+ * authorize endpoint before it consumes a PAR, so a crafted or truncated
+ * query string can never widen a grant or drop a locked permission.
+ */
+bool mb_scope_is_valid_narrowing(const char *approved, const char *requested);
+
+/**
  * Check if a string is a valid static scope value.
  */
 bool mb_is_static_scope(const char *value);

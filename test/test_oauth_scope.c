@@ -584,6 +584,86 @@ static void test_dynamic_scope_enforcement(void) {
     PASS();
 }
 
+/* Consent narrowing validation (issue #261). The consent screen sends back
+ * the exact tokens the user left checked; these helpers are the server-side
+ * gate that stops that round-trip widening the grant or dropping a required
+ * permission. */
+static void test_consent_narrowing(void) {
+    TEST("identical scope is a valid narrowing");
+    ASSERT(mb_scope_is_valid_narrowing("atproto", "atproto"),
+           "granting exactly what was requested must be allowed");
+    PASS();
+
+    TEST("removing an optional scope is a valid narrowing");
+    ASSERT(mb_scope_is_valid_narrowing(
+               "atproto repo:app.bsky.feed.post?action=create",
+               "atproto repo:app.bsky.feed.post?action=create "
+               "blob:image/*"),
+           "dropping blob: must be allowed");
+    PASS();
+
+    TEST("widening with a new token is rejected");
+    ASSERT(!mb_scope_is_valid_narrowing(
+               "atproto blob:image/*",
+               "atproto repo:app.bsky.feed.post?action=create"),
+           "a token not in the PAR must never be granted");
+    PASS();
+
+    TEST("replacing one token with another is rejected");
+    ASSERT(!mb_scope_is_valid_narrowing("atproto account:email?action=manage",
+                                        "atproto account:repo?action=manage"),
+           "even a same-shaped token is widening if the PAR lacked it");
+    PASS();
+
+    TEST("dropping atproto is rejected");
+    ASSERT(!mb_scope_is_valid_narrowing("", "atproto"),
+           "empty approval must be rejected");
+    ASSERT(!mb_scope_is_valid_narrowing("transition:email", "atproto"),
+           "dropping the mandatory atproto token must be rejected");
+    PASS();
+
+    TEST("dropping a transition scope is rejected");
+    ASSERT(!mb_scope_is_valid_narrowing(
+               "atproto repo:app.bsky.feed.post?action=create",
+               "atproto transition:email "
+               "repo:app.bsky.feed.post?action=create"),
+           "transition: tokens are locked and must survive narrowing");
+    PASS();
+
+    TEST("dropping an identity scope is rejected");
+    ASSERT(!mb_scope_is_valid_narrowing("atproto", "atproto identity:handle"),
+           "identity: tokens are locked too");
+    PASS();
+
+    TEST("dropping an include: reference to a required scope is rejected");
+    ASSERT(!mb_scope_is_valid_narrowing("atproto",
+                                        "atproto include:transition:email"),
+           "include: references to required scopes are locked");
+    PASS();
+
+    TEST("duplicate approval tokens are rejected");
+    ASSERT(!mb_scope_is_valid_narrowing("atproto atproto", "atproto"),
+           "duplicate tokens must be rejected as ambiguous");
+    PASS();
+
+    TEST("extra whitespace is tolerated");
+    ASSERT(mb_scope_is_valid_narrowing("  atproto   repo:app.bsky.feed.post  ",
+                                       "atproto repo:app.bsky.feed.post"),
+           "tokenization should ignore repeated whitespace");
+    PASS();
+
+    TEST("subset and required helpers agree on simple tokens");
+    ASSERT(mb_scope_is_subset("atproto transition:email",
+                              "atproto transition:email blob:image/*"),
+           "plain subset check should ignore the required-token rule");
+    ASSERT(mb_scope_is_required("atproto"), "atproto is required");
+    ASSERT(mb_scope_is_required("include:transition:email"),
+           "include of a transition scope is required");
+    ASSERT(!mb_scope_is_required("repo:app.bsky.feed.post?action=create"),
+           "repo scopes are optional");
+    PASS();
+}
+
 int main(void) {
     printf("OAuth Scope Tests\n");
     printf("=================\n\n");
@@ -596,6 +676,7 @@ int main(void) {
     test_dynamic_scopes();
     test_dynamic_scope_enforcement();
     test_read_scope_denial();
+    test_consent_narrowing();
 
     printf("\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);

@@ -281,6 +281,132 @@ int main(void) {
         free(request_uri2);
     }
 
+    /* ---- issue #261: per-scope consent ---- */
+
+    /* A fresh PAR asking for a required scope plus two optional ones. */
+    metalbear_oauth_request consent_request = {
+        .client_id = "https://consent.example/metadata.json",
+        .redirect_uri = "https://consent.example/callback",
+        .scope =
+            "atproto transition:email repo:app.bsky.feed.post?action=create "
+            "blob:image/*",
+        .state = "consent-state",
+        .code_challenge = pkce.challenge,
+        .dpop_jkt = request.dpop_jkt,
+    };
+    char *consent_uri = NULL;
+    CHECK(metalbear_oauth_create_par(store, &consent_request, &consent_uri,
+                                     &expires_in) == WF_OK);
+    CHECK(consent_uri != NULL);
+
+    /* Widening the grant is refused and, crucially, leaves the PAR alive so
+     * the browser can go back and choose again. */
+    char *narrow_code = NULL, *narrow_redirect = NULL, *narrow_state = NULL;
+    CHECK(metalbear_oauth_authorize_scoped(
+              store, consent_uri, consent_request.client_id, "did:plc:consent",
+              "atproto transition:email repo:app.bsky.feed.post?action=create "
+              "blob:image/* account:email?action=manage",
+              &narrow_code, &narrow_redirect,
+              &narrow_state) == WF_ERR_VALIDATION);
+    CHECK(!narrow_code);
+    char *still_scope = NULL, *still_redirect = NULL;
+    CHECK(metalbear_oauth_par_peek(store, consent_uri,
+                                   consent_request.client_id, &still_scope,
+                                   &still_redirect) == WF_OK);
+    CHECK(still_scope && strcmp(still_scope, consent_request.scope) == 0);
+    free(still_scope);
+    free(still_redirect);
+
+    /* Dropping a required (transition:) token is refused too. */
+    CHECK(metalbear_oauth_authorize_scoped(
+              store, consent_uri, consent_request.client_id, "did:plc:consent",
+              "atproto repo:app.bsky.feed.post?action=create", &narrow_code,
+              &narrow_redirect, &narrow_state) == WF_ERR_VALIDATION);
+    CHECK(!narrow_code);
+
+    /* A valid subset succeeds and the PAR is consumed. */
+    const char *approved =
+        "atproto transition:email repo:app.bsky.feed.post?action=create";
+    CHECK(metalbear_oauth_authorize_scoped(
+              store, consent_uri, consent_request.client_id, "did:plc:consent",
+              approved, &narrow_code, &narrow_redirect,
+              &narrow_state) == WF_OK);
+    CHECK(narrow_code && narrow_redirect && narrow_state);
+    CHECK(strcmp(narrow_redirect, consent_request.redirect_uri) == 0);
+    CHECK(metalbear_oauth_par_peek(store, consent_uri,
+                                   consent_request.client_id, &still_scope,
+                                   &still_redirect) == WF_ERR_NOT_FOUND);
+
+    /* The token response must carry exactly the narrowed scope. */
+    metalbear_oauth_grant narrow_grant = {0};
+    CHECK(metalbear_oauth_exchange_code(
+              store, narrow_code, consent_request.client_id,
+              consent_request.redirect_uri, pkce.verifier,
+              consent_request.dpop_jkt, &narrow_grant) == WF_OK);
+    CHECK(narrow_grant.scope && strcmp(narrow_grant.scope, approved) == 0);
+    CHECK(strstr(narrow_grant.scope, "blob:image/*") == NULL);
+
+    /* The previous-grant lookup reports what this client/subject holds, for
+     * the incremental diff on the next authorization. */
+    char *granted_scope = NULL;
+    CHECK(metalbear_oauth_granted_scope(store, "did:plc:consent",
+                                        consent_request.client_id,
+                                        &granted_scope) == WF_OK);
+    CHECK(granted_scope && strcmp(granted_scope, approved) == 0);
+    free(granted_scope);
+    CHECK(metalbear_oauth_granted_scope(store, "did:plc:nobody",
+                                        consent_request.client_id,
+                                        &granted_scope) == WF_ERR_NOT_FOUND);
+    CHECK(!granted_scope);
+
+    /* A denial consumes the PAR, returns its own redirect_uri/state, and
+     * never issues a code. */
+    char *deny_redirect = NULL, *deny_state = NULL;
+    char *deny_uri = NULL;
+    CHECK(metalbear_oauth_create_par(store, &consent_request, &deny_uri,
+                                     &expires_in) == WF_OK);
+    CHECK(metalbear_oauth_deny(store, deny_uri, consent_request.client_id,
+                               &deny_redirect, &deny_state) == WF_OK);
+    CHECK(deny_redirect &&
+          strcmp(deny_redirect, consent_request.redirect_uri) == 0);
+    CHECK(deny_state && strcmp(deny_state, consent_request.state) == 0);
+    CHECK(metalbear_oauth_par_peek(store, deny_uri, consent_request.client_id,
+                                   &still_scope,
+                                   &still_redirect) == WF_ERR_NOT_FOUND);
+    free(deny_redirect);
+    free(deny_state);
+    deny_redirect = NULL;
+    deny_state = NULL;
+    CHECK(metalbear_oauth_deny(store, deny_uri, consent_request.client_id,
+                               &deny_redirect,
+                               &deny_state) == WF_ERR_NOT_FOUND);
+    /* A mismatched client cannot deny someone else's PAR. */
+    char *deny_uri2 = NULL;
+    CHECK(metalbear_oauth_create_par(store, &consent_request, &deny_uri2,
+                                     &expires_in) == WF_OK);
+    CHECK(metalbear_oauth_deny(
+              store, deny_uri2, "https://impostor.example/metadata.json",
+              &deny_redirect, &deny_state) == WF_ERR_PERMISSION);
+    /* ...and the real client can still approve it afterwards. */
+    char *late_code = NULL, *late_redirect = NULL, *late_state = NULL;
+    CHECK(metalbear_oauth_authorize(store, deny_uri2, consent_request.client_id,
+                                    "did:plc:consent", &late_code,
+                                    &late_redirect, &late_state) == WF_OK);
+    CHECK(late_code != NULL);
+
+    free(late_code);
+    free(late_redirect);
+    free(late_state);
+    free(deny_redirect);
+    free(deny_state);
+    free(deny_uri);
+    free(deny_uri2);
+    free(consent_uri);
+    free(narrow_code);
+    free(narrow_redirect);
+    free(narrow_state);
+    metalbear_oauth_grant_free(&narrow_grant);
+
     metalbear_oauth_store_free(store);
     unlink(path);
     char sidecar[256];

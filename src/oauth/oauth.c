@@ -2,6 +2,7 @@
 
 #include "metalbear/schema_version.h"
 #include "metalbear/oauth/oauth.h"
+#include "metalbear/oauth/oauth_scope.h"
 
 #include "wolfram/crypto.h"
 
@@ -284,6 +285,7 @@ void metalbear_oauth_grant_free(metalbear_oauth_grant *grant) {
     if (!grant) return;
     free(grant->access_token);
     free(grant->refresh_token);
+    free(grant->scope);
     memset(grant, 0, sizeof(*grant));
 }
 
@@ -434,11 +436,13 @@ wf_status metalbear_oauth_par_peek(metalbear_oauth_store *store,
     return WF_OK;
 }
 
-wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
-                                    const char *request_uri,
-                                    const char *client_id, const char *subject,
-                                    char **out_code, char **out_redirect_uri,
-                                    char **out_state) {
+/* `approved_scope` NULL means "grant the whole PAR scope" (the historical
+ * all-or-nothing flow); non-NULL is the consent screen's narrowed subset. */
+static wf_status authorize_impl(metalbear_oauth_store *store,
+                                const char *request_uri, const char *client_id,
+                                const char *subject, const char *approved_scope,
+                                char **out_code, char **out_redirect_uri,
+                                char **out_state) {
     if (!store || !request_uri || !client_id || !subject || !out_code ||
         !out_redirect_uri || !out_state)
         return WF_ERR_INVALID_ARG;
@@ -478,6 +482,12 @@ wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
             status = WF_ERR_ALLOC;
         else if (strcmp(stored_client, client_id) != 0)
             status = WF_ERR_PERMISSION;
+        /* Validate the consent choice while still holding the PAR row. A
+         * rejected narrowing must leave it unconsumed so the user can go
+         * back, and must never bind a widened or required-dropped scope. */
+        else if (approved_scope &&
+                 !mb_scope_is_valid_narrowing(approved_scope, scope))
+            status = WF_ERR_VALIDATION;
     }
     sqlite3_finalize(stmt);
     stmt = NULL;
@@ -505,7 +515,8 @@ wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
         sqlite3_bind_blob(stmt, 1, hash, sizeof(hash), SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 2, stored_client, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 3, redirect, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 4, scope, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 4, approved_scope ? approved_scope : scope, -1,
+                          SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 5, challenge, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 6, jkt, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 7, subject, -1, SQLITE_TRANSIENT);
@@ -530,6 +541,127 @@ wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
         return status;
     }
     *out_code = code;
+    *out_redirect_uri = redirect;
+    *out_state = state;
+    return WF_OK;
+}
+
+wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
+                                    const char *request_uri,
+                                    const char *client_id, const char *subject,
+                                    char **out_code, char **out_redirect_uri,
+                                    char **out_state) {
+    return authorize_impl(store, request_uri, client_id, subject, NULL,
+                          out_code, out_redirect_uri, out_state);
+}
+
+wf_status metalbear_oauth_authorize_scoped(
+    metalbear_oauth_store *store, const char *request_uri,
+    const char *client_id, const char *subject, const char *approved_scope,
+    char **out_code, char **out_redirect_uri, char **out_state) {
+    if (!approved_scope || !*approved_scope) return WF_ERR_INVALID_ARG;
+    return authorize_impl(store, request_uri, client_id, subject,
+                          approved_scope, out_code, out_redirect_uri,
+                          out_state);
+}
+
+wf_status metalbear_oauth_granted_scope(metalbear_oauth_store *store,
+                                        const char *subject,
+                                        const char *client_id,
+                                        char **out_scope) {
+    if (!store || !subject || !client_id || !out_scope)
+        return WF_ERR_INVALID_ARG;
+    *out_scope = NULL;
+    int64_t now = (int64_t)time(NULL);
+    pthread_mutex_lock(&store->mutex);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_OK;
+    char *scope = NULL;
+    if (sqlite3_prepare_v2(
+            store->db,
+            "SELECT scope FROM oauth_refresh WHERE subject=? AND client_id=? "
+            "AND expires_at>? ORDER BY expires_at DESC LIMIT 1;",
+            -1, &stmt, NULL) != SQLITE_OK)
+        status = WF_ERR_INTERNAL;
+    if (status == WF_OK) {
+        sqlite3_bind_text(stmt, 1, subject, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, client_id, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 3, now);
+        if (sqlite3_step(stmt) != SQLITE_ROW)
+            status = WF_ERR_NOT_FOUND;
+        else {
+            scope = column_copy(stmt, 0);
+            if (!scope) status = WF_ERR_ALLOC;
+        }
+    }
+    sqlite3_finalize(stmt);
+    pthread_mutex_unlock(&store->mutex);
+    if (status != WF_OK) {
+        free(scope);
+        return status;
+    }
+    *out_scope = scope;
+    return WF_OK;
+}
+
+wf_status metalbear_oauth_deny(metalbear_oauth_store *store,
+                               const char *request_uri, const char *client_id,
+                               char **out_redirect_uri, char **out_state) {
+    if (!store || !request_uri || !client_id || !out_redirect_uri || !out_state)
+        return WF_ERR_INVALID_ARG;
+    *out_redirect_uri = NULL;
+    *out_state = NULL;
+    int64_t now = (int64_t)time(NULL);
+    pthread_mutex_lock(&store->mutex);
+    prune(store, now);
+    sqlite3_stmt *stmt = NULL;
+    wf_status status = WF_OK;
+    char *stored_client = NULL, *redirect = NULL, *state = NULL;
+    if (sqlite3_prepare_v2(store->db,
+                           "SELECT client_id,redirect_uri,state FROM oauth_par "
+                           "WHERE request_uri=? AND expires_at>?;",
+                           -1, &stmt, NULL) != SQLITE_OK)
+        status = WF_ERR_INTERNAL;
+    if (status == WF_OK) {
+        sqlite3_bind_text(stmt, 1, request_uri, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, now);
+        if (sqlite3_step(stmt) != SQLITE_ROW) status = WF_ERR_NOT_FOUND;
+    }
+    if (status == WF_OK) {
+        stored_client = column_copy(stmt, 0);
+        redirect = column_copy(stmt, 1);
+        state = column_copy(stmt, 2);
+        if (!stored_client || !redirect) status = WF_ERR_ALLOC;
+        /* Never let a mismatch consume someone else's PAR just to learn its
+         * redirect_uri -- same client binding authorize enforces. */
+        else if (strcmp(stored_client, client_id) != 0)
+            status = WF_ERR_PERMISSION;
+    }
+    sqlite3_finalize(stmt);
+    stmt = NULL;
+    if (status == WF_OK && execute(store->db, "BEGIN IMMEDIATE;") != WF_OK)
+        status = WF_ERR_INTERNAL;
+    if (status == WF_OK &&
+        sqlite3_prepare_v2(store->db,
+                           "DELETE FROM oauth_par WHERE request_uri=?;", -1,
+                           &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, request_uri, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) != SQLITE_DONE ||
+            sqlite3_changes(store->db) != 1)
+            status = WF_ERR_CONFLICT;
+    } else if (status == WF_OK)
+        status = WF_ERR_INTERNAL;
+    sqlite3_finalize(stmt);
+    if (status == WF_OK && execute(store->db, "COMMIT;") != WF_OK)
+        status = WF_ERR_INTERNAL;
+    if (status != WF_OK) execute(store->db, "ROLLBACK;");
+    pthread_mutex_unlock(&store->mutex);
+    free(stored_client);
+    if (status != WF_OK) {
+        free(redirect);
+        free(state);
+        return status;
+    }
     *out_redirect_uri = redirect;
     *out_state = state;
     return WF_OK;
@@ -636,6 +768,8 @@ static wf_status issue_grant(metalbear_oauth_store *store,
     if (status == WF_OK)
         status = persist_refresh(store, out->refresh_token, client_id, scope,
                                  jkt, subject, now + REFRESH_LIFETIME_SECONDS);
+    if (status == WF_OK) out->scope = strdup(scope);
+    if (!out->scope) status = WF_ERR_ALLOC;
     if (status != WF_OK) {
         metalbear_oauth_grant_free(out);
         return status;

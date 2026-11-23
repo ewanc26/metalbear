@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { authorizeInfo, deviceSessions } from '#lib/pds.ts';
 	import type { AuthorizeInfo, AuthorizeInfoError } from '#lib/pds.ts';
-	import { humanizeScopes } from '#lib/oauthScopes.ts';
+	import { scopeTokens, isRequiredScope, isNewScope, describeScope } from '#lib/oauthScopes.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
@@ -16,6 +16,9 @@
 	let confirming: boolean = $state(false);
 	let info: AuthorizeInfo | null = $state(null);
 	let infoError: AuthorizeInfoError | null = $state(null);
+	/* Raw scope tokens the user left checked. Svelte can't faithfully track
+	 * mutation of a Set in a $state proxy, so reassign it on every toggle. */
+	let selectedScopes: Set<string> = $state(new Set<string>());
 	let redirecting: boolean = $state(false);
 	let redirectRejected: boolean = $state(false);
 
@@ -39,15 +42,34 @@
 			return;
 		}
 
-		const result = await authorizeInfo(clientId, requestUri);
+		const result = await authorizeInfo(clientId, requestUri, loginHint);
 		if (result.ok) {
 			info = result.info;
 			infoError = null;
+			/* Every requested token starts checked; required ones can't be
+			 * unchecked in the UI (and the server rejects dropping them). */
+			selectedScopes = new Set(scopeTokens(info.scope));
 		} else {
 			info = null;
 			infoError = result.error;
 		}
 		loading = false;
+	}
+
+	function toggleScope(token: string) {
+		// Required scopes are locked; ignore attempts to uncheck them.
+		if (isRequiredScope(token)) return;
+		const next = new Set(selectedScopes);
+		if (next.has(token)) next.delete(token);
+		else next.add(token);
+		selectedScopes = next;
+	}
+
+	function approvedScope(): string {
+		// Preserve the server's original token order for a stable, auditable value.
+		return scopeTokens(info?.scope ?? '')
+			.filter((token) => selectedScopes.has(token))
+			.join(' ');
 	}
 
 	async function handleRetryInfo() {
@@ -109,14 +131,23 @@
 		url.searchParams.set('client_id', clientId);
 		url.searchParams.set('request_uri', requestUri);
 		if (loginHint) url.searchParams.set('login_hint', loginHint);
+		// Send exactly the tokens the user left checked. The server revalidates
+		// that this is a strict subset retaining every required token.
+		url.searchParams.set('scope', approvedScope());
 		window.location.href = url.toString();
 	}
 
 	function handleDeny() {
-		const fallback = redirectUri || '/';
+		// Deny through the server so the client gets a real OAuth error
+		// redirect built from the PAR's own redirect_uri and state.
+		const url = new URL('/oauth/authorize', window.location.origin);
+		url.searchParams.set('client_id', clientId);
+		url.searchParams.set('request_uri', requestUri);
+		url.searchParams.set('deny', 'true');
+		if (loginHint) url.searchParams.set('login_hint', loginHint);
 		redirecting = true;
 		redirectRejected = true;
-		window.location.replace(fallback);
+		window.location.href = url.toString();
 	}
 
 	const INFO_ERROR_TEXT: Record<AuthorizeInfoError, { heading: string; message: string }> = {
@@ -280,15 +311,41 @@
 				{#if info.scope}
 					<div>
 						<p class="mb-2 text-xs font-semibold tracking-widest text-slate-500 uppercase">
-							Requested permissions
+							Permissions
 						</p>
-						<pre
-							class="overflow-x-auto rounded-lg border border-slate-700 bg-slate-950/50 p-3 text-xs whitespace-pre-wrap text-slate-300">{info.scope}</pre>
-						<ul class="mt-3 space-y-1.5">
-							{#each humanizeScopes(info.scope) as permission (permission)}
-								<li class="flex gap-2 text-sm text-slate-300">
-									<span class="text-emerald-500">•</span>
-									<span>{permission}</span>
+						<p class="mb-3 text-xs text-slate-500">
+							{#if info.previous_scope !== undefined}
+								Choose which permissions to grant. New permissions are marked below.
+							{:else}
+								Choose which permissions to grant. Required permissions stay selected.
+							{/if}
+						</p>
+						<ul class="space-y-2">
+							{#each scopeTokens(info.scope) as token (token)}
+								{@const required = isRequiredScope(token)}
+								{@const isNew = isNewScope(token, info.previous_scope)}
+								<li>
+									<label
+										class="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-700 bg-slate-950/40 px-3 py-2.5 transition hover:border-slate-600"
+										class:opacity-70={required}
+									>
+										<input
+											type="checkbox"
+											checked={selectedScopes.has(token)}
+											disabled={required}
+											onchange={() => toggleScope(token)}
+											class="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-600 bg-slate-900 accent-emerald-500 disabled:cursor-not-allowed"
+										/>
+										<span class="flex flex-col gap-0.5">
+											<span class="text-sm text-slate-200">{describeScope(token)}</span>
+											<span class="font-mono text-xs break-all text-slate-500">{token}</span>
+											{#if required}
+												<span class="text-xs text-slate-500">Required</span>
+											{:else if isNew}
+												<span class="text-xs text-amber-400">New permission</span>
+											{/if}
+										</span>
+									</label>
 								</li>
 							{/each}
 						</ul>
