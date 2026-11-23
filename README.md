@@ -832,3 +832,5 @@ in lockstep, and most of the protocol work lands in Wolfram first.
 ## Licence
 [GNU AGPL-3.0](LICENSE). Running a modified MetalBear as a public PDS obliges
 you to offer its users the corresponding source.
+
+Copyright (C) 2026 Ewan Croft (ewanc26).
