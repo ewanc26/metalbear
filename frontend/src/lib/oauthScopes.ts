@@ -84,15 +84,46 @@ function humanizeOne(token: string): string {
 	return token;
 }
 
+/* The individual whitespace-separated tokens of a scope string. Kept as raw
+ * strings because the server validates the approved scope token-by-token --
+ * the consent UI must select and send back those exact tokens, not a
+ * re-serialized description of them. */
+export function scopeTokens(scope: string): string[] {
+	return scope
+		.split(/\s+/)
+		.map((t) => t.trim())
+		.filter(Boolean);
+}
+
+/* Scopes the user is not allowed to uncheck. Mirrors mb_scope_is_required in
+ * src/oauth/oauth_scope.c: `atproto` (needed by every issued token), plus
+ * transition/identity grants and their include: references. The server
+ * enforces this too, so a crafted request cannot drop one. */
+export function isRequiredScope(token: string): boolean {
+	const value = token.startsWith('include:') ? token.slice('include:'.length) : token;
+	if (value === 'atproto') return true;
+	return value.startsWith('transition:') || value.startsWith('identity:');
+}
+
+/* Whether `token` is newly requested compared with a previous grant. A
+ * token absent from the previous scope is new; with no previous grant every
+ * token is new. */
+export function isNewScope(token: string, previousScope: string | undefined): boolean {
+	if (!previousScope) return true;
+	return !scopeTokens(previousScope).includes(token);
+}
+
+/* Human-readable description of a single raw scope token. */
+export function describeScope(token: string): string {
+	return humanizeOne(token);
+}
+
 /* Human-readable descriptions for every recognized token in a
  * space-separated scope string. "atproto" is filtered out of the list when
  * present alongside other scopes, since it already implies everything else
  * an app could ask for -- listing both is redundant, not more informative. */
 export function humanizeScopes(scope: string): string[] {
-	const tokens = scope
-		.split(/\s+/)
-		.map((t) => t.trim())
-		.filter(Boolean);
+	const tokens = scopeTokens(scope);
 	if (tokens.length === 0) return [];
 	if (tokens.includes('atproto')) {
 		return ['Full read and write access to your account'];

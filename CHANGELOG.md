@@ -9,6 +9,7 @@ into the next version's. Releases made before it existed are described only by t
 
 ### Added
 
+- Per-scope OAuth consent: the consent page lists each requested scope token with a plain-language description, lets users deselect optional permissions, and marks permissions that are new since the last grant. Required grants (`atproto`, `transition:*`, `identity:*` and their `include:` references) stay locked, the server rejects any approval that widens or drops a required scope, denial returns a real `error=access_denied` redirect built from the pushed request, and token responses report the narrowed `scope`. ([#261](https://github.com/ewanc26/metalbear/issues/261))
 - Opt-in public instance status: `[server] public_status` / `METALBEAR_PUBLIC_STATUS` publishes aggregate uptime, worker, memory, descriptor, load, disk, storage, firehose and request figures on `/operator.json` and the landing page. Disabled by default with the field absent rather than zeroed; only NSID route labels are included, and the fuller `/metrics` view stays admin-gated. ([#267](https://github.com/ewanc26/metalbear/issues/267))
 
 ## [0.59.0] - 2026-11-23

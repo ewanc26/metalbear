@@ -25,6 +25,9 @@ typedef struct metalbear_oauth_grant {
     char *access_token;
     char *refresh_token;
     int64_t expires_in;
+    /* The exact scope this grant carries, so a token response can show the
+     * client the narrowed scope it actually received. */
+    char *scope;
 } metalbear_oauth_grant;
 
 void metalbear_oauth_grant_free(metalbear_oauth_grant *grant);
@@ -71,6 +74,39 @@ wf_status metalbear_oauth_authorize(metalbear_oauth_store *store,
                                     const char *client_id, const char *subject,
                                     char **out_code, char **out_redirect_uri,
                                     char **out_state);
+
+/*
+ * As metalbear_oauth_authorize, but binds `approved_scope` (the subset the
+ * user ticked on the consent screen) to the code instead of the full scope
+ * from the PAR. The scope is validated first -- it must be a strict subset
+ * of the PAR's scope retaining every required token -- and a rejected scope
+ * leaves the PAR unconsumed, so the user can go back and choose again.
+ * WF_ERR_VALIDATION means the scope was not an allowed narrowing.
+ */
+wf_status metalbear_oauth_authorize_scoped(
+    metalbear_oauth_store *store, const char *request_uri,
+    const char *client_id, const char *subject, const char *approved_scope,
+    char **out_code, char **out_redirect_uri, char **out_state);
+
+/*
+ * The scope of the most recent live grant for (subject, client_id), for the
+ * incremental-consent diff on the authorization screen. WF_ERR_NOT_FOUND
+ * when this client has never been granted access to this account.
+ */
+wf_status metalbear_oauth_granted_scope(metalbear_oauth_store *store,
+                                        const char *subject,
+                                        const char *client_id,
+                                        char **out_scope);
+
+/*
+ * Record a user's denial of a pushed authorization request. Consumes the
+ * PAR (it is single-use) and returns the redirect_uri and state stored in
+ * it so the route can send the client the standard error=access_denied
+ * response. Never mints a code or a token.
+ */
+wf_status metalbear_oauth_deny(metalbear_oauth_store *store,
+                               const char *request_uri, const char *client_id,
+                               char **out_redirect_uri, char **out_state);
 
 /* Exchange a code using S256 PKCE and the same DPoP key used at PAR.
  * `dpop_jkt` is mandatory (WF_ERR_INVALID_ARG if NULL/empty) -- atproto's

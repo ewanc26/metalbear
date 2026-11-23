@@ -23,6 +23,13 @@ export interface ServerInfo {
 export interface AuthorizeInfo {
 	client_id: string;
 	scope: string;
+	/**
+	 * Scope this client was previously granted for the signed-in account,
+	 * when there is one. Used to show which requested permissions are new.
+	 * Absent for first-time authorizations or when there is no device
+	 * session for the account.
+	 */
+	previous_scope?: string;
 	/** Present only when the client's metadata document offers them. */
 	client_name?: string;
 	client_uri?: string;
@@ -311,12 +318,14 @@ const AUTHORIZE_INFO_ERRORS: readonly AuthorizeInfoError[] = [
  */
 export async function authorizeInfo(
 	clientId: string,
-	requestUri: string
+	requestUri: string,
+	loginHint?: string
 ): Promise<{ ok: true; info: AuthorizeInfo } | { ok: false; error: AuthorizeInfoError }> {
 	try {
 		const url = new URL('/oauth/authorize/info', window.location.origin);
 		url.searchParams.set('client_id', clientId);
 		url.searchParams.set('request_uri', requestUri);
+		if (loginHint) url.searchParams.set('login_hint', loginHint);
 		const res = await fetch(url, { headers: { accept: 'application/json' } });
 		if (!res.ok) {
 			const body = (await res.json().catch(() => null)) as { error?: string } | null;

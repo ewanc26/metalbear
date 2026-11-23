@@ -808,6 +808,143 @@ bool mb_scope_set_allows_rpc(const mb_scope_set *set, const char *lxm,
     return false;
 }
 
+/* ---- Consent narrowing validation ----
+ *
+ * The consent screen sends back the exact scope tokens the user left
+ * checked. These helpers decide whether that round-trip is a legal
+ * narrowing of what the client asked for in its PAR. Comparing raw tokens
+ * (not parsed permissions) is deliberate: a parsed `mb_scope_set` drops
+ * invalid tokens and reshapes query parameters, which would let a crafted
+ * approved scope smuggle in something the client never requested. */
+
+/* Split a space-delimited scope into owned NUL-terminated tokens. Returns
+ * false only on allocation failure. Caller frees with free_scope_tokens. */
+static bool split_scope_tokens(const char *scope, char ***out_tokens,
+                               size_t *out_count) {
+    *out_tokens = NULL;
+    *out_count = 0;
+    if (!scope || !*scope) return true;
+
+    size_t capacity = 8, count = 0;
+    char **tokens = malloc(capacity * sizeof(*tokens));
+    if (!tokens) return false;
+    char *copy = strdup(scope);
+    if (!copy) {
+        free(tokens);
+        return false;
+    }
+    char *saveptr = NULL;
+    for (char *token = strtok_r(copy, " \t\r\n", &saveptr); token;
+         token = strtok_r(NULL, " \t\r\n", &saveptr)) {
+        if (count == capacity) {
+            size_t next = capacity * 2;
+            char **grown = realloc(tokens, next * sizeof(*grown));
+            if (!grown) {
+                free(copy);
+                free(tokens);
+                return false;
+            }
+            tokens = grown;
+            capacity = next;
+        }
+        tokens[count++] = strdup(token);
+        if (!tokens[count - 1]) {
+            for (size_t i = 0; i < count - 1; i++) free(tokens[i]);
+            free(copy);
+            free(tokens);
+            return false;
+        }
+    }
+    free(copy);
+    *out_tokens = tokens;
+    *out_count = count;
+    return true;
+}
+
+static void free_scope_tokens(char **tokens, size_t count) {
+    if (!tokens) return;
+    for (size_t i = 0; i < count; i++) free(tokens[i]);
+    free(tokens);
+}
+
+static bool contains_token(char *const *tokens, size_t count,
+                           const char *needle) {
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(tokens[i], needle) == 0) return true;
+    }
+    return false;
+}
+
+bool mb_scope_is_subset(const char *approved, const char *requested) {
+    if (!approved || !*approved || !requested) return false;
+
+    char **approved_tokens = NULL, **requested_tokens = NULL;
+    size_t approved_count = 0, requested_count = 0;
+    if (!split_scope_tokens(approved, &approved_tokens, &approved_count) ||
+        !split_scope_tokens(requested, &requested_tokens, &requested_count)) {
+        free_scope_tokens(approved_tokens, approved_count);
+        free_scope_tokens(requested_tokens, requested_count);
+        return false;
+    }
+    if (approved_count == 0) {
+        free_scope_tokens(approved_tokens, approved_count);
+        free_scope_tokens(requested_tokens, requested_count);
+        return false;
+    }
+
+    bool valid = true;
+    for (size_t i = 0; i < approved_count && valid; i++) {
+        /* Duplicate approval tokens are ambiguous and never produced by the
+         * UI; refuse them rather than silently collapsing them. */
+        for (size_t j = 0; j < i; j++) {
+            if (strcmp(approved_tokens[i], approved_tokens[j]) == 0) {
+                valid = false;
+                break;
+            }
+        }
+        if (valid && !contains_token(requested_tokens, requested_count,
+                                     approved_tokens[i]))
+            valid = false;
+    }
+
+    free_scope_tokens(approved_tokens, approved_count);
+    free_scope_tokens(requested_tokens, requested_count);
+    return valid;
+}
+
+bool mb_scope_is_required(const char *token) {
+    if (!token || !*token) return false;
+    const char *value = token;
+    if (strncmp(value, "include:", 8) == 0) value += 8;
+    if (strcmp(value, MB_SCOPE_ATPROTO) == 0) return true;
+    return starts_with(value, "transition:") || starts_with(value, "identity:");
+}
+
+bool mb_scope_is_valid_narrowing(const char *approved, const char *requested) {
+    if (!mb_scope_is_subset(approved, requested)) return false;
+
+    char **approved_tokens = NULL, **requested_tokens = NULL;
+    size_t approved_count = 0, requested_count = 0;
+    if (!split_scope_tokens(approved, &approved_tokens, &approved_count) ||
+        !split_scope_tokens(requested, &requested_tokens, &requested_count)) {
+        free_scope_tokens(approved_tokens, approved_count);
+        free_scope_tokens(requested_tokens, requested_count);
+        return false;
+    }
+
+    bool valid = true;
+    for (size_t i = 0; i < requested_count && valid; i++) {
+        if (mb_scope_is_required(requested_tokens[i]) &&
+            !contains_token(approved_tokens, approved_count,
+                            requested_tokens[i]))
+            valid = false;
+    }
+
+    free_scope_tokens(approved_tokens, approved_count);
+    free_scope_tokens(requested_tokens, requested_count);
+    return valid;
+}
+
 /* ---- Utility functions ---- */
 
 bool mb_is_static_scope(const char *value) {
