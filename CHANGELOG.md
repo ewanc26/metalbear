@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-11-24
+
 ### Added
 
 - The built-in admin page now covers the operator actions that were previously only in `pdsadmin`: create invite codes with a use count, reset an account password, download an account migration tar, request a crawl from configured or named relays, and take down or lift takedowns on records and blobs as well as accounts. Account takedowns, deactivation and invite controls keep their existing behaviour, and admin credentials stay in tab-scoped session storage. ([#259](https://github.com/ewanc26/metalbear/issues/259))
