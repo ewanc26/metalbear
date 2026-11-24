@@ -22,6 +22,11 @@
 		OperatorInfo
 	} from '#lib/pds.ts';
 	import { onMount } from 'svelte';
+	import BundleExport from '#lib/components/admin/BundleExport.svelte';
+	import InviteCodeCreate from '#lib/components/admin/InviteCodeCreate.svelte';
+	import PasswordReset from '#lib/components/admin/PasswordReset.svelte';
+	import RequestCrawl from '#lib/components/admin/RequestCrawl.svelte';
+	import SubjectTakedown from '#lib/components/admin/SubjectTakedown.svelte';
 
 	let password = $state<string | null>(null);
 	let operator = $state<OperatorInfo | null>(null);
@@ -310,7 +315,11 @@
 						</div>
 					</dl>
 
-					<div class="flex flex-wrap gap-2">
+					<PasswordReset did={account.did} handle={account.handle} />
+					<BundleExport did={account.did} handle={account.handle} />
+					<SubjectTakedown did={account.did} />
+
+					<div class="mt-6 flex flex-wrap gap-2 border-t border-slate-800 pt-6">
 						<button
 							onclick={handleTakedownToggle}
 							disabled={actionPending}
@@ -339,7 +348,7 @@
 							{account.invitesDisabled ? 'Enable invites' : 'Disable invites'}
 						</button>
 						<a
-							href={`/repo?did=${encodeURIComponent(account.did)}`}
+							href={resolve(`/repo?did=${encodeURIComponent(account.did)}` as `/repo?${string}`)}
 							class="rounded-lg border border-emerald-800/60 px-3 py-1.5 text-sm text-emerald-400 transition hover:border-emerald-600 hover:text-emerald-300"
 						>
 							Browse repo →
@@ -391,7 +400,7 @@
 							</div>
 							<div class="flex shrink-0 gap-3">
 								<a
-									href={`/repo?did=${encodeURIComponent(r.did)}`}
+									href={resolve(`/repo?did=${encodeURIComponent(r.did)}` as `/repo?${string}`)}
 									class="text-sm text-slate-400 hover:text-white"
 								>
 									Browse →
@@ -420,10 +429,12 @@
 		</section>
 
 		<!-- Invite codes -->
-		<section class="rounded-lg border border-slate-800 bg-slate-900/30 p-6">
+		<section class="mb-8 rounded-lg border border-slate-800 bg-slate-900/30 p-6">
 			<h2 class="mb-4 text-sm font-semibold tracking-widest text-slate-500 uppercase">
 				Invite codes
 			</h2>
+
+			<InviteCodeCreate onCreated={loadInviteCodes} />
 
 			{#if codesError}
 				<p
@@ -477,6 +488,14 @@
 					</button>
 				{/if}
 			{/if}
+		</section>
+
+		<!-- Request crawl -->
+		<section class="rounded-lg border border-slate-800 bg-slate-900/30 p-6">
+			<h2 class="mb-4 text-sm font-semibold tracking-widest text-slate-500 uppercase">
+				Request crawl
+			</h2>
+			<RequestCrawl />
 		</section>
 	{/if}
 </main>

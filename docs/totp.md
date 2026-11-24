@@ -73,8 +73,11 @@ second factor.
 ## Recovery
 
 An operator can clear two-factor login for one account through the admin
-endpoints, behind the admin password, and the action is logged. This is the only
-way back for an account that has lost its device and its backup codes.
+endpoints, behind the admin password, and the action is logged. The same admin
+password unlocks the reset-password form on `/admin`; resetting a password signs
+out every session and trusted device but leaves the enrolment intact, so use the
+separate admin action when two-factor login itself must be cleared. This is the
+only way back for an account that has lost its device and its backup codes.
 
 ## App passwords
 

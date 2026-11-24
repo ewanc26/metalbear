@@ -1,9 +1,11 @@
 # MetalBear Admin
 
 A basic React Native (Expo) app for managing a MetalBear PDS from iOS or
-Android. Mirrors the web admin dashboard at `frontend/src/routes/admin`:
-account lookup with takedown/deactivate/invite toggles, and invite code
-listing/disabling.
+Android. It covers the original subset of the web admin dashboard at
+`frontend/src/routes/admin`: account lookup with takedown/deactivate/invite
+toggles, and invite code listing/disabling. The web dashboard also offers
+invite creation, password reset, account bundle export, crawl requests and
+record/blob takedowns; those are not in this app yet.
 
 ## Auth
 

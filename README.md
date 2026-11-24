@@ -506,7 +506,8 @@ account holder's own choice, and a relay decides whether to come back on that
 difference. A taken-down record or blob reads as absent, and the blob cannot be
 re-uploaded to undo the takedown. Nothing is erased: a record stays in the
 repository, because removing it would rewrite history and break the commit
-chain, and it is withheld at the point it would be served.
+chain, and it is withheld at the point it would be served. The `/admin` page
+offers the same record and blob subjects alongside account takedowns.
 
 A takedown outranks a deactivation, so an account that is both reports
 `takendown`. Applying a takedown and a reactivation in one call is refused
@@ -708,6 +709,19 @@ set that variable to `/usr/local/share/metalbear/frontend`, so the frontend is
 at `/` and the C landing page is at `/landing`. Without the variable, the C
 landing page stays at `/` and no frontend is served. A directory that does not
 exist stops startup.
+
+### Admin UI
+
+`/admin` is the browser counterpart to `pdsadmin/metalbear-admin.sh`. It signs
+in with the same Basic admin password, held in `sessionStorage` for the tab,
+and adds invite creation, password reset, account bundle export and crawl
+requests to the existing account lookup, takedown, deactivation and invite
+controls. Record and blob takedowns use the same subject shapes as the XRPC
+route: a record is named by its `at://` URI and a blob by both its CID and the
+DID holding it. Leaving relay hosts blank asks this PDS to use its configured
+crawlers; naming hosts mirrors the CLI's direct requests and depends on each
+relay allowing browser requests. The lookup panel links into `/repo` so a
+moderator can inspect records before acting.
 
 ### Signup
 
