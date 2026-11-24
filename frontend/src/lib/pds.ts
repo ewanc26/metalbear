@@ -833,19 +833,38 @@ function adminAuthHeader(): string {
 	return `Basic ${btoa(`admin:${password}`)}`;
 }
 
-async function xrpcAdminQuery<T>(path: string, params?: Record<string, string>): Promise<T> {
-	const url = new URL(`/xrpc/${path}`, window.location.origin);
-	for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
-	const res = await fetch(url, {
-		headers: { accept: 'application/json', authorization: adminAuthHeader() }
-	});
-	if (!res.ok) throw new Error(`${path}: ${res.status}`);
+async function throwAdminError(path: string, res: Response): Promise<never> {
+	let code = '';
+	let message = '';
+	try {
+		const body = await res.json();
+		if (typeof body?.error === 'string') code = body.error;
+		if (typeof body?.message === 'string') message = body.message;
+	} catch {
+		/* A non-JSON error still carries its HTTP status. */
+	}
+	throw new XrpcError(path, res.status, code, message);
+}
+
+/* Keep the protocol error and message on admin failures too: the new operator
+ * forms need to show "useCount is required" or "did and cid are required",
+ * not just a bare status, without changing the caller's auth model. */
+async function adminFetch<T>(path: string, url: URL, init: RequestInit): Promise<T> {
+	const res = await fetch(url, init);
+	if (!res.ok) await throwAdminError(path, res);
 	return res.json() as Promise<T>;
 }
 
-async function xrpcAdminProcedure<T>(path: string, body: unknown): Promise<T> {
+async function xrpcAdminQuery<T>(path: string, params?: Record<string, string>): Promise<T> {
 	const url = new URL(`/xrpc/${path}`, window.location.origin);
-	const res = await fetch(url, {
+	for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
+	return adminFetch<T>(path, url, {
+		headers: { accept: 'application/json', authorization: adminAuthHeader() }
+	});
+}
+
+async function xrpcAdminProcedure<T>(path: string, body: unknown): Promise<T> {
+	return adminFetch<T>(path, new URL(`/xrpc/${path}`, window.location.origin), {
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json',
@@ -854,8 +873,6 @@ async function xrpcAdminProcedure<T>(path: string, body: unknown): Promise<T> {
 		},
 		body: JSON.stringify(body)
 	});
-	if (!res.ok) throw new Error(`${path}: ${res.status}`);
-	return res.json() as Promise<T>;
 }
 
 /* Verifies the given password against the server rather than just storing
@@ -890,14 +907,56 @@ export interface StatusAttr {
 	ref?: string;
 }
 
+export interface RepoRefSubject {
+	$type: 'com.atproto.admin.defs#repoRef';
+	did: string;
+}
+
+export interface StrongRefSubject {
+	$type: 'com.atproto.repo.strongRef';
+	uri: string;
+	cid: string;
+}
+
+export interface RepoBlobRefSubject {
+	$type: 'com.atproto.admin.defs#repoBlobRef';
+	did: string;
+	cid: string;
+	recordUri?: string;
+}
+
+export type AdminSubject = RepoRefSubject | StrongRefSubject | RepoBlobRefSubject;
+
 export interface SubjectStatus {
-	subject: { $type: string; did: string };
+	subject: AdminSubject;
 	takedown?: StatusAttr;
+	/** Only meaningful for a repo subject; the server ignores it for records and blobs. */
 	deactivated?: StatusAttr;
 }
 
 export async function adminGetSubjectStatus(did: string): Promise<SubjectStatus> {
 	return xrpcAdminQuery<SubjectStatus>('com.atproto.admin.getSubjectStatus', { did });
+}
+
+/* The status query names its subject by did, uri or blob (a CID), depending on
+ * the subject kind -- blob is deliberate, not cid. */
+export async function adminGetSubjectStatusFor(params: {
+	did?: string;
+	uri?: string;
+	blob?: string;
+}): Promise<SubjectStatus> {
+	return xrpcAdminQuery<SubjectStatus>('com.atproto.admin.getSubjectStatus', {
+		...(params.did ? { did: params.did } : {}),
+		...(params.uri ? { uri: params.uri } : {}),
+		...(params.blob ? { blob: params.blob } : {})
+	});
+}
+
+export async function adminSetSubjectStatus(
+	subject: AdminSubject,
+	status: { takedown?: StatusAttr; deactivated?: StatusAttr }
+): Promise<{ subject: AdminSubject; takedown?: StatusAttr }> {
+	return xrpcAdminProcedure('com.atproto.admin.updateSubjectStatus', { subject, ...status });
 }
 
 export async function adminSetTakedown(did: string, applied: boolean, ref?: string): Promise<void> {
@@ -943,6 +1002,100 @@ export async function adminSetAccountInvitesEnabled(did: string, enabled: boolea
 		enabled ? 'com.atproto.admin.enableAccountInvites' : 'com.atproto.admin.disableAccountInvites',
 		{ account: did }
 	);
+}
+
+export interface CreateInviteCodeResponse {
+	code: string;
+}
+
+export interface CreateInviteCodesResponse {
+	codes: Array<{ account: string; codes: string[] }>;
+}
+
+export function adminCreateInviteCode(
+	useCount: number,
+	forAccount?: string
+): Promise<CreateInviteCodeResponse> {
+	return xrpcAdminProcedure('com.atproto.server.createInviteCode', {
+		useCount,
+		...(forAccount ? { forAccount } : {})
+	});
+}
+
+export function adminCreateInviteCodes(
+	codeCount: number,
+	useCount: number,
+	forAccounts?: string[]
+): Promise<CreateInviteCodesResponse> {
+	return xrpcAdminProcedure('com.atproto.server.createInviteCodes', {
+		codeCount,
+		useCount,
+		...(forAccounts?.length ? { forAccounts } : {})
+	});
+}
+
+export async function adminUpdateAccountPassword(did: string, password: string): Promise<void> {
+	await xrpcAdminProcedure('com.atproto.admin.updateAccountPassword', { did, password });
+}
+
+/* The export is a plain tar, not JSON, so it needs its own fetch rather than
+ * adminFetch. Check the content type before offering the body as a download. */
+export async function adminExportAccountBundle(did: string): Promise<Blob> {
+	const path = 'com.atproto.temp.exportAccountBundle';
+	const url = new URL(`/xrpc/${path}`, window.location.origin);
+	url.searchParams.set('did', did);
+	const res = await fetch(url, {
+		headers: { accept: 'application/x-tar', authorization: adminAuthHeader() }
+	});
+	if (!res.ok) await throwAdminError(path, res);
+	const type = res.headers.get('content-type') ?? '';
+	if (!type.includes('application/x-tar')) {
+		throw new Error(`exportAccountBundle returned ${type || 'an unknown content type'}`);
+	}
+	return res.blob();
+}
+
+export async function adminSetRecordTakedown(
+	uri: string,
+	cid: string,
+	applied: boolean,
+	ref?: string
+): Promise<void> {
+	await adminSetSubjectStatus(
+		{ $type: 'com.atproto.repo.strongRef', uri, cid },
+		{ takedown: { applied, ...(ref ? { ref } : {}) } }
+	);
+}
+
+export async function adminSetBlobTakedown(
+	did: string,
+	cid: string,
+	applied: boolean,
+	ref?: string
+): Promise<void> {
+	await adminSetSubjectStatus(
+		{ $type: 'com.atproto.admin.defs#repoBlobRef', did, cid },
+		{ takedown: { applied, ...(ref ? { ref } : {}) } }
+	);
+}
+
+/* com.atproto.sync.requestCrawl is public, so neither helper attaches admin or
+ * account credentials. The local route fans out to the server's configured
+ * crawlers; the host variant mirrors the CLI's direct-to-relay call. */
+export function requestCrawl(hostname: string): Promise<Record<string, never>> {
+	return xrpcPostPlainResult<Record<string, never>>('com.atproto.sync.requestCrawl', { hostname });
+}
+
+export async function requestCrawlHost(host: string, hostname: string): Promise<void> {
+	const path = 'com.atproto.sync.requestCrawl';
+	const trimmed = host.trim().replace(/\/+$/, '');
+	const origin = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+	const res = await fetch(new URL(`/xrpc/${path}`, origin), {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', accept: 'application/json' },
+		body: JSON.stringify({ hostname })
+	});
+	if (!res.ok) await throwAdminError(path, res);
 }
 
 /* Public, unauthenticated -- lets the admin lookup form accept a handle in

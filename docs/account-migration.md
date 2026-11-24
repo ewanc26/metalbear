@@ -36,7 +36,8 @@ The same export is available over XRPC as
 `com.atproto.temp.exportAccountBundle` (a query taking `did`), gated by the
 same Basic admin credential as the other `com.atproto.admin.*` routes. It
 returns `application/x-tar`. The `temp` namespace is deliberate: the wire
-format needs no lexicon and is not a proposal to standardise one.
+format needs no lexicon and is not a proposal to standardise one. The admin
+page's account lookup also offers this export as a one-click download.
 
 ## Importing
 
