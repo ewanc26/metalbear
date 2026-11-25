@@ -43,6 +43,14 @@ static void rmtree(const char *path) {
     nftw(path, rmtree_remove_cb, 64, FTW_DEPTH | FTW_PHYS);
 }
 
+/* Accept the conventional 1/true spellings and reject everything else, the
+ * same rule main.c uses for METALBEAR_SINGLE_USER. A bad value is ignored so
+ * the conformance run stays ordinary rather than silently changing mode. */
+static bool env_flag(const char *name) {
+    const char *v = getenv(name);
+    return v && (strcmp(v, "1") == 0 || strcmp(v, "true") == 0);
+}
+
 static int checks_run;
 static int checks_failed;
 
@@ -181,6 +189,11 @@ int main(int argc, char **argv) {
             .user_domain = ".example.com",
             .invite_required = false,
             .rate_limit = 10000,
+            /* The one account this check creates is the single-user bootstrap
+             * when either variable is set; everything after it still has to
+             * pass through the normal protocol surface. */
+            .single_user = env_flag("METALBEAR_CONFORMANCE_SINGLE_USER") ||
+                           env_flag("METALBEAR_SINGLE_USER"),
         };
         server = metalbear_server_start(&config);
         if (!server) {
