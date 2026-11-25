@@ -7,6 +7,8 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+## [0.64.0] - 2026-11-25
+
 ### Added
 
 - I added optional single-user mode (`server.single_user` / `METALBEAR_SINGLE_USER`, off by default) in the same binary: `scripts/setup.sh --single-user` provisions the one bootstrap account without invite codes, admin and signup surfaces return 404, and deterministic small-host defaults apply. ([#264](https://github.com/ewanc26/metalbear/issues/264))
