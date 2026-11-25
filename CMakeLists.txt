@@ -545,6 +545,13 @@ if(METALBEAR_BUILD_TESTS)
                              PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_multi_account COMMAND test_metalbear_multi_account)
 
+  add_executable(test_metalbear_single_user test/test_single_user.c)
+  target_link_libraries(test_metalbear_single_user PRIVATE metalbear_core
+                                                           SQLite3::SQLite3)
+  target_include_directories(test_metalbear_single_user
+                             PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
+  add_test(NAME metalbear_single_user COMMAND test_metalbear_single_user)
+
   add_executable(test_metalbear_takedown test/test_takedown.c)
   target_link_libraries(test_metalbear_takedown PRIVATE metalbear_core
                                                         SQLite3::SQLite3)
@@ -868,6 +875,13 @@ if(METALBEAR_BUILD_TESTS)
   target_include_directories(
     test_metalbear_conformance PRIVATE "${METALBEAR_CJSON_SOURCE_DIR}")
   add_test(NAME metalbear_conformance COMMAND test_metalbear_conformance)
+  # Same protocol checks against a locally started single-user host (issue
+  # #264). The one account the checker creates is the bootstrap account.
+  add_test(NAME metalbear_conformance_single_user
+           COMMAND test_metalbear_conformance)
+  set_tests_properties(metalbear_conformance_single_user
+                       PROPERTIES ENVIRONMENT
+                                  "METALBEAR_CONFORMANCE_SINGLE_USER=1")
 
   add_executable(test_metalbear_schema_version test/test_schema_version.c)
   target_link_libraries(test_metalbear_schema_version
