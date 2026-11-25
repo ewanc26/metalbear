@@ -110,6 +110,13 @@ export interface OperatorInfo {
 		closed?: boolean;
 	};
 	/**
+	 * Config-gated single-user restriction (issue #264). Published when the
+	 * operator enables server.single_user / METALBEAR_SINGLE_USER: one resident
+	 * account, no signup or admin UI, and no landing-page account enumeration.
+	 * Absent on ordinary multi-account servers.
+	 */
+	singleUser?: boolean;
+	/**
 	 * Opt-in aggregate resource status (issue #267). Absent unless the operator
 	 * enables [server] public_status / METALBEAR_PUBLIC_STATUS; never zeroed on
 	 * opted-out hosts. All values are host/process aggregates, never accounts.
