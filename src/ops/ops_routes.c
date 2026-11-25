@@ -25,6 +25,9 @@
 static metalbear_admission_mode
 advertised_admission_mode(const metalbear_server *server) {
     if (!server) return METALBEAR_ADMISSION_CLOSED;
+    /* Single-user mode owns the one account at bootstrap time; after that the
+     * signup surface does not exist, whatever the admission config says. */
+    if (server->single_user) return METALBEAR_ADMISSION_CLOSED;
     if (!server->user_domain) return server->admission_default_mode;
     char probe[320];
     int written =
@@ -242,8 +245,13 @@ wf_status operator_info(void *ctx, const wf_xrpc_request *request,
         cJSON_AddBoolToObject(capabilities, "emailVerificationAvailable",
                               false);
 #endif
+        if (server->single_user)
+            cJSON_AddBoolToObject(capabilities, "singleUser", true);
         cJSON_AddItemToObject(root, "capabilities", capabilities);
     }
+    /* Also publish the marker at the top level: that is what the bundled
+     * frontend reads before deciding whether to ask for an account list. */
+    if (server->single_user) cJSON_AddBoolToObject(root, "singleUser", true);
 
     /* Opt-in public resource snapshot (issue #267). The gate lives here so a
      * server with the flag off omits the field entirely -- the frontend then

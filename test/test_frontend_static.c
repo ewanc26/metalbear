@@ -138,6 +138,8 @@ static void build_fixture(const char *root) {
     write_file(path, "<html>devices page</html>");
     snprintf(path, sizeof(path), "%s/signup.html", root);
     write_file(path, "<html>signup page</html>");
+    snprintf(path, sizeof(path), "%s/admin.html", root);
+    write_file(path, "<html>admin page</html>");
     snprintf(path, sizeof(path), "%s/_app", root);
     mkdir(path, 0755);
     snprintf(path, sizeof(path), "%s/_app/app.js", root);
@@ -147,9 +149,10 @@ static void build_fixture(const char *root) {
 }
 
 static void remove_fixture(const char *root) {
-    const char *files[] = {"index.html",           "account.html",
-                           "account/devices.html", "signup.html",
-                           "_app/app.js",          "robots.txt"};
+    const char *files[] = {
+        "index.html",  "account.html", "account/devices.html",
+        "signup.html", "admin.html",   "_app/app.js",
+        "robots.txt"};
     char path[512];
     for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
         snprintf(path, sizeof(path), "%s/%s", root, files[i]);
@@ -174,7 +177,7 @@ int main(void) {
     wf_xrpc_server *probe = wf_xrpc_server_start("127.0.0.1", 0, 0);
     CHECK(probe != NULL);
     size_t routes = 99;
-    CHECK(metalbear_frontend_register(probe, "/nonexistent/frontend",
+    CHECK(metalbear_frontend_register(probe, "/nonexistent/frontend", false,
                                       &routes) == WF_ERR_NOT_FOUND);
     CHECK(routes == 0);
     wf_xrpc_server_free(probe);
@@ -186,10 +189,11 @@ int main(void) {
         return 1;
     }
     routes = 0;
-    CHECK(metalbear_frontend_register(server, root, &routes) == WF_OK);
+    CHECK(metalbear_frontend_register(server, root, false, &routes) == WF_OK);
     /* index + account.html + its bare alias + devices + its alias + signup
-     * + its bare alias + app.js. robots.txt is skipped. */
-    CHECK(routes == 8);
+     * + its bare alias + admin + its bare alias + app.js. robots.txt is
+     * skipped. */
+    CHECK(routes == 10);
     unsigned short port = wf_xrpc_server_port(server);
 
     char ctype[128], body[256];
@@ -213,6 +217,13 @@ int main(void) {
                    sizeof(body)) == 200);
     CHECK(strcmp(body, "<html>signup page</html>") == 0);
 
+    CHECK(http_get(port, "/admin", ctype, sizeof(ctype), body, sizeof(body)) ==
+          200);
+    CHECK(strcmp(body, "<html>admin page</html>") == 0);
+    CHECK(http_get(port, "/admin.html", ctype, sizeof(ctype), body,
+                   sizeof(body)) == 200);
+    CHECK(strcmp(body, "<html>admin page</html>") == 0);
+
     CHECK(http_get(port, "/account/devices", ctype, sizeof(ctype), body,
                    sizeof(body)) == 200);
     CHECK(strcmp(body, "<html>devices page</html>") == 0);
@@ -230,6 +241,30 @@ int main(void) {
     CHECK(strstr(body, "home page") == NULL);
 
     wf_xrpc_server_free(server);
+
+    /* Single-user mode skips the multi-account pages at the file walker, so a
+     * static /admin or /signup route cannot shadow the server's explicit 404.
+     */
+    wf_xrpc_server *single = wf_xrpc_server_start("127.0.0.1", 0, 0);
+    CHECK(single != NULL);
+    if (single) {
+        size_t single_routes = 0;
+        CHECK(metalbear_frontend_register(single, root, true, &single_routes) ==
+              WF_OK);
+        CHECK(single_routes == 6);
+        unsigned short single_port = wf_xrpc_server_port(single);
+        CHECK(http_get(single_port, "/account", ctype, sizeof(ctype), body,
+                       sizeof(body)) == 200);
+        CHECK(http_get(single_port, "/signup", ctype, sizeof(ctype), body,
+                       sizeof(body)) != 200);
+        CHECK(http_get(single_port, "/signup.html", ctype, sizeof(ctype), body,
+                       sizeof(body)) != 200);
+        CHECK(http_get(single_port, "/admin", ctype, sizeof(ctype), body,
+                       sizeof(body)) != 200);
+        CHECK(http_get(single_port, "/admin.html", ctype, sizeof(ctype), body,
+                       sizeof(body)) != 200);
+        wf_xrpc_server_free(single);
+    }
     remove_fixture(root);
 
     if (failures == 0) {

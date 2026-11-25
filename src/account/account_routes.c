@@ -181,8 +181,9 @@ static wf_status submit_plc_did(metalbear_server *server, const char *did,
     return WF_OK;
 }
 
-wf_status create_account(void *ctx, const wf_xrpc_request *request,
-                         wf_xrpc_response *response) {
+static wf_status create_account_impl(void *ctx, const wf_xrpc_request *request,
+                                     wf_xrpc_response *response,
+                                     bool skip_admission) {
     metalbear_server *server = ctx;
     cJSON *handle =
         request->params
@@ -241,11 +242,17 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
     /* Per-domain admission (issue #163): a closed domain is refused before
      * any invite code is consumed, an invite domain runs the legacy gate
      * below, and an open domain skips it. The fallback comes from the legacy
-     * invite_required setting when no domain matches. */
-    metalbear_admission_mode admission = metalbear_admission_for_handle(
-        handle->valuestring, server->admission_default_mode,
-        server->admission_open_domains, server->admission_invite_domains,
-        server->admission_closed_domains);
+     * invite_required setting when no domain matches. The single-user
+     * bootstrap (issue #264) is the one exception: it is the account, not a
+     * signup, so no closed-domain or invite gate applies to it. */
+    metalbear_admission_mode admission =
+        skip_admission
+            ? METALBEAR_ADMISSION_OPEN
+            : metalbear_admission_for_handle(handle->valuestring,
+                                             server->admission_default_mode,
+                                             server->admission_open_domains,
+                                             server->admission_invite_domains,
+                                             server->admission_closed_domains);
     if (admission == METALBEAR_ADMISSION_CLOSED) {
         wf_xrpc_response_set_error(response, 400, "UnsupportedDomain",
                                    "signups are closed for this domain");
@@ -610,6 +617,16 @@ wf_status create_account(void *ctx, const wf_xrpc_request *request,
     metalbear_session_tokens_free(&tokens);
     free(account_did);
     return set_json(response, root);
+}
+
+wf_status create_account(void *ctx, const wf_xrpc_request *request,
+                         wf_xrpc_response *response) {
+    return create_account_impl(ctx, request, response, false);
+}
+
+wf_status create_account_bootstrap(void *ctx, const wf_xrpc_request *request,
+                                   wf_xrpc_response *response) {
+    return create_account_impl(ctx, request, response, true);
 }
 
 wf_status request_email_confirmation(void *ctx, const wf_xrpc_request *request,

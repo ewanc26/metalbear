@@ -11,6 +11,7 @@
  * after the status routes, so that a frontend "/" replaces the C landing page
  * (see status.c, which then registers the landing page at /landing). */
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "wolfram/xrpc_server.h"
@@ -21,9 +22,11 @@ extern "C" {
 
 /* Register every file under `dir`. Returns WF_ERR_NOT_FOUND if `dir` cannot
  * be opened, so a misconfigured directory stops startup rather than serving
- * nothing. `*out_routes` receives the number of routes registered. */
+ * nothing. `*out_routes` receives the number of routes registered. When
+ * `single_user` is true, the admin and signup pages are skipped so the server's
+ * explicit 404 routes own those paths. */
 wf_status metalbear_frontend_register(wf_xrpc_server *xrpc, const char *dir,
-                                      size_t *out_routes);
+                                      bool single_user, size_t *out_routes);
 
 #ifdef __cplusplus
 }
