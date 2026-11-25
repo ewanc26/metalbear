@@ -72,6 +72,17 @@ typedef struct metalbear_config {
     /* Directory of a built frontend (METALBEAR_FRONTEND_DIR). When set, its
      * files are served from "/" and the C landing page moves to /landing. */
     const char *frontend_dir;
+    /*
+     * Restrict this host to one account (issue #264). A restriction, not a
+     * fork: the same binary keeps every federation, blob and account path, but
+     * a second createAccount, invite codes, com.atproto.admin.* and the bundled
+     * frontend's /admin and /signup pages stop existing. Mapped to
+     * server.single_user / METALBEAR_SINGLE_USER. Lightweight defaults for
+     * workers, resident accounts, DID cache and firehose retention are applied
+     * only where the operator has not chosen a value. Off keeps today's
+     * multi-account server unchanged.
+     */
+    bool single_user;
     /* Firehose retention (optional, defaults: max_age=30d, min_events=1000) */
     int64_t retention_max_age_seconds;
     int64_t retention_min_events;

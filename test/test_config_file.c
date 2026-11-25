@@ -45,6 +45,7 @@ static void test_reads_every_type(void) {
         "threads = 6\n"
         "service_did = \"did:web:example.com\"\n"
         "public_status = true\n"
+        "single_user = true\n"
         "\n"
         "[accounts]\n"
         "invite_required = false\n"
@@ -77,6 +78,7 @@ static void test_reads_every_type(void) {
           strcmp(cfg.service_did, "did:web:example.com") == 0);
     CHECK(cfg.invite_required == false);
     CHECK(cfg.public_status == true);
+    CHECK(cfg.single_user == true);
     CHECK(cfg.max_resident_accounts == 7);
     CHECK(cfg.deletion_hold_seconds == 86400);
     CHECK(cfg.repo_gc_interval_seconds == 86400);
@@ -183,6 +185,7 @@ static void test_rejects_bad_input(void) {
         {"unquoted string", "[server]\nlisten = 0.0.0.0\n"},
         {"non-integer port", "[server]\nport = \"eighty\"\n"},
         {"bad boolean", "[accounts]\ninvite_required = yes\n"},
+        {"bad single_user boolean", "[server]\nsingle_user = yes\n"},
         {"out-of-range port", "[server]\nport = 70000\n"},
         {"unterminated section", "[server\nport = 1\n"},
         {"negative repo quota", "[limits]\nrepo_bytes = -1\n"},

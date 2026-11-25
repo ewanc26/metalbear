@@ -320,6 +320,15 @@ int main(int argc, char **argv) {
         }
     }
     {
+        const char *v = getenv("METALBEAR_SINGLE_USER");
+        if (v && v[0]) {
+            if (strcmp(v, "1") == 0 || strcmp(v, "true") == 0)
+                config.single_user = true;
+            else if (strcmp(v, "0") == 0 || strcmp(v, "false") == 0)
+                config.single_user = false;
+        }
+    }
+    {
         char err[256] = "";
         if (!metalbear_custom_domain_config_valid(config.allowed_custom_domains,
                                                   err, sizeof(err))) {
@@ -449,6 +458,24 @@ int main(int argc, char **argv) {
         if (end && !*end && p <= 65535) config.smtp_port = (uint16_t)p;
     }
     if (!config.service_did || !config.user_domain) return 2;
+
+    /*
+     * Single-user is a footprint profile as well as an access restriction.
+     * These are defaults, not overrides: an operator who explicitly chose a
+     * worker count, resident-account budget, DID cache or firehose floor keeps
+     * that value. A host with one account does not need four request workers,
+     * 256 resident contexts, a 64-entry DID cache or a 1000-event replay floor.
+     * The values here target #34's small-host envelope; they are not hardware
+     * measurements, and no Pi result is implied.
+     */
+    if (config.single_user) {
+        if (!config.thread_count) config.thread_count = 1;
+        if (config.max_resident_accounts <= 0) config.max_resident_accounts = 1;
+        if (config.did_cache_entries <= 0) config.did_cache_entries = 16;
+        if (config.retention_min_events <= 0) config.retention_min_events = 100;
+        LOG_INFO("single-user mode: 1 worker, 1 resident account, 16 DID cache "
+                 "entries and a 100-event firehose floor unless configured");
+    }
 
     metalbear_server *server = metalbear_server_start(&config);
     if (!server) {
