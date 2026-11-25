@@ -31,12 +31,9 @@
 	onMount(async () => {
 		hostname = window.location.hostname;
 		try {
-			[version, server, repos, info] = await Promise.all([
-				health(),
-				describeServer(),
-				listRepos(),
-				operatorInfo()
-			]);
+			[version, server, info] = await Promise.all([health(), describeServer(), operatorInfo()]);
+			/* Single-user hosts publish no account list: do not even ask for one. */
+			if (!info?.singleUser) repos = await listRepos();
 		} catch {
 			failed = true;
 		}
@@ -51,6 +48,19 @@
 	/* Opt-in public status (issue #267): only host/process aggregates arrive
 	 * here. Format them for a human without reintroducing per-account detail. */
 	const status = $derived(info?.publicStatus);
+
+	/* Registration (issue #258/#264): /operator.json is authoritative, with
+	 * describeServer's inviteCodeRequired as the fallback for older servers.
+	 * Single-user mode is closed whatever an older server advertises. */
+	const registration = $derived.by(() => {
+		if (info?.singleUser) return 'closed';
+		const mode = info?.registration?.mode;
+		if (mode === 'invite') return 'invite required';
+		if (mode) return mode;
+		if (!server) return '—';
+		return server.inviteCodeRequired ? 'invite required' : 'open';
+	});
+
 	function bytes(value: number | undefined): string {
 		if (value === undefined) return '—';
 		if (value < 1024) return `${value} B`;
@@ -168,9 +178,7 @@
 			</div>
 			<div>
 				<dt class="text-sm text-slate-500">Registration</dt>
-				<dd class="font-mono text-sm text-slate-200">
-					{#if server}{server.inviteCodeRequired ? 'invite required' : 'open'}{:else}—{/if}
-				</dd>
+				<dd class="font-mono text-sm text-slate-200">{registration}</dd>
 			</div>
 			{#if info?.capabilities?.multipartVideoUpload}
 				<div>
