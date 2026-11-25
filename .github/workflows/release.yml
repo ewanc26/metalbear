@@ -375,7 +375,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           # The context is the parent directory holding the MetalBear checkout,
           # the layout the Dockerfiles expect. Wolfram is fetched by CMake's

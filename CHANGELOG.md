@@ -7,6 +7,10 @@ into the next version's. Releases made before it existed are described only by t
 
 ## [Unreleased]
 
+### Changed
+
+- I refreshed the pinned CI actions (`astral-sh/setup-uv` 10.3.3, `docker/build-push-action` 7 and `actions/upload-artifact` 7), the frontend `typescript-eslint` 8.73.0, and the admin-mobile Expo 58.0.25, `expo-status-bar` 58.0.5 and TypeScript 7.0.2 toolchain, with a matching fix to the mobile invite-list footer type. The browser frontend stays on TypeScript 6.0.3 because `typescript-eslint` does not support 7.x yet. ([#290](https://github.com/ewanc26/metalbear/pull/290), [#291](https://github.com/ewanc26/metalbear/pull/291), [#292](https://github.com/ewanc26/metalbear/pull/292), [#293](https://github.com/ewanc26/metalbear/pull/293), [#294](https://github.com/ewanc26/metalbear/pull/294), [#295](https://github.com/ewanc26/metalbear/pull/295), [#296](https://github.com/ewanc26/metalbear/pull/296))
+
 ## [0.64.0] - 2026-11-25
 
 ### Added

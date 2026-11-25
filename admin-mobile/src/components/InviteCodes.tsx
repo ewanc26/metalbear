@@ -100,7 +100,7 @@ export function InviteCodes() {
 									<Text style={styles.loadMoreText}>Load more</Text>
 								)}
 							</TouchableOpacity>
-						) : null
+						) : undefined
 					}
 				/>
 			)}
