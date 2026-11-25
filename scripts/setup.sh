@@ -18,6 +18,9 @@
 #                       matching --format; a name like bear.yml also selects
 #                       the dialect, since the loader dispatches on extension)
 #   --open              allow registration without invite codes
+#   --single-user       one-account host: generate a single_user config and
+#                       prompt for the one bootstrap account after the health
+#                       check; incompatible with --open and --no-start
 #   --dev               mark as a testing instance (says so on the landing page)
 #   --local             development instance on http://localhost:<port>: no
 #                       --hostname needed, did:web resolves over plain HTTP
@@ -31,10 +34,12 @@
 #   --dns-token <t>     Cloudflare API token with Zone.DNS:Edit
 #   --dns-zone <id>     Cloudflare zone ID; with a token, MetalBear writes the
 #                       _atproto TXT records that make minted handles resolve
-#   --no-start          provision only, do not launch
+#   --no-start          provision only, do not launch (not with --single-user)
 #
 # Re-running is safe: existing secrets are carried over, so a rebuild never
-# changes the identity authority that signed DIDs already minted.
+# changes the identity authority that signed DIDs already minted. With
+# --single-user an existing account is verified through public reads rather
+# than created twice.
 
 set -euo pipefail
 
@@ -44,6 +49,7 @@ PORT="2583"
 FORMAT="yaml"
 CONFIG_FILE_ARG=""
 INVITE_REQUIRED="true"
+SINGLE_USER="false"
 DEVELOPMENT="false"
 LOCAL_DEV="false"
 OPERATOR_NAME=""
@@ -54,6 +60,8 @@ INSTANCE_DESC="A personal AT Protocol server."
 DNS_TOKEN=""
 DNS_ZONE=""
 START=1
+PID=""
+TMP_DIR=""
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -63,6 +71,7 @@ while [ $# -gt 0 ]; do
 		--format)   FORMAT="${2:-}"; shift 2 ;;
 		--config)   CONFIG_FILE_ARG="${2:-}"; shift 2 ;;
 		--open)     INVITE_REQUIRED="false"; shift ;;
+		--single-user) SINGLE_USER="true"; shift ;;
 		--dev)      DEVELOPMENT="true"; shift ;;
 		--local)    LOCAL_DEV="true"; DEVELOPMENT="true"; shift ;;
 		--operator) OPERATOR_NAME="${2:-}"; shift 2 ;;
@@ -73,7 +82,7 @@ while [ $# -gt 0 ]; do
 		--dns-token)    DNS_TOKEN="${2:-}"; shift 2 ;;
 		--dns-zone)     DNS_ZONE="${2:-}"; shift 2 ;;
 		--no-start) START=0; shift ;;
-		-h|--help)  sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help)  sed -n '2,/^set -euo pipefail$/p' "$0" | sed 's/^# \{0,1\}//' | sed '$d'; exit 0 ;;
 		*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -82,6 +91,17 @@ case "$FORMAT" in
 	yaml|toml) ;;
 	*) echo "error: --format must be 'yaml' or 'toml', got '$FORMAT'" >&2; exit 2 ;;
 esac
+
+if [ "$SINGLE_USER" = "true" ]; then
+	if [ "$INVITE_REQUIRED" = "false" ]; then
+		echo "error: --open is incompatible with --single-user: the one bootstrap account bypasses admission and every later createAccount returns 404" >&2
+		exit 2
+	fi
+	if [ "$START" = 0 ]; then
+		echo "error: --no-start is incompatible with --single-user: the one account must be provisioned while the server is running" >&2
+		exit 2
+	fi
+fi
 
 say() { printf '\033[32m==>\033[0m %s\n' "$1"; }
 warn() { printf '\033[33m==>\033[0m %s\n' "$1" >&2; }
@@ -109,7 +129,7 @@ cd "$REPO_ROOT"
 
 say "Checking build dependencies"
 MISSING=""
-for tool in cmake git curl; do
+for tool in cmake git curl jq; do
 	command -v "$tool" >/dev/null 2>&1 || MISSING="$MISSING $tool"
 done
 
@@ -118,12 +138,12 @@ if [ -n "$MISSING" ]; then
 		say "Installing:$MISSING and libraries (apt)"
 		sudo apt-get update -qq
 		sudo apt-get install -y -qq \
-			build-essential cmake git curl pkg-config \
+			build-essential cmake git curl jq pkg-config \
 			libcurl4-openssl-dev libssl-dev libsqlite3-dev \
 			libmicrohttpd-dev libsecp256k1-dev zlib1g-dev
 	elif command -v brew >/dev/null 2>&1; then
 		say "Installing:$MISSING and libraries (brew)"
-		brew install cmake git curl openssl sqlite libmicrohttpd secp256k1
+		brew install cmake git curl jq openssl sqlite libmicrohttpd secp256k1
 	else
 		echo "error: missing$MISSING and no apt-get or brew to install them" >&2
 		exit 1
@@ -186,6 +206,22 @@ ADMIN_PW="$(keep METALBEAR_ADMIN_PASSWORD admin_password)"
 if [ "$LOCAL_DEV" != "true" ]; then
 	PLC_KEY="$(keep METALBEAR_PLC_ROTATION_KEY plc_rotation_key)"
 	[ -n "$PLC_KEY" ] || { PLC_KEY="$(random_hex 32)"; NEW_PLC=1; }
+fi
+
+# Single-user leaves the DID-cache and firehose-retention keys out of the
+# generated config so the daemon's one-account defaults apply. A rerun must
+# not carry the generic multi-account values forward from an older config:
+# setup rewrites the file instead of editing it in place.
+if [ "$SINGLE_USER" = "true" ]; then
+	GENERATED_DID_CACHE_YAML=''
+	GENERATED_DID_CACHE_TOML=''
+	GENERATED_RETENTION_MIN_YAML=''
+	GENERATED_RETENTION_MIN_TOML=''
+else
+	GENERATED_DID_CACHE_YAML='  did_cache_entries: 64'
+	GENERATED_DID_CACHE_TOML='did_cache_entries     = 64'
+	GENERATED_RETENTION_MIN_YAML='  retention_min_events: 1000'
+	GENERATED_RETENTION_MIN_TOML='retention_min_events      = 1000'
 fi
 
 # A local dev instance is addressed directly at http://<host>:<port> --
@@ -260,6 +296,27 @@ retention_max_age_seconds = 2592000
 retention_min_events      = 1000'
 fi
 
+# Drop the generic multi-account values for a one-account host so the daemon's
+# smaller defaults take effect. The replacement is empty in single-user mode
+# and restores the original lines otherwise.
+IDENTITY_YAML="${IDENTITY_YAML/  did_cache_entries: 64/${GENERATED_DID_CACHE_YAML}}"
+IDENTITY_TOML="${IDENTITY_TOML/did_cache_entries     = 64/${GENERATED_DID_CACHE_TOML}}"
+FIREHOSE_YAML="${FIREHOSE_YAML/  retention_min_events: 1000/${GENERATED_RETENTION_MIN_YAML}}"
+FIREHOSE_TOML="${FIREHOSE_TOML/retention_min_events      = 1000/${GENERATED_RETENTION_MIN_TOML}}"
+
+# Single-user emits only keys the strict loader knows: one worker and the
+# restriction flag. The daemon supplies the remaining lightweight defaults
+# (resident accounts, DID cache, firehose floor) when they are unset.
+if [ "$SINGLE_USER" = "true" ]; then
+	THREADS=1
+	SERVER_SINGLE_USER_YAML='  single_user: true'
+	SERVER_SINGLE_USER_TOML='single_user = true'
+else
+	THREADS=4
+	SERVER_SINGLE_USER_YAML=''
+	SERVER_SINGLE_USER_TOML=''
+fi
+
 say "Writing $CONFIG_FILE ($FORMAT)"
 umask 077
 if [ "$FORMAT" = "yaml" ]; then
@@ -273,7 +330,8 @@ cat > "$CONFIG_FILE" <<EOF
 server:
   listen: "127.0.0.1"
   port: ${PORT}
-  threads: 4
+  threads: ${THREADS}
+${SERVER_SINGLE_USER_YAML}
   data: "${DATA_DIR}"
   service_did: "${SERVICE_DID}"
   public_url: "${PUBLIC_URL}"
@@ -322,7 +380,8 @@ cat > "$CONFIG_FILE" <<EOF
 [server]
 listen      = "127.0.0.1"
 port        = ${PORT}
-threads     = 4
+threads     = ${THREADS}
+${SERVER_SINGLE_USER_TOML}
 data        = "${DATA_DIR}"
 service_did = "${SERVICE_DID}"
 public_url  = "${PUBLIC_URL}"
@@ -404,7 +463,152 @@ elif [ -n "$DNS_TOKEN" ] || [ -n "$DNS_ZONE" ]; then
 fi
 
 [ "${NEW_PLC:-0}" = 1 ] && warn "Generated a new PLC rotation key. Back up $CONFIG_FILE."
-[ "${NEW_ADMIN:-0}" = 1 ] && say "Admin password: $ADMIN_PW"
+
+# Never print the admin password: terminal output gets copied into issues and
+# CI logs. The admin CLI sources this 0600 file instead. Keep any other
+# settings the operator already put in it; only the two we own are rewritten.
+write_env_file() {
+	local env_tmp line
+	env_tmp="$(mktemp "${ENV_FILE}.XXXXXX")"
+	chmod 600 "$env_tmp"
+	if [ -f "$ENV_FILE" ]; then
+		while IFS= read -r line || [ -n "$line" ]; do
+			case "$line" in
+				METALBEAR_ADMIN_PASSWORD=*|METALBEAR_HOSTNAME=*) continue ;;
+			esac
+			printf '%s\n' "$line" >> "$env_tmp"
+		done < "$ENV_FILE"
+	fi
+	{
+		printf 'METALBEAR_HOSTNAME=%s\n' "$HOSTNAME_ARG"
+		printf 'METALBEAR_ADMIN_PASSWORD=%s\n' "$ADMIN_PW"
+	} >> "$env_tmp"
+	mv -f "$env_tmp" "$ENV_FILE"
+	chmod 600 "$ENV_FILE"
+	say "Admin password written to $ENV_FILE (0600) for the admin CLI"
+}
+write_env_file
+
+# One account only. The server flag bypasses admission for the first
+# createAccount and makes every later one return 404, so no invite code and no
+# admin call is involved here. listRepos has no handle field in this lexicon,
+# so it establishes which DID owns the host and resolveHandle checks the
+# handle the operator typed against that DID.
+provision_single_user_account() {
+	local handle="" email="" password="" confirmation=""
+	local existing_count existing_did resolved_did http_code did
+	local repos_file handle_file password_file request_file response_file
+
+	printf 'Handle for the one account (e.g. alice.%s): ' "$HOSTNAME_ARG"
+	IFS= read -r handle || { echo "error: a handle is required" >&2; exit 1; }
+	[ -n "$handle" ] || { echo "error: a handle is required" >&2; exit 1; }
+
+	TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/metalbear-single-user.XXXXXX")"
+	chmod 700 "$TMP_DIR"
+	repos_file="$TMP_DIR/repos.json"
+	handle_file="$TMP_DIR/handle.json"
+
+	# resolveHandle is the authoritative public read for "does this handle
+	# already exist here?" A fresh account has no repo head, so listRepos may
+	# legitimately be empty until its first post. Never use it alone to decide
+	# whether to create the one account.
+	http_code="$(curl -sS -G --data-urlencode "handle=$handle" \
+		-o "$handle_file" -w '%{http_code}' \
+		"http://127.0.0.1:${PORT}/xrpc/com.atproto.identity.resolveHandle")" || {
+			echo "error: could not resolve $handle on this host" >&2
+			exit 1
+		}
+	case "$http_code" in
+		2??) resolved_did="$(jq -r '.did // empty' "$handle_file")"
+			[ -n "$resolved_did" ] || {
+				echo "error: resolveHandle returned no DID for $handle" >&2
+				exit 1
+			} ;;
+		4??) resolved_did="" ;;
+		*) echo "error: resolveHandle returned HTTP $http_code for $handle" >&2
+			exit 1 ;;
+	esac
+
+	if ! curl -sf "http://127.0.0.1:${PORT}/xrpc/com.atproto.sync.listRepos?limit=2" \
+		-o "$repos_file"; then
+		echo "error: could not read the account list from this host" >&2
+		exit 1
+	fi
+	if ! jq -e '.repos | type == "array"' "$repos_file" >/dev/null 2>&1; then
+		echo "error: com.atproto.sync.listRepos returned an unexpected response" >&2
+		exit 1
+	fi
+
+	existing_count="$(jq -r '.repos | length' "$repos_file")"
+	if [ "$existing_count" -gt 1 ] || [ -n "$(jq -r '.cursor // empty' "$repos_file")" ]; then
+		echo "error: single-user mode needs an empty or one-account data directory; found more than one repo" >&2
+		exit 1
+	fi
+	if [ "$existing_count" -eq 1 ]; then
+		existing_did="$(jq -r '.repos[0].did // empty' "$repos_file")"
+		if [ "$resolved_did" != "$existing_did" ]; then
+			echo "error: this host already has account $existing_did, not $handle" >&2
+			echo "       rerun with the handle of the existing account" >&2
+			exit 1
+		fi
+	fi
+	if [ -n "$resolved_did" ]; then
+		say "Account $handle ($resolved_did) is already provisioned; skipping account creation."
+		return 0
+	fi
+
+	if [ ! -t 0 ]; then
+		echo "error: --single-user needs an interactive terminal to read the account password" >&2
+		exit 1
+	fi
+	IFS= read -r -p "Email for $handle: " email || {
+		echo "error: an email address is required" >&2; exit 1; }
+	[ -n "$email" ] || { echo "error: an email address is required" >&2; exit 1; }
+	IFS= read -r -s -p "Password: " password || {
+		echo "error: a password is required" >&2; exit 1; }
+	printf '\n'
+	[ -n "$password" ] || { echo "error: a password is required" >&2; exit 1; }
+	IFS= read -r -s -p "Confirm password: " confirmation || {
+		echo "error: a password is required" >&2; exit 1; }
+	printf '\n'
+	if [ "$password" != "$confirmation" ]; then
+		echo "error: passwords do not match" >&2
+		exit 1
+	fi
+	unset confirmation
+
+	password_file="$TMP_DIR/password"
+	request_file="$TMP_DIR/create-account.json"
+	response_file="$TMP_DIR/create-account-response.json"
+	for file in "$password_file" "$request_file" "$response_file"; do
+		: > "$file"
+		chmod 600 "$file"
+	done
+	printf '%s' "$password" > "$password_file"
+	unset password
+	jq -n --arg handle "$handle" --arg email "$email" --rawfile password "$password_file" \
+		'{handle: $handle, email: $email, password: $password}' > "$request_file"
+	unset email
+
+	http_code="$(curl -sS -o "$response_file" -w '%{http_code}' -X POST \
+		-H 'Content-Type: application/json' --data-binary @"$request_file" \
+		"http://127.0.0.1:${PORT}/xrpc/com.atproto.server.createAccount")" || {
+			echo "error: createAccount request failed" >&2; exit 1; }
+	case "$http_code" in
+		2??) ;;
+		*) echo "error: createAccount returned HTTP $http_code: $(jq -r '.message // .error // "unknown error"' "$response_file" 2>/dev/null)" >&2
+			exit 1 ;;
+	esac
+	did="$(jq -r '.did // empty' "$response_file")"
+	[ -n "$did" ] || { echo "error: createAccount did not return a DID" >&2; exit 1; }
+	say "Provisioned $handle ($did)"
+}
+
+cleanup() {
+	if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; fi
+	if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then rm -rf "$TMP_DIR"; fi
+}
+trap cleanup EXIT
 
 mkdir -p "$DATA_DIR"
 
@@ -418,7 +622,6 @@ fi
 say "Starting MetalBear on 127.0.0.1:${PORT}"
 METALBEAR_CONFIG="$CONFIG_FILE" ./build/metalbear &
 PID=$!
-trap 'kill $PID 2>/dev/null || true' EXIT
 
 for _ in $(seq 1 30); do
 	sleep 1
@@ -432,7 +635,42 @@ fi
 
 say "Healthy: $(curl -s "http://127.0.0.1:${PORT}/xrpc/_health")"
 
-if [ "$LOCAL_DEV" = "true" ]; then
+if [ "$SINGLE_USER" = "true" ]; then
+	provision_single_user_account
+
+	if [ "$LOCAL_DEV" = "true" ]; then
+		SU_URL="$PUBLIC_URL"
+		SU_HOST_NOTE="This is a local dev instance: no TLS, no DNS, no crawler. Talk to it directly at ${PUBLIC_URL}."
+		SU_DNS_NOTE="Handle and DID resolution for the one account stay local -- no DNS or plc.directory lookup leaves the machine -- so an app that insists on resolving over the open network will not find it."
+		SU_RELAY_NOTE=""
+	else
+		SU_URL="https://${HOSTNAME_ARG}"
+		SU_HOST_NOTE="Point a TLS reverse proxy at 127.0.0.1:${PORT} for ${HOSTNAME_ARG}. WebSocket upgrades must be forwarded, or the firehose will not serve."
+		if [ -n "$DNS_TOKEN" ] && [ -n "$DNS_ZONE" ]; then
+			SU_DNS_NOTE="Handle TXT records are written automatically on account creation."
+		else
+			SU_DNS_NOTE="The one handle under .${HOSTNAME_ARG} needs a DNS TXT record to resolve. Pass --dns-token and --dns-zone to have MetalBear write it."
+		fi
+		SU_RELAY_NOTE="  4. Confirm a relay is consuming the host:
+       curl -s \"https://bsky.network/xrpc/com.atproto.sync.getHostStatus?hostname=${HOSTNAME_ARG}\"
+     seq -1 means registered but never consumed; a rising seq means federating."
+	fi
+
+	cat <<EOF
+
+Next steps (single-user)
+  1. ${SU_HOST_NOTE}
+  2. Sign in at ${SU_URL} with the handle you entered above. That is the only
+     account: a second createAccount returns 404, as do invite codes, the
+     com.atproto.admin.* endpoints and the bundled /admin and /signup pages.
+     The admin password is in ${ENV_FILE} (0600) for the admin CLI, but there
+     are no admin endpoints to drive in this mode.
+  3. Federation is unchanged: crawlers, the firehose, blobs and OAuth behave as
+     on a multi-account host. ${SU_DNS_NOTE}
+
+${SU_RELAY_NOTE}
+EOF
+elif [ "$LOCAL_DEV" = "true" ]; then
 cat <<EOF
 
 Next steps
@@ -440,7 +678,8 @@ Next steps
      directly at ${PUBLIC_URL}.
   2. Create the first account:
 
-     CODE=\$(curl -sS -u "admin:${ADMIN_PW}" -X POST \\
+     . "${ENV_FILE}"   # 0600; defines METALBEAR_ADMIN_PASSWORD
+     CODE=\$(curl -sS -u "admin:\${METALBEAR_ADMIN_PASSWORD}" -X POST \\
        -H 'Content-Type: application/json' --data '{"useCount":1}' \\
        ${PUBLIC_URL}/xrpc/com.atproto.server.createInviteCode \\
        | sed -E 's/.*"code":"([^"]+)".*/\\1/')
@@ -472,7 +711,8 @@ Next steps
      WebSocket upgrades must be forwarded, or the firehose will not serve.
   2. Create the first account:
 
-     CODE=\$(curl -sS -u "admin:${ADMIN_PW}" -X POST \\
+     . "${ENV_FILE}"   # 0600; defines METALBEAR_ADMIN_PASSWORD
+     CODE=\$(curl -sS -u "admin:\${METALBEAR_ADMIN_PASSWORD}" -X POST \\
        -H 'Content-Type: application/json' --data '{"useCount":1}' \\
        https://${HOSTNAME_ARG}/xrpc/com.atproto.server.createInviteCode \\
        | sed -E 's/.*"code":"([^"]+)".*/\\1/')

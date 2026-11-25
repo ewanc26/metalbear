@@ -21,6 +21,20 @@ The live mode creates one throwaway account (`conform.example.com`) to exercise
 the authenticated flows. Only run it against an instance you own or are allowed
 to test against. It reads no credentials and prints none.
 
+## Single-user hosts
+
+Local conformance in single-user mode is supported. The harness starts with a
+fresh data directory, so its one `createAccount` is the permitted bootstrap and
+the remaining checks use that account's session. It never needs a second
+account, which is all the mode allows.
+
+On a seeded single-user host — one already provisioned by
+`scripts/setup.sh --single-user` — the single bootstrap account is the account
+under test; there is no throwaway second signup. A second `createAccount`
+correctly answers 404, so the live-mode setup step cannot mint another one
+there. Treat the bootstrap account as the account the checks exercise, not a
+host to create an additional throwaway account on.
+
 ## Checks
 
 Each check is reported on its own line as `PASS` or `FAIL`, and the checker

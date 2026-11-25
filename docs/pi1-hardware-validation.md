@@ -16,6 +16,24 @@ file-descriptor and startup gates ahead of hardware. It is not a substitute
 for this record: the latency gates and on-device execution still need a real
 ARM1176, and a harness result is never hardware evidence for #34.
 
+## Single-user profile
+
+The one-account profile in [#34] is enabled by `server.single_user` /
+`METALBEAR_SINGLE_USER=1`. Its structural reductions are deterministic and
+known from the code, not from a benchmark: one resident account context instead
+of the 256-context cap, one request worker unless `server.threads` is
+explicitly set, the 22 named admin/invite/temp XRPC routes replaced by six
+catch-all 404 route prefixes, and the admin/signup frontend assets skipped.
+The daemon also picks smaller DID-cache and firehose-retention floors when the
+operator has not set them.
+
+None of that is a measured Raspberry Pi result, an emulator result, or a pass
+against any gate below. It only describes what the binary does with the flag
+set. Record the `single_user` setting and worker count with the evidence below,
+and run the same on-device steps; a single-user profile still has to earn its
+numbers on real hardware. See the [README](../README.md#single-user-mode-issue-264)
+for the operator-facing description.
+
 ## What CI already checks
 
 CI's `minimal profile + ARMv6 atomics` job builds `METALBEAR_PROFILE=minimal`

@@ -12,6 +12,14 @@
 listen        = "127.0.0.1"          # bind address; put TLS in front
 port          = 2583
 threads       = 4                    # request worker threads
+# One-account host (issue #264). Off by default: with it off, this is the
+# ordinary multi-account server. With it on, createAccount works once (the
+# bootstrap account), and a second createAccount, invite codes, admin
+# endpoints and the /admin and /signup frontend pages return 404. It is a
+# config-gated restriction in the same binary, not a separate build.
+# METALBEAR_SINGLE_USER=1 overrides this from the environment; 0/false
+# leaves the multi-account behaviour in place.
+# single_user   = false
 data          = "data"               # data directory
 service_did   = "did:web:pds.example.com"
 # Moderator service (e.g. ozone) DID trusted to read another account's
