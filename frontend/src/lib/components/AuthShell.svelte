@@ -21,7 +21,6 @@
 	let brand = $state<Branding>(DEFAULT_BRANDING);
 	branding.subscribe((value) => (brand = value));
 
-	const titleString = $derived(title);
 	/* Only change document titles when the operator has chosen a name: the
 	 * built-in auth screens keep their current titles byte for byte. */
 	const documentTitleString = $derived(

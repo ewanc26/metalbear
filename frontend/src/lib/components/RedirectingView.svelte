@@ -33,6 +33,7 @@
 		<p class="text-lg font-medium text-white">{title}</p>
 		<p class="mt-2 text-sm text-slate-400">
 			{#if shown}
+				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- OAuth redirect URLs are passed through verbatim -->
 				<a href={redirectUrl} class="text-emerald-500 hover:text-emerald-400">
 					Click here if you are not redirected automatically.
 				</a>

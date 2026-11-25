@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { requestPasswordReset, resetPassword } from '#lib/pds.ts';
 	import AuthShell from '#lib/components/AuthShell.svelte';
 
@@ -153,7 +154,7 @@
 				Password reset. You can now sign in with your new password.
 			</p>
 			<a
-				href="/login"
+				href={resolve('/login')}
 				class="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-500"
 			>
 				Sign in
@@ -162,6 +163,7 @@
 	{/if}
 
 	<p class="mt-4 text-center text-sm text-slate-500">
-		<a href="/login" class="text-emerald-500 hover:text-emerald-400">← Back to sign in</a>
+		<a href={resolve('/login')} class="text-emerald-500 hover:text-emerald-400">← Back to sign in</a
+		>
 	</p>
 </AuthShell>

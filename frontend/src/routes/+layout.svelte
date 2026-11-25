@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import './layout.css';
 	import favicon from '#lib/assets/favicon.svg';
 	import { page } from '$app/state';
@@ -44,6 +45,7 @@
 {#if !isOAuthPage}
 	<nav class="flex items-center justify-between border-b border-slate-800 px-6 py-3">
 		<div class="flex items-center gap-6">
+			<!-- eslint-disable svelte/no-navigation-without-resolve -- operator URLs are passed through verbatim -->
 			<a
 				href={brand.links.homeUrl}
 				class="flex items-center gap-2 text-sm font-semibold text-white hover:text-emerald-400"
@@ -53,6 +55,7 @@
 				{/if}
 				{brand.serviceName}
 			</a>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
 		</div>
 
 		<div class="flex items-center gap-4">
@@ -73,22 +76,24 @@
 						</svg>
 					</button>
 					{#if showMenu}
-						<!-- svelte-ignore a11y_click_events_have_key_events, a11y_interactive_supports_focus -->
 						<div
 							class="absolute right-0 z-10 mt-1 w-48 rounded-lg border border-slate-700 bg-slate-900 py-1 shadow-lg"
 							role="menu"
 							tabindex="-1"
 							onclick={() => (showMenu = false)}
+							onkeydown={(event) => {
+								if (event.key === 'Escape') showMenu = false;
+							}}
 						>
 							<a
-								href="/account"
+								href={resolve('/account')}
 								class="block px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
 								role="menuitem"
 							>
 								Account
 							</a>
 							<a
-								href="/account/app-passwords"
+								href={resolve('/account/app-passwords')}
 								class="block px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
 								role="menuitem"
 							>
@@ -106,7 +111,7 @@
 				</div>
 			{:else}
 				<a
-					href="/login"
+					href={resolve('/login')}
 					class="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-500"
 				>
 					Sign in

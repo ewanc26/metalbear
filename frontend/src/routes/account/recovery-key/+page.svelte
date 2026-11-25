@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { auth } from '#lib/stores/auth.ts';
 	import { getSession, requestPlcOperationSignature } from '#lib/pds.ts';
 	import type { SessionResponse } from '#lib/pds.ts';
@@ -14,7 +15,7 @@
 
 	onMount(async () => {
 		if (!session) {
-			goto('/login');
+			goto(resolve('/login'));
 			return;
 		}
 		try {
@@ -99,8 +100,9 @@
 			</h2>
 			<p class="mb-4 text-sm text-slate-400">
 				Adding a rotation key is still an identity change, so this server co-signs it the same way
-				it does for a <a href="/account/migrate" class="text-emerald-500 hover:text-emerald-400"
-					>migration</a
+				it does for a <a
+					href={resolve('/account/migrate')}
+					class="text-emerald-500 hover:text-emerald-400">migration</a
 				> — a one-time token sent to your email.
 			</p>
 			{#if tokenSent}
@@ -164,6 +166,8 @@
 	{/if}
 
 	<p class="mt-8 text-center text-sm text-slate-500">
-		<a href="/account" class="text-emerald-500 hover:text-emerald-400">← Account settings</a>
+		<a href={resolve('/account')} class="text-emerald-500 hover:text-emerald-400"
+			>← Account settings</a
+		>
 	</p>
 </main>

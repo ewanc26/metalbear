@@ -1,10 +1,12 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { authorizeInfo, deviceSessions } from '#lib/pds.ts';
 	import type { AuthorizeInfo, AuthorizeInfoError } from '#lib/pds.ts';
 	import { scopeTokens, isRequiredScope, isNewScope, describeScope } from '#lib/oauthScopes.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import AuthShell from '#lib/components/AuthShell.svelte';
 	import RedirectingView from '#lib/components/RedirectingView.svelte';
 
@@ -18,7 +20,7 @@
 	let infoError: AuthorizeInfoError | null = $state(null);
 	/* Raw scope tokens the user left checked. Svelte can't faithfully track
 	 * mutation of a Set in a $state proxy, so reassign it on every toggle. */
-	let selectedScopes: Set<string> = $state(new Set<string>());
+	const selectedScopes = new SvelteSet<string>();
 	let redirecting: boolean = $state(false);
 	let redirectRejected: boolean = $state(false);
 
@@ -38,7 +40,7 @@
 		if (!sessions.matchesHint) {
 			loading = false;
 			redirecting = true;
-			goto(`/login?redirect=${encodeURIComponent(redirectTarget)}`);
+			goto(resolve(`/login?redirect=${encodeURIComponent(redirectTarget)}` as `/login?${string}`));
 			return;
 		}
 
@@ -48,7 +50,8 @@
 			infoError = null;
 			/* Every requested token starts checked; required ones can't be
 			 * unchecked in the UI (and the server rejects dropping them). */
-			selectedScopes = new Set(scopeTokens(info.scope));
+			selectedScopes.clear();
+			for (const token of scopeTokens(info.scope)) selectedScopes.add(token);
 		} else {
 			info = null;
 			infoError = result.error;
@@ -59,10 +62,8 @@
 	function toggleScope(token: string) {
 		// Required scopes are locked; ignore attempts to uncheck them.
 		if (isRequiredScope(token)) return;
-		const next = new Set(selectedScopes);
-		if (next.has(token)) next.delete(token);
-		else next.add(token);
-		selectedScopes = next;
+		if (selectedScopes.has(token)) selectedScopes.delete(token);
+		else selectedScopes.add(token);
 	}
 
 	function approvedScope(): string {
@@ -195,7 +196,7 @@
 				</p>
 			</div>
 			<p class="mt-4 text-center text-sm text-slate-500">
-				<a href="/" class="text-emerald-500 hover:text-emerald-400">← Back to status</a>
+				<a href={resolve('/')} class="text-emerald-500 hover:text-emerald-400">← Back to status</a>
 			</p>
 		{:else if picking}
 			<div>
@@ -263,7 +264,7 @@
 						Try again
 					</button>
 				{/if}
-				<a href="/" class="text-emerald-500 hover:text-emerald-400">← Back to status</a>
+				<a href={resolve('/')} class="text-emerald-500 hover:text-emerald-400">← Back to status</a>
 			</div>
 		{:else if info}
 			<div class="flex flex-col gap-5">
@@ -284,7 +285,7 @@
 							<a
 								href={info.client_uri}
 								target="_blank"
-								rel="noreferrer"
+								rel="external noreferrer"
 								class="text-xs text-slate-500 hover:text-slate-400"
 							>
 								{info.client_uri}

@@ -19,6 +19,7 @@
 
 <nav class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500" aria-label="Operator links">
 	{#each links as link (link.label)}
+		<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- operator URLs are passed through verbatim -->
 		<a class="text-emerald-500 hover:text-emerald-400" href={link.href}>{link.label}</a>
 	{/each}
 </nav>

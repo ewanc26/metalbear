@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { formatBytes } from '#lib/format.ts';
@@ -53,13 +54,13 @@
 	/* Stale responses from a previous DID or tab must not overwrite this view. */
 	let loadToken = 0;
 
-	function href(params: Record<string, string | null | undefined>): string {
+	function href(params: Record<string, string | null | undefined>): '/repo' | `/repo?${string}` {
 		const query: string[] = [];
 		if (did) query.push(`did=${encodeURIComponent(did)}`);
 		for (const [key, value] of Object.entries(params)) {
 			if (value) query.push(`${key}=${encodeURIComponent(value)}`);
 		}
-		return `/repo${query.length ? `?${query.join('&')}` : ''}`;
+		return (query.length ? `/repo?${query.join('&')}` : '/repo') as '/repo' | `/repo?${string}`;
 	}
 
 	function preview(value: unknown): string {
@@ -75,7 +76,7 @@
 		searchPending = true;
 		try {
 			const target = value.startsWith('did:') ? value : await resolveHandle(value);
-			await goto(href({ did: target }));
+			await goto(resolve(href({ did: target })));
 			search = '';
 		} catch (err) {
 			searchError = err instanceof Error ? err.message : 'Could not resolve that handle';
@@ -218,7 +219,7 @@
 
 <main class="mx-auto max-w-5xl px-6 py-12">
 	<header class="mb-8">
-		<a class="text-sm text-emerald-500 hover:text-emerald-400" href="/">← Home</a>
+		<a class="text-sm text-emerald-500 hover:text-emerald-400" href={resolve('/')}>← Home</a>
 		<h1 class="mt-3 text-3xl font-semibold tracking-tight text-white">Repo browser</h1>
 		<p class="mt-2 max-w-2xl text-sm text-slate-400">
 			Read-only view of public records on this server. Nothing here is authenticated; taken-down and
@@ -307,13 +308,17 @@
 		<nav class="mb-6 flex gap-4 text-sm">
 			<a
 				class={view === 'blobs' ? 'text-slate-400 hover:text-white' : 'text-emerald-400'}
-				href={href({ view: null, collection: null, rkey: null, cursor: null, blobCursor: null })}
+				href={resolve(
+					href({ view: null, collection: null, rkey: null, cursor: null, blobCursor: null })
+				)}
 			>
 				Collections
 			</a>
 			<a
 				class={view === 'blobs' ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}
-				href={href({ view: 'blobs', collection: null, rkey: null, cursor: null, blobCursor: null })}
+				href={resolve(
+					href({ view: 'blobs', collection: null, rkey: null, cursor: null, blobCursor: null })
+				)}
 			>
 				Blobs
 			</a>
@@ -325,7 +330,7 @@
 					<h2 class="text-lg font-semibold text-white">{rkey}</h2>
 					<a
 						class="text-sm text-emerald-500 hover:text-emerald-400"
-						href={href({ collection, rkey: null, cursor, blobCursor: null })}
+						href={resolve(href({ collection, rkey: null, cursor, blobCursor: null }))}
 					>
 						← Back to records
 					</a>
@@ -371,12 +376,14 @@
 							<li class="py-3">
 								<a
 									class="font-mono text-sm break-all text-emerald-500 hover:text-emerald-400"
-									href={href({
-										collection,
-										rkey: row.uri.split('/').pop(),
-										cursor,
-										blobCursor: null
-									})}
+									href={resolve(
+										href({
+											collection,
+											rkey: row.uri.split('/').pop(),
+											cursor,
+											blobCursor: null
+										})
+									)}
 								>
 									{row.uri.split('/').pop()}
 								</a>
@@ -387,7 +394,9 @@
 					{#if records.cursor}
 						<a
 							class="mt-4 inline-block rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:border-slate-600 hover:text-white"
-							href={href({ collection, cursor: records.cursor, rkey: null, blobCursor: null })}
+							href={resolve(
+								href({ collection, cursor: records.cursor, rkey: null, blobCursor: null })
+							)}
 						>
 							Load more →
 						</a>
@@ -412,12 +421,14 @@
 							{#each blobMeta as blob (blob.cid)}
 								<tr>
 									<td class="py-2 pr-4">
+										<!-- eslint-disable svelte/no-navigation-without-resolve -- blob URLs are constructed by the XRPC helper -->
 										<a
 											class="font-mono text-xs break-all text-emerald-500 hover:text-emerald-400"
 											href={blobUrl(did, blob.cid)}
 										>
 											{blob.cid}
 										</a>
+										<!-- eslint-enable svelte/no-navigation-without-resolve -->
 									</td>
 									<td class="py-2 pr-4 font-mono text-xs text-slate-400">{blob.size}</td>
 									<td class="py-2 font-mono text-xs text-slate-400">{blob.type}</td>
@@ -428,7 +439,9 @@
 					{#if blobs.cursor}
 						<a
 							class="mt-4 inline-block rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 hover:border-slate-600 hover:text-white"
-							href={href({ blobCursor: blobs.cursor, collection: null, rkey: null, cursor: null })}
+							href={resolve(
+								href({ blobCursor: blobs.cursor, collection: null, rkey: null, cursor: null })
+							)}
 						>
 							Load more →
 						</a>
@@ -448,7 +461,9 @@
 							<li class="flex items-center justify-between gap-4 py-3">
 								<a
 									class="font-mono text-sm break-all text-emerald-500 hover:text-emerald-400"
-									href={href({ collection: name, rkey: null, cursor: null, blobCursor: null })}
+									href={resolve(
+										href({ collection: name, rkey: null, cursor: null, blobCursor: null })
+									)}
 								>
 									{name}
 								</a>
