@@ -15,6 +15,33 @@
 > describes the single-account server as it stood before the change, not as it
 > is now. For how the server behaves today, see the [README](../README.md).
 
+## Single-user mode (issue #264)
+
+The layout below is still what the binary implements by default. A host can
+now restrict itself to one account with `server.single_user: true` (TOML:
+`single_user = true`) or `METALBEAR_SINGLE_USER=1`. It is a config-gated
+restriction in the _same_ binary, default off: with the flag off, multi-account
+behaviour here is unchanged, including the registry, per-request resolvers,
+invite codes, admin endpoints and the frontend admin/signup pages.
+
+With it on, the one `createAccount` that bootstraps the host bypasses
+admission; every later `createAccount`, every invite-code route, every
+`com.atproto.admin.*` call and the bundled `/admin` and `/signup` pages return 404.
+Federation, firehose, OAuth, blobs and the account pages are untouched.
+The deterministic structural reductions are one resident account context
+instead of the 256-context cap, one worker unless `server.threads` is set,
+the 22 named admin/invite/temp XRPC routes replaced by six catch-all 404 route
+prefixes, and the admin/signup frontend assets skipped. These are code-level
+facts aimed at the small-host work in
+[#34](https://github.com/ewanc26/metalbear/issues/34), **not measured Pi or
+emulator results**; the hardware gates are in
+[pi1-hardware-validation.md](pi1-hardware-validation.md).
+
+`scripts/setup.sh --single-user` provisions that one account directly through
+`createAccount` on loopback, with no invite code and no admin CLI. See the
+[README](../README.md#single-user-mode-issue-264) for the operator-facing
+description and [conformance.md](conformance.md) for the seeded-host case.
+
 ## Goal
 
 MetalBear currently starts with a single account baked in at startup: one

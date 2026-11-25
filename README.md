@@ -228,6 +228,7 @@ per-host overrides stay outside it.
 service_did = "did:web:pds.example.com"
 user_domain = ".pds.example.com"
 port        = 2583
+# single_user = true   # one account only; off by default (see below)
 
 [accounts]
 admin_password  = "..."
@@ -269,6 +270,7 @@ server:
   service_did: "did:web:pds.example.com"
   user_domain: ".pds.example.com"
   port: 2583
+  # single_user: true   # one account only; off by default (see below)
 
 accounts:
   admin_password: "..."
@@ -299,6 +301,39 @@ uploads that would add bytes past it are refused, while re-uploading an
 identical CID costs nothing. Deleting a record does not reclaim repo bytes
 until repo GC runs; a completed GC reconciles the counter. Operators can also
 set `METALBEAR_REPO_BYTES` and `METALBEAR_BLOB_BYTES` in the environment.
+
+### Single-user mode (issue #264)
+
+`[server] single_user = true` (`single_user: true` in YAML), or
+`METALBEAR_SINGLE_USER=1`, restricts a host to exactly one account. It is off
+by default: with it off, this is the ordinary multi-account server described
+throughout this README. It is a config-gated restriction in the same binary,
+not a fork or a separate build. Federation, firehose, OAuth, blobs and the
+account frontend behave identically; only the multi-account surfaces are
+closed. The single `createAccount` that bootstraps the host bypasses
+admission — no invite code — and every later `createAccount`, invite-code
+route, `com.atproto.admin.*` call and bundled `/admin` or `/signup` page
+returns 404.
+
+The deterministic structural reductions are: one resident account context
+instead of the 256-context cap, one request worker unless `server.threads` is
+explicitly configured, the 22 named admin/invite/temp XRPC routes replaced by
+six catch-all 404 route prefixes, and the admin/signup frontend assets skipped
+when the built frontend is served. The daemon also chooses smaller DID-cache
+and firehose-retention floors when those settings are left out. These target
+the small-host profile in [#34](https://github.com/ewanc26/metalbear/issues/34);
+they are code-level reductions, **not measured Raspberry Pi or emulator
+results**, and they claim no hardware gate. The on-device gates remain in
+[docs/pi1-hardware-validation.md](docs/pi1-hardware-validation.md).
+
+`scripts/setup.sh --single-user` generates that config and prompts for the one
+account's handle, email and a hidden, confirmed password. The password goes
+only into a 0600 temporary file, is inserted into the request with `jq
+--rawfile`, and is posted once to `createAccount` over loopback; it is never
+printed or passed in argv or the environment. No invite code or admin CLI is
+used. A rerun verifies the handle through public reads and reports "already
+provisioned" instead of attempting a second account. See
+[docs/multi-account.md](docs/multi-account.md) for the design this restricts.
 
 ### Handle resolution
 
@@ -459,7 +494,11 @@ curl -sS -X POST -H 'Content-Type: application/json' \
 ## Admin Endpoints
 
 Admin-gated `com.atproto.admin.*` procedures require HTTP Basic auth with the
-configured admin password:
+configured admin password. None of them exist on a host with
+[single-user mode](#single-user-mode-issue-264) enabled: the whole family,
+invite codes and the frontend admin page return 404 there. `scripts/setup.sh`
+writes the password to a 0600 `metalbear.env` for the admin CLI instead of
+printing it, but that CLI has no admin endpoints to call in single-user mode.
 
 - `com.atproto.admin.getAccountInfo` — resolve DID to handle/email/active state
 - `com.atproto.admin.searchAccounts` — search accounts by `term` (DID, handle or
@@ -801,7 +840,24 @@ instead, or `--config <path>` for a specific filename (e.g. `--config
 bear.yml`) — the dialect is still chosen by its extension.
 
 Re-running is safe: existing secrets are carried over, so a rebuild never
-changes the identity authority that signed DIDs already minted.
+changes the identity authority that signed DIDs already minted. The admin
+password is written to `metalbear.env` with mode 0600 for the admin CLI rather
+than printed; the file keeps any other settings already in it.
+
+For a one-account host, add `--single-user`:
+
+```sh
+scripts/setup.sh --hostname pds.example.com --single-user
+```
+
+That writes `threads: 1` (`threads = 1` in TOML) and `single_user: true`
+(`single_user = true`) under `server`, then prompts for the one account's
+handle, email and a hidden, confirmed password. It provisions that account
+through `createAccount` on `http://127.0.0.1:<port>` with no invite code or
+admin CLI; a rerun verifies the handle through public reads and stops if it
+does not match. `--open` and `--no-start` are rejected with this flag because
+neither fits a host where the only account is provisioned during setup. See
+[Single-user mode](#single-user-mode-issue-264) for what the flag closes.
 
 Pass `--local` instead of `--hostname` for a local dev instance on
 `http://localhost:2583` — no TLS, DNS, or federation, and accounts mint
