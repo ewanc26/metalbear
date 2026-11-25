@@ -43,6 +43,7 @@
 #include "wolfram/xrpc_server.h"
 
 #include <cJSON.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -163,6 +164,13 @@ struct metalbear_server {
     char *branding_background_dark_url;
     char *branding_home_url;
     bool development;
+    /* Single-user restriction (issue #264). The mutex serialises the one
+     * permitted bootstrap createAccount so two concurrent requests cannot both
+     * observe an empty registry; `single_user_ready` is set once the account
+     * exists and stays set for the process lifetime. */
+    bool single_user;
+    pthread_mutex_t single_user_mutex;
+    bool single_user_ready;
     /* Opt-in public resource status (issue #267). Off unless explicitly set;
      * gates every resource field in /operator.json and the landing panel. */
     bool public_status;

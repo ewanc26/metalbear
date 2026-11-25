@@ -810,8 +810,9 @@ wf_status metalbear_register_identity_documents(metalbear_server *server) {
      * the landing page and its robots.txt, if any, is skipped. */
     if (server->frontend_dir) {
         size_t frontend_routes = 0;
-        status = metalbear_frontend_register(server->xrpc, server->frontend_dir,
-                                             &frontend_routes);
+        status =
+            metalbear_frontend_register(server->xrpc, server->frontend_dir,
+                                        server->single_user, &frontend_routes);
         if (status != WF_OK) return status;
     }
 

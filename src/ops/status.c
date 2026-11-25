@@ -320,10 +320,35 @@ static wf_status metrics_handler(void *ctx, const wf_xrpc_request *req,
     return WF_OK;
 }
 
+/* Single-user mode removes operator tooling and never enumerates the one
+ * hosted account. Keep the routes present with an explicit 404: Wolfram
+ * otherwise answers 400 for an unknown HTTP path and 501 for an unknown XRPC
+ * NSID, neither of which is the contract in issue #264. */
+static wf_status single_user_not_found(void *ctx, const wf_xrpc_request *req,
+                                       wf_xrpc_response *resp) {
+    (void)ctx;
+    (void)req;
+    wf_xrpc_response_set_error(resp, 404, "NotFound",
+                               "disabled in single-user mode");
+    return WF_OK;
+}
+
 static wf_status landing_handler(void *ctx, const wf_xrpc_request *req,
                                  wf_xrpc_response *resp) {
     (void)req;
     metalbear_server *server = ctx;
+
+    if (server->single_user) {
+        static const char body[] =
+            "<!DOCTYPE html>\n<html lang=\"en\">\n<head><meta "
+            "charset=\"utf-8\">\n<title>MetalBear</title></head>\n<body>\n"
+            "<h1>MetalBear — single-user server</h1>\n"
+            "<p>This host serves one account. Account details are not "
+            "listed.</p>\n</body>\n</html>\n";
+        wf_xrpc_response_set_content_type(resp, "text/html; charset=utf-8");
+        wf_xrpc_response_set_body(resp, body, sizeof(body) - 1);
+        return WF_OK;
+    }
 
     metalbear_account_entry *entries = NULL;
     size_t count = 0;
@@ -751,7 +776,9 @@ wf_status metalbear_status_register(metalbear_server *server) {
         server->xrpc, "GET", "/_debug/health", debug_health_handler, server);
     if (status != WF_OK) return status;
     status = wf_xrpc_server_register_http_route(
-        server->xrpc, "GET", "/_ops/audit", admin_audit_handler, server);
+        server->xrpc, "GET", "/_ops/audit",
+        server->single_user ? single_user_not_found : admin_audit_handler,
+        server);
     if (status != WF_OK) return status;
     /* With a frontend directory the built frontend owns "/", so the C landing
      * page moves to /landing and stays reachable. */

@@ -157,6 +157,7 @@ static bool copy_config(metalbear_server *server,
     if (config->crawlers && config->crawlers[0])
         server->crawlers = strdup(config->crawlers);
     server->invite_required = config->invite_required;
+    server->single_user = config->single_user;
     server->allow_custom_domains = config->allow_custom_domains;
     if (config->allowed_custom_domains && config->allowed_custom_domains[0])
         server->allowed_custom_domains = strdup(config->allowed_custom_domains);
@@ -231,6 +232,97 @@ static bool parse_secp256k1_hex(const char *hex, wf_signing_key *out) {
     return true;
 }
 
+/*
+ * Single-user mode (issue #264) is a restriction on the same binary, not a
+ * separate server. The helpers below keep the one permitted bootstrap
+ * createAccount atomic and make disabled surfaces answer 404 instead of
+ * Wolfram's 501 for an unregistered NSID or 400 for an unknown HTTP path.
+ */
+static bool single_user_registry_count(metalbear_server *server,
+                                       size_t *out_count) {
+    metalbear_account_entry *entries = NULL;
+    size_t count = 0;
+    if (metalbear_account_registry_list(server->registry, &entries, &count) !=
+        WF_OK)
+        return false;
+    metalbear_account_entries_free(entries, count);
+    *out_count = count;
+    return true;
+}
+
+static wf_status create_account_single_user(void *ctx,
+                                            const wf_xrpc_request *request,
+                                            wf_xrpc_response *response) {
+    metalbear_server *server = ctx;
+    size_t count = 0;
+    pthread_mutex_lock(&server->single_user_mutex);
+    if (!single_user_registry_count(server, &count) || count > 0 ||
+        server->single_user_ready) {
+        pthread_mutex_unlock(&server->single_user_mutex);
+        wf_xrpc_response_set_error(response, 404, "NotFound",
+                                   "single-user mode already has an account");
+        return WF_OK;
+    }
+    /* The bootstrap account is created through the normal createAccount path,
+     * so it gets the same validation, DID and session as any other account.
+     * Only admission is bypassed: invite routes do not exist in this mode and
+     * signup is closed to everybody after this one request. */
+    wf_status status = create_account_bootstrap(ctx, request, response);
+    /* A failed pre-registration attempt leaves the registry empty and the
+     * bootstrap available to retry. Once a row exists the mode is closed for
+     * this process, even if the response later failed. */
+    if (!single_user_registry_count(server, &count)) count = 0;
+    if (count > 0) server->single_user_ready = true;
+    pthread_mutex_unlock(&server->single_user_mutex);
+    return status;
+}
+
+static wf_status single_user_not_found(void *ctx,
+                                       const wf_xrpc_request *request,
+                                       wf_xrpc_response *response) {
+    (void)ctx;
+    (void)request;
+    wf_xrpc_response_set_error(response, 404, "NotFound",
+                               "disabled in single-user mode");
+    return WF_OK;
+}
+
+static wf_status
+register_single_user_disabled_routes(metalbear_server *server) {
+    static const struct {
+        const char *method;
+        const char *path;
+        bool prefix;
+    } disabled[] = {
+        {"GET", "/xrpc/com.atproto.admin.", true},
+        {"POST", "/xrpc/com.atproto.admin.", true},
+        {"GET", "/xrpc/com.atproto.server.getAccountInviteCodes", false},
+        {"POST", "/xrpc/com.atproto.server.createInviteCode", true},
+        {"GET", "/xrpc/com.atproto.temp.", true},
+        {"POST", "/xrpc/com.atproto.temp.", true},
+        /* /_ops/audit is registered as a 404 by status.c instead: it already
+         * owns that exact path in the normal route set. */
+        {"GET", "/admin", false},
+        {"GET", "/admin.html", false},
+        {"GET", "/admin/", true},
+        {"GET", "/signup", false},
+        {"GET", "/signup.html", false},
+        {"GET", "/signup/", true},
+    };
+    for (size_t i = 0; i < sizeof(disabled) / sizeof(disabled[0]); i++) {
+        wf_status status =
+            disabled[i].prefix
+                ? wf_xrpc_server_register_http_prefix(
+                      server->xrpc, disabled[i].method, disabled[i].path,
+                      single_user_not_found, server)
+                : wf_xrpc_server_register_http_route(
+                      server->xrpc, disabled[i].method, disabled[i].path,
+                      single_user_not_found, server);
+        if (status != WF_OK) return status;
+    }
+    return WF_OK;
+}
+
 static bool valid_config(const metalbear_config *config) {
     /* No account is required to start: a host exists before its first user,
      * and accounts arrive through createAccount. A negative drain timeout is
@@ -251,13 +343,34 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         LOG_ERROR("invalid server configuration");
         return NULL;
     }
+    /* Single-user lightweight defaults (issue #264). These apply here, not
+     * only in main.c, so an in-process host gets the same footprint profile.
+     * A value the operator set wins; 0 keeps the existing server default. */
+    unsigned int thread_count = config->thread_count
+                                    ? config->thread_count
+                                    : (config->single_user ? 1u : 0u);
+    int64_t max_resident_accounts = config->max_resident_accounts > 0
+                                        ? config->max_resident_accounts
+                                        : (config->single_user ? 1 : 0);
+    int64_t did_cache_entries = config->did_cache_entries > 0
+                                    ? config->did_cache_entries
+                                    : (config->single_user ? 16 : 0);
+    int64_t retention_min_events = config->retention_min_events > 0
+                                       ? config->retention_min_events
+                                       : (config->single_user ? 100 : 0);
     if (!make_directory(config->data_directory)) {
         LOG_ERROR("cannot create data directory: %s", config->data_directory);
         return NULL;
     }
 
     metalbear_server *server = calloc(1, sizeof(*server));
-    if (server) server->started_at = time(NULL);
+    if (server) {
+        server->started_at = time(NULL);
+        if (pthread_mutex_init(&server->single_user_mutex, NULL) != 0) {
+            free(server);
+            server = NULL;
+        }
+    }
     if (!server || !copy_config(server, config)) {
         LOG_ERROR("cannot initialise server");
         goto fail;
@@ -362,7 +475,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
 
     identity_configure_did_doc_cache(
         (time_t)config->did_cache_ttl_seconds,
-        config->did_cache_entries > 0 ? (size_t)config->did_cache_entries : 0);
+        did_cache_entries > 0 ? (size_t)did_cache_entries : 0);
     sync_configure_crawler_notify((time_t)config->crawl_notify_seconds);
     if (config->firehose_ping_seconds > 0)
         metalbear_sequencer_set_ping_seconds(config->firehose_ping_seconds);
@@ -440,13 +553,20 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     metalbear_sequencer_set_notify(server->sequencer, notify_crawlers, server);
 
     server->xrpc = wf_xrpc_server_start(config->listen_address, config->port,
-                                        config->thread_count);
+                                        thread_count);
     if (!server->xrpc) {
         LOG_ERROR("cannot start XRPC listener");
         goto fail;
     }
     if (metalbear_register_identity_documents(server) != WF_OK) {
         LOG_ERROR("cannot register identity documents");
+        goto fail;
+    }
+    /* These dynamic HTTP routes are matched before XRPC dispatch, so a disabled
+     * NSID gets a real 404 rather than 501 or an AppView proxy attempt. */
+    if (server->single_user &&
+        register_single_user_disabled_routes(server) != WF_OK) {
+        LOG_ERROR("cannot register single-user restrictions");
         goto fail;
     }
 
@@ -469,9 +589,9 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
     /* Bound the resident account set for small hosts (e.g. a 256 MB Pi 1B).
      * The config file sets the deployment default; METALBEAR_MAX_RESIDENT_
      * ACCOUNTS overrides it at runtime. */
-    if (config->max_resident_accounts > 0)
-        metalbear_account_cache_set_max_resident(
-            server->account_cache, (size_t)config->max_resident_accounts);
+    if (max_resident_accounts > 0)
+        metalbear_account_cache_set_max_resident(server->account_cache,
+                                                 (size_t)max_resident_accounts);
     {
         const char *max_res = getenv("METALBEAR_MAX_RESIDENT_ACCOUNTS");
         if (max_res && max_res[0]) {
@@ -517,6 +637,25 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
         }
     }
 
+    /* Enabling single-user on a host that already has several accounts would
+     * silently leave those extra accounts routable while hiding every way to
+     * manage them. Refuse it loudly instead. An empty registry leaves the
+     * bootstrap createAccount available; one account closes it immediately. */
+    if (server->single_user) {
+        size_t account_count = 0;
+        if (!single_user_registry_count(server, &account_count)) {
+            LOG_ERROR("single-user mode cannot read the account registry");
+            goto fail;
+        }
+        if (account_count > 1) {
+            LOG_ERROR("single-user mode refuses a data directory with %zu "
+                      "accounts; migrate or remove the extras first",
+                      account_count);
+            goto fail;
+        }
+        server->single_user_ready = account_count == 1;
+    }
+
     /* One lifecycle pass at startup (issue #253). This is where a host
      * upgrading to schema 7 reconciles pre-existing payload sidecars and
      * reclaims temporaries that expired while the server was down. */
@@ -539,9 +678,10 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                                       resolve_lexicon, server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc, "_health", health,
                                       server) != WF_OK ||
-        metalbear_register_write_procedure(server->xrpc,
-                                           "com.atproto.server.createAccount",
-                                           create_account, server) != WF_OK ||
+        metalbear_register_write_procedure(
+            server->xrpc, "com.atproto.server.createAccount",
+            server->single_user ? create_account_single_user : create_account,
+            server) != WF_OK ||
         wf_xrpc_server_register_query(server->xrpc,
                                       "com.atproto.identity.resolveHandle",
                                       resolve_handle, server) != WF_OK ||
@@ -1128,7 +1268,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
 #undef COPY_OPT
     server->development = config->development;
     server->public_status = config->public_status;
-    server->thread_count = config->thread_count;
+    server->thread_count = thread_count;
     server->trusted_device_seconds = config->trusted_device_seconds > 0
                                          ? config->trusted_device_seconds
                                          : 30 * 24 * 60 * 60;
@@ -1138,7 +1278,7 @@ metalbear_server *metalbear_server_start(const metalbear_config *config) {
                                     ? config->retention_max_age_seconds
                                     : 30 * 24 * 60 * 60; /* 30 days */
     server->retention_min_events =
-        config->retention_min_events > 0 ? config->retention_min_events : 1000;
+        retention_min_events > 0 ? retention_min_events : 1000;
 
     /* Apply initial retention */
     metalbear_sequencer_retain(server->sequencer, server->retention_max_age,
@@ -1344,5 +1484,6 @@ void metalbear_server_free(metalbear_server *server) {
     free(server->proxy_destinations);
     free(server->mod_service_did);
     wf_lexicon_registry_free(server->lexicons);
+    pthread_mutex_destroy(&server->single_user_mutex);
     free(server);
 }

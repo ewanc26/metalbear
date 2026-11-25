@@ -66,6 +66,16 @@ static int is_reserved(const char *rel) {
     return 0;
 }
 
+/* Single-user mode removes the multi-account pages entirely. Skipping the
+ * files here matters because static GET routes are checked before dynamic
+ * HTTP routes: leaving /admin registered would shadow the 404. */
+static bool is_single_user_disabled(const char *rel) {
+    return strcmp(rel, "admin.html") == 0 || strcmp(rel, "signup.html") == 0 ||
+           strcmp(rel, "admin/index.html") == 0 ||
+           strcmp(rel, "signup/index.html") == 0 ||
+           strncmp(rel, "admin/", 6) == 0 || strncmp(rel, "signup/", 7) == 0;
+}
+
 /* Read a whole file. The caller frees *out. */
 static wf_status read_file(const char *path, unsigned char **out, size_t *len) {
     *out = NULL;
@@ -148,7 +158,7 @@ static wf_status register_file(wf_xrpc_server *xrpc, const char *fs_path,
 }
 
 static wf_status walk(wf_xrpc_server *xrpc, const char *root,
-                      const char *prefix, size_t *count) {
+                      const char *prefix, bool single_user, size_t *count) {
     char dir_path[PATH_MAX];
     snprintf(dir_path, sizeof(dir_path), "%s%s%s", root, prefix[0] ? "/" : "",
              prefix);
@@ -165,13 +175,14 @@ static wf_status walk(wf_xrpc_server *xrpc, const char *root,
         struct stat sb;
         if (stat(fs_path, &sb) != 0) continue;
         if (S_ISDIR(sb.st_mode)) {
-            wf_status st = walk(xrpc, root, rel, count);
+            wf_status st = walk(xrpc, root, rel, single_user, count);
             if (st != WF_OK) {
                 closedir(d);
                 return st;
             }
         } else if (S_ISREG(sb.st_mode)) {
             if (prefix[0] == '\0' && is_reserved(rel)) continue;
+            if (single_user && is_single_user_disabled(rel)) continue;
             wf_status st = register_file(xrpc, fs_path, rel, count);
             if (st != WF_OK) {
                 closedir(d);
@@ -184,7 +195,7 @@ static wf_status walk(wf_xrpc_server *xrpc, const char *root,
 }
 
 wf_status metalbear_frontend_register(wf_xrpc_server *xrpc, const char *dir,
-                                      size_t *out_routes) {
+                                      bool single_user, size_t *out_routes) {
     if (!xrpc || !dir || !*dir || !out_routes) return WF_ERR_INVALID_ARG;
     *out_routes = 0;
     struct stat sb;
@@ -192,7 +203,7 @@ wf_status metalbear_frontend_register(wf_xrpc_server *xrpc, const char *dir,
         LOG_WARN("frontend: %s is not a directory", dir);
         return WF_ERR_NOT_FOUND;
     }
-    wf_status st = walk(xrpc, dir, "", out_routes);
+    wf_status st = walk(xrpc, dir, "", single_user, out_routes);
     if (st == WF_OK)
         LOG_INFO("frontend: serving %zu routes from %s", *out_routes, dir);
     return st;

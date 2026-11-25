@@ -15,6 +15,11 @@ extern "C" {
 
 wf_status create_account(void *ctx, const wf_xrpc_request *request,
                          wf_xrpc_response *response);
+/* Single-user bootstrap (issue #264): same validation and account creation,
+ * but admission is skipped so the one permitted account can be provisioned on
+ * a host whose signup policy is closed. */
+wf_status create_account_bootstrap(void *ctx, const wf_xrpc_request *request,
+                                   wf_xrpc_response *response);
 wf_status request_email_confirmation(void *ctx, const wf_xrpc_request *request,
                                      wf_xrpc_response *response);
 wf_status confirm_email(void *ctx, const wf_xrpc_request *request,
