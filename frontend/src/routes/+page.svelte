@@ -305,7 +305,7 @@
 						<div class="flex items-center justify-between gap-4">
 							<a
 								class="text-xs break-all text-slate-300 hover:text-emerald-400"
-								href={`/repo?did=${encodeURIComponent(repo.did)}`}
+								href={resolve(`/repo?did=${encodeURIComponent(repo.did)}` as `/repo?${string}`)}
 							>
 								{repo.did}
 							</a>
@@ -336,6 +336,7 @@
 						<dt class="text-sm text-slate-500">Operated by</dt>
 						<dd class="text-sm text-slate-200">
 							{#if info.operator.url}
+								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- operator URLs are passed through verbatim -->
 								<a class="text-emerald-500 hover:text-emerald-400" href={info.operator.url}>
 									{info.operator.name}
 								</a>
@@ -360,6 +361,7 @@
 					<div>
 						<dt class="text-sm text-slate-500">Privacy policy</dt>
 						<dd class="text-sm">
+							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- operator URLs are passed through verbatim -->
 							<a class="text-emerald-500 hover:text-emerald-400" href={server.links.privacyPolicy}>
 								Read
 							</a>
@@ -370,6 +372,7 @@
 					<div>
 						<dt class="text-sm text-slate-500">Terms of service</dt>
 						<dd class="text-sm">
+							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- operator URLs are passed through verbatim -->
 							<a class="text-emerald-500 hover:text-emerald-400" href={server.links.termsOfService}>
 								Read
 							</a>
@@ -422,6 +425,7 @@
 				</p>
 				{#if info?.operator?.supportUrl}
 					<p class="mt-3 text-sm text-slate-400">
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- operator URLs are passed through verbatim -->
 						<a class="text-emerald-500 hover:text-emerald-400" href={info.operator.supportUrl}>
 							Support this work →
 						</a>
@@ -440,7 +444,7 @@
 				>Wolfram SDK</a
 			>
 			<a class="text-emerald-500 hover:text-emerald-400" href="https://atproto.com">AT Protocol</a>
-			<a class="text-emerald-500 hover:text-emerald-400" href="/repo">Repo browser</a>
+			<a class="text-emerald-500 hover:text-emerald-400" href={resolve('/repo')}>Repo browser</a>
 		</nav>
 		<p class="mt-4 text-xs text-slate-600">
 			Public endpoints are served under <code class="text-slate-500">/xrpc/</code>.

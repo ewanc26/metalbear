@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { auth } from '#lib/stores/auth.ts';
 	import { getSession, requestPlcOperationSignature } from '#lib/pds.ts';
 	import type { SessionResponse } from '#lib/pds.ts';
@@ -14,7 +15,7 @@
 
 	onMount(async () => {
 		if (!session) {
-			goto('/login');
+			goto(resolve('/login'));
 			return;
 		}
 		try {
@@ -103,7 +104,7 @@
 				all need to move to the new server before you switch identity over to it.
 			</p>
 			<a
-				href="/account"
+				href={resolve('/account')}
 				class="inline-block rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-600 hover:text-white"
 			>
 				Download your data →
@@ -150,7 +151,7 @@
 			<p class="text-sm text-slate-400">
 				Once the new server confirms your identity has moved, activate your account there. Then come
 				back here and deactivate this one from the
-				<a href="/account/danger-zone" class="text-emerald-500 hover:text-emerald-400"
+				<a href={resolve('/account/danger-zone')} class="text-emerald-500 hover:text-emerald-400"
 					>danger zone →</a
 				>
 				— your repo stays intact in case anything needs to be re-checked, but the network will route to
@@ -178,6 +179,8 @@
 	{/if}
 
 	<p class="mt-8 text-center text-sm text-slate-500">
-		<a href="/account" class="text-emerald-500 hover:text-emerald-400">← Account settings</a>
+		<a href={resolve('/account')} class="text-emerald-500 hover:text-emerald-400"
+			>← Account settings</a
+		>
 	</p>
 </main>

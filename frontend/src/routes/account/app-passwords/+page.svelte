@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { auth } from '#lib/stores/auth.ts';
 	import { createAppPassword, listAppPasswords, revokeAppPassword } from '#lib/pds.ts';
 	import type { AppPassword } from '#lib/pds.ts';
@@ -21,7 +22,7 @@
 
 	onMount(async () => {
 		if (!session) {
-			goto('/login');
+			goto(resolve('/login'));
 			return;
 		}
 		await loadPasswords();
@@ -195,6 +196,8 @@
 	</section>
 
 	<p class="mt-8 text-center text-sm text-slate-500">
-		<a href="/account" class="text-emerald-500 hover:text-emerald-400">← Account settings</a>
+		<a href={resolve('/account')} class="text-emerald-500 hover:text-emerald-400"
+			>← Account settings</a
+		>
 	</p>
 </main>

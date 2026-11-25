@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { auth } from '#lib/stores/auth.ts';
 	import { getSession, refreshSession, downloadRepo } from '#lib/pds.ts';
 	import { goto } from '$app/navigation';
@@ -22,7 +23,7 @@
 		registered = page.url.searchParams.get('registered') === '1';
 		verifyEmail = page.url.searchParams.get('verifyEmail') === '1';
 		if (!session) {
-			goto('/login');
+			goto(resolve('/login'));
 			return;
 		}
 		try {
@@ -105,7 +106,10 @@
 		<p class="rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-3 text-sm text-red-300">
 			{error}
 		</p>
-		<a href="/login" class="mt-4 inline-block text-sm text-emerald-500 hover:text-emerald-400">
+		<a
+			href={resolve('/login')}
+			class="mt-4 inline-block text-sm text-emerald-500 hover:text-emerald-400"
+		>
 			Sign in again →
 		</a>
 	{:else if current}
@@ -179,37 +183,40 @@
 			<h2 class="mb-4 text-sm font-semibold tracking-widest text-slate-500 uppercase">Manage</h2>
 			<ul class="space-y-2 text-sm">
 				<li>
-					<a href="/account/app-passwords" class="text-emerald-500 hover:text-emerald-400"
-						>App passwords →</a
+					<a
+						href={resolve('/account/app-passwords')}
+						class="text-emerald-500 hover:text-emerald-400">App passwords →</a
 					>
 				</li>
 				<li>
-					<a href="/account/apps" class="text-emerald-500 hover:text-emerald-400"
+					<a href={resolve('/account/apps')} class="text-emerald-500 hover:text-emerald-400"
 						>Connected apps →</a
 					>
 				</li>
 				<li>
-					<a href="/account/devices" class="text-emerald-500 hover:text-emerald-400"
+					<a href={resolve('/account/devices')} class="text-emerald-500 hover:text-emerald-400"
 						>Active devices →</a
 					>
 				</li>
 				<li>
-					<a href="/account/security" class="text-emerald-500 hover:text-emerald-400"
+					<a href={resolve('/account/security')} class="text-emerald-500 hover:text-emerald-400"
 						>Security (password, email, handle) →</a
 					>
 				</li>
 				<li>
-					<a href="/account/recovery-key" class="text-emerald-500 hover:text-emerald-400"
+					<a href={resolve('/account/recovery-key')} class="text-emerald-500 hover:text-emerald-400"
 						>Personal recovery key →</a
 					>
 				</li>
 				<li>
-					<a href="/account/migrate" class="text-emerald-500 hover:text-emerald-400"
+					<a href={resolve('/account/migrate')} class="text-emerald-500 hover:text-emerald-400"
 						>Migrate to another server →</a
 					>
 				</li>
 				<li>
-					<a href="/account/danger-zone" class="text-red-400 hover:text-red-300">Danger zone →</a>
+					<a href={resolve('/account/danger-zone')} class="text-red-400 hover:text-red-300"
+						>Danger zone →</a
+					>
 				</li>
 			</ul>
 		</section>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { auth } from '#lib/stores/auth.ts';
 	import {
 		createSession,
@@ -25,6 +26,7 @@
 		redirectTo = page.url.searchParams.get('redirect') ?? '/';
 
 		const unsub = auth.subscribe((s) => {
+			// eslint-disable-next-line svelte/no-navigation-without-resolve -- redirect target comes from the OAuth consent flow
 			if (s) goto(redirectTo, { replaceState: true });
 		});
 		return unsub;
@@ -64,6 +66,7 @@
 				status: session.status,
 				didDoc: session.didDoc
 			});
+			// eslint-disable-next-line svelte/no-navigation-without-resolve -- redirect target comes from the OAuth consent flow
 			goto(redirectTo);
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Login failed';
@@ -102,6 +105,7 @@
 				allowCredentials: options.allowCredentials ?? []
 			});
 			await passkeyAuthenticateVerify(credential);
+			// eslint-disable-next-line svelte/no-navigation-without-resolve -- redirect target comes from the OAuth consent flow
 			goto(redirectTo);
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Passkey sign-in failed';
@@ -138,7 +142,7 @@
 		<div>
 			<div class="mb-1.5 flex items-center justify-between">
 				<label for="password" class="block text-sm font-medium text-slate-300">Password</label>
-				<a href="/reset-password" class="text-xs text-emerald-500 hover:text-emerald-400"
+				<a href={resolve('/reset-password')} class="text-xs text-emerald-500 hover:text-emerald-400"
 					>Forgot password?</a
 				>
 			</div>
@@ -189,6 +193,6 @@
 	</form>
 
 	<p class="mt-4 text-center text-sm text-slate-500">
-		<a href="/" class="text-emerald-500 hover:text-emerald-400">← Back to status</a>
+		<a href={resolve('/')} class="text-emerald-500 hover:text-emerald-400">← Back to status</a>
 	</p>
 </AuthShell>
